@@ -1,0 +1,16 @@
+#!/bin/sh
+# Refuse ROMs, archives, saves, game data and large files (AGENTS.md hard rule 2).
+# Enabled with: git config core.hooksPath tools/git-hooks
+max=524288
+bad=$(git -c core.quotepath=off diff --cached --name-only --diff-filter=ACMR | while IFS= read -r f; do
+  case $(printf '%s' "$f" | tr 'A-Z' 'a-z') in
+    dumps/*|data/*|ext/*|*.gba|*.zip|*.sav|*.bin) echo "  $f"; continue ;;
+  esac
+  size=$(git cat-file -s ":$f")
+  [ "$size" -gt "$max" ] && echo "  $f ($size bytes > $max)"
+done)
+if [ -n "$bad" ]; then
+  echo "pre-commit: refusing to commit game data or large files:" >&2
+  echo "$bad" >&2
+  exit 1
+fi

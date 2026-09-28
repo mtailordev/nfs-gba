@@ -1,0 +1,11 @@
+# Game data and anything derived from it never goes into git (AGENTS.md hard rule 2).
+.env
+dumps/
+data/
+ext/
+target/
+*.gba
+*.zip
+*.sav
+*.bin
+__pycache__/
