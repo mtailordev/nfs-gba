@@ -160,7 +160,7 @@ Largest decoded:
 
 ### Block classes (same legend)
 
-`BN7E` Need for Speed - Carbon - Own the City
+`BN7E` Need for Speed Carbon - Own the City
 
 ```
 0000000 dZdZZZddddddZddddddddddddddddddddddddddddddddddddddddddddddddddd

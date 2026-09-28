@@ -81,3 +81,4 @@ How to read it:
 
 - **Porsche Unleashed, EU `AZFP` vs USA `AZFE`:** the same build. Only 3 bytes differ: the region letter, the header checksum, and one Thumb immediate at `0x9CEE6` (`movs r0,#2` in the EU build, `#3` in the USA build, then stored into a struct). **Hypothesis:** a regional default such as language or units.
 - **Carbon's two zips:** the same ROM byte for byte. The zips differ only in compression. One has a TorrentZip-style timestamp (1996-12-24 23:32) and the other doesn't (09:32), so it was re-zipped by another tool.
+- Both redundant copies (the second Carbon zip, and the Porsche Unleashed USA zip plus its ROM) were deleted afterwards, at the user's request. Their hashes are in [DECISIONS.md](../DECISIONS.md).
