@@ -9,7 +9,8 @@ Session state for whoever picks this up next. Read `AGENTS.md` first, then this 
 - The vault is at `E:\Games\rewrites\nfs_gba\data\vault\roms\`: 6 ROMs, all read-only, all SHA-1-verified against the manifest.
 - The zips in `dumps/` were SHA-1-checked before and after: unchanged.
 - Tools: `tools/vault.py` and `tools/first_look.py` are rerun-safe (verified: a second run touches no file). `python -m unittest discover -s tools` gives 9 tests, all passing.
-- Git: repo initialized on `main`, hook enabled via `core.hooksPath`. **Nothing committed yet** (waiting for the user's go).
+- Git: repo on `main`, hook enabled via `core.hooksPath`. Task 1 is committed (`bca0b39`); `dumps/`, `data/` and `.env` are ignored.
+- The ROMs are extracted only into the vault (one file per unique ROM); the zips stay as the originals.
 
 ## Key results
 
@@ -21,9 +22,8 @@ Session state for whoever picks this up next. Read `AGENTS.md` first, then this 
 
 ## Recommended next step (not started)
 
-1. Commit the scaffold, docs and tools.
-2. Roadmap step 1, the reference build: fetch mGBA (Lua scripting, GDB stub) and Ghidra with a GBA loader into `ext/` after a licence check.
-3. In parallel, a static pass on the `0x7E86A0` table: entry sizes, what the targets look like, and whether the geometry hypothesis at `0x000000–0x0A0000` fits. That is the path to the model viewer.
+1. Roadmap step 1, the reference build: fetch mGBA (Lua scripting, GDB stub) and Ghidra with a GBA loader into `ext/` after a licence check.
+2. In parallel, a static pass on the `0x7E86A0` table: entry sizes, what the targets look like, and whether the geometry hypothesis at `0x000000–0x0A0000` fits. That is the path to the model viewer.
 
 ## Environment notes
 
