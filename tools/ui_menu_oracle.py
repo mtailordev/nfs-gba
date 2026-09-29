@@ -212,6 +212,7 @@ def intro(_gba, rng, n=2400):
         mem.append((0x03005938, word(pick([0, 1]))))
         mem.append((0x03005698, word(pick([0, 1]))))
         mem.append((PROFILE_AT, name[::-1]))
+        mem.append((PROFILE_AT + 0x478, bytes(rng.randrange(256) for _ in range(0x18))))  # cleared by the name screen
         r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
         cases.append(dict(snap=snap, fn=hex(fn), arg=arg, mem=[[a, b.hex()] for a, b in mem],
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
