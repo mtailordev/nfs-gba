@@ -2,7 +2,7 @@
 oracle's own invariants, and write the cases to $NFSGBA_DATA/work/<sha8>/harness/oracle/*.jsonl, which the
 workspace test crates/nfsgba-formats/tests/oracle_cases.rs compares with the Rust ports. Prints calls per second.
 
-    .venv/Scripts/python.exe tools/oracle/prove.py [--n 20000]
+    .venv/Scripts/python.exe tools/oracle/cases.py prove [--n 20000]
     cargo test --release -p nfsgba-formats --test oracle_cases
 """
 import argparse
@@ -29,10 +29,10 @@ def timed(label, cases, run):
     return out
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=20000)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     rng = random.Random(1)
     gba = Gba()
     _, sha8 = canonical()
@@ -108,5 +108,3 @@ def main():
     print(f"  {written}/{len(res)} calls changed palette RAM; cases in {out}")
 
 
-if __name__ == "__main__":
-    main()

@@ -2,6 +2,8 @@
 the tool that recorded it and where it came from. Paths are relative to $NFSGBA_DATA/work/<sha1-8 of the ROM>/.
 
     .venv/Scripts/python.exe tools/fixtures.py build              # run the tests, write docs/engine/fixtures.csv
+    .venv/Scripts/python.exe tools/fixtures.py relabel            # rewrite the recorder/command/source columns
+                                                                  # from PROVENANCE (after a tool is renamed)
     .venv/Scripts/python.exe tools/fixtures.py check [--log FILE] # every listed file present with its SHA-1; with
                                                                   # --log (NFSGBA_FIXTURE_LOG of a test run), every
                                                                   # fixture the tests read is listed
@@ -29,22 +31,22 @@ COLUMNS = ["path", "sha1", "size", "recorder", "command", "source", "rom_sha1"]
 # Top folder -> (recorder, command, source state). Recorded per session; details in the named doc.
 PROVENANCE = {
     "mgba": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump/save", "race.ss: Quick Play route 23 (docs/TOOLS.md route)"),
-    "audio": ("tools/audio_trace.py + tools/mgba_audio_trace.lua", "audio_trace.py <name>", "race.ss, mainmenu.ss (docs/formats/audio.md)"),
-    "hud-logic": ("tools/ui_hud_trace.py + tools/ui_hud_trace.lua", "ui_hud_trace.py <name>", "Quick Play races per mode (docs/formats/ui.md, HUD logic)"),
-    "menus": ("tools/ui_menu_oracle.py (function oracle)", "ui_menu_oracle.py <set>", "menu snapshots named in each case (docs/formats/ui.md, Menus)"),
-    "menus2": ("tools/ui_menu_oracle.py (function oracle)", "ui_menu_oracle.py all", "menu snapshots named in each case (docs/formats/ui.md, Menus, continued)"),
+    "audio": ("tools/record.py audio (recorders/audio.py + audio.lua)", "record.py audio <state> <frames> [<name> <keys>]", "race.ss, mainmenu.ss (docs/formats/audio.md)"),
+    "hud-logic": ("tools/record.py hud (recorders/hud.py + hud.lua)", "record.py hud <state> <frames> [<name> <keys> <pokes>]", "Quick Play races per mode (docs/formats/ui.md, HUD logic)"),
+    "menus": ("tools/oracle/cases.py menus (function oracle)", "cases.py menus <set>", "menu snapshots named in each case (docs/formats/ui.md, Menus)"),
+    "menus2": ("tools/oracle/cases.py menus (function oracle)", "cases.py menus all", "menu snapshots named in each case (docs/formats/ui.md, Menus, continued)"),
     "ui-2d": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump <name>", "fresh save, intro screens (docs/formats/ui.md)"),
     "car-paint": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump <name>", "race.ss, driving left (docs/formats/car-paint.md)"),
     "car-atlas": ("mGBA session car-atlas, trace scripts in the folder", "see docs/formats/car-paint.md (car-atlas)", "race starts from race.ss and mainmenu.ss, RAM-poked records"),
     "sky": ("probe scripts in the folder's scripts/", "see docs/engine/sky.md, Verification", "race.ss, both camera views"),
-    "entity-draw": ("tools/mgba_frame_probe.lua", "probe <name> [ADDR=VALUE ...]", "race.ss, g0.ss (docs/engine/renderer.md, entity-draw)"),
-    "race-rules": ("tools/trace_race_rules.lua + tools/oracle_race_rules.py", "see docs/formats/career.md, Race-rule checks", "Quick Play and career races (savestates in the folder)"),
-    "vehicle-physics": ("tools/trace_race.py + tools/trace_oracle.py (fuzz, calls, suspension: trace_fuzz.py, trace_calls.py, trace_suspension.py)", "trace_race.py <name>", "race.ss and the scenario states in docs/engine/physics.md"),
-    "ai-traffic": ("tools/trace_ai_race.py + tools/trace_ai_oracle.py", "trace_ai_race.py <name>", "Quick Play races (docs/engine/ai.md)"),
-    "race-init": ("tools/race_init_capture.py + tools/race_init_capture.lua, tools/race_init_oracle.py", "race_init_capture.py <name>", "menu states before each race start (docs/engine/race-init.md)"),
-    "game-loop": ("tools/game_trace.py + tools/mgba_game_trace.lua", "game_trace.py <name>", "race.ss (docs/engine/game-loop.md)"),
-    "live-race": ("tools/game_trace.py + tools/mgba_game_trace.lua", "game_trace.py <name>", "race starts and race.ss (docs/engine/game-loop.md, live-race)"),
-    "harness": ("tools/oracle/prove.py (function oracle)", "prove.py", "mgba/race dumps"),
+    "entity-draw": ("tools/recorders/frame.lua (probe)", "probe <name> [ADDR=VALUE ...] (probe.txt)", "race.ss, g0.ss (docs/engine/renderer.md, entity-draw)"),
+    "race-rules": ("tools/recorders/rules.lua (probe) + tools/oracle/cases.py rules", "see docs/formats/career.md, Race-rule checks", "Quick Play and career races (savestates in the folder)"),
+    "vehicle-physics": ("tools/record.py car + tools/oracle/cases.py car (fuzz, calls, suspension: cases.py fuzz / calls / suspension)", "record.py car <name>; cases.py car <name>", "race.ss and the scenario states in docs/engine/physics.md"),
+    "ai-traffic": ("tools/record.py ai + tools/oracle/cases.py ai", "record.py ai <name>; cases.py ai <name>", "Quick Play races (docs/engine/ai.md)"),
+    "race-init": ("tools/record.py race-init (recorders/race_init.py + race_init.lua), tools/oracle/cases.py race-init", "record.py race-init <name>; cases.py race-init <name>", "menu states before each race start (docs/engine/race-init.md)"),
+    "game-loop": ("tools/record.py game (recorders/game.py + game.lua)", "record.py game record <name>; record.py game pack <name>", "race.ss (docs/engine/game-loop.md)"),
+    "live-race": ("tools/record.py game (recorders/game.py + game.lua)", "record.py game record <name>; record.py game pack <name>", "race starts and race.ss (docs/engine/game-loop.md, live-race)"),
+    "harness": ("tools/oracle/cases.py prove (function oracle)", "cases.py prove", "mgba/race dumps"),
 }
 
 
@@ -113,6 +115,15 @@ def build() -> int:
     return 0
 
 
+def relabel() -> int:
+    rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
+    for r in rows:
+        r["recorder"], r["command"], r["source"] = PROVENANCE[r["path"].split("/")[0]]
+    changed = write_if_changed(MANIFEST, render(rows))
+    print(f"{len(rows)} fixtures; {'relabelled' if changed else 'unchanged'} {MANIFEST.relative_to(ROOT)}")
+    return 0
+
+
 def check(log: Path | None) -> int:
     work, rom_sha1 = work_dir()
     rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
@@ -139,10 +150,11 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("build")
+    sub.add_parser("relabel")
     c = sub.add_parser("check")
     c.add_argument("--log", type=Path)
     args = ap.parse_args(argv)
-    return build() if args.cmd == "build" else check(args.log)
+    return {"build": build, "relabel": relabel}.get(args.cmd, lambda: check(args.log))()
 
 
 if __name__ == "__main__":

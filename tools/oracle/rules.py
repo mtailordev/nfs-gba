@@ -1,19 +1,16 @@
 """Race-rule oracle cases (docs/formats/career.md, "Race-rule checks"): runs the game's race-rule functions in the
 function oracle (tools/oracle) on generated inputs over RAM snapshots, and writes
-$NFSGBA_DATA/work/<sha8>/race-rules/oracle-<name>.jsonl. Each line has the keys of a tools/trace_race_rules.lua
+$NFSGBA_DATA/work/<sha8>/race-rules/oracle-<name>.jsonl. Each line has the keys of a tools/recorders/rules.lua
 line (string values), so the career tests replay traces and oracle cases alike.
 
-    .venv/Scripts/python.exe tools/oracle_race_rules.py [NAME ...] [--n 2000] [--seed 1]
+    .venv/Scripts/python.exe tools/oracle/cases.py rules [NAME ...] [--n 2000] [--seed 1]
 """
 import argparse
 import json
 import random
 import struct
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "oracle"))
-from oracle import Gba, canonical, data_dir  # noqa: E402
+from oracle import Gba, canonical, data_dir
 
 WORLD, ENTITIES, PROFILE_PTR, RECORDS_PTR = 0x030000C0, 0x030000FC, 0x030056EC, 0x0300539C
 # (key, entity or driver, offset, format) in the order of the tracer's racer string.
@@ -517,13 +514,13 @@ GENERATORS = {
 }
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("names", nargs="*", default=list(GENERATORS))
     ap.add_argument("--n", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--snapshot", default="mgba/race")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     _, sha8 = canonical()
     out_dir = data_dir() / "work" / sha8 / "race-rules"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -539,5 +536,3 @@ def main():
         print(f"{name}: {len(cases)} cases -> {path}")
 
 
-if __name__ == "__main__":
-    main()

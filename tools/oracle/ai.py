@@ -1,6 +1,6 @@
 """Replay the opponents' and traffic cars' steps on the game's own code (docs/engine/ai.md), with tools/oracle.
 
-    python tools/trace_ai_oracle.py start accel ...   # scenarios recorded by tools/trace_race.py / trace_ai_race.py
+    .venv/Scripts/python.exe tools/oracle/cases.py ai start accel ...   # scenarios recorded by `record.py car` / `record.py ai`
 
 The traces hold the full RAM at the entry of the player's car handler, once per game frame. That call is the first
 of `update_entities` (FUN_0813765c), which then calls the handler of every later entity whose flags +0x08 & 3 == 3
@@ -22,11 +22,9 @@ import struct
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent / "oracle"))
-import trace_oracle as base  # noqa: E402
-from oracle import REGS, Gba  # noqa: E402
-from mgba_ctl import canonical, data_dir  # noqa: E402
+import car as base
+from mgba_ctl import canonical, data_dir
+from oracle import REGS, Gba
 
 HANDLERS = 0x087F38B8
 ENTITIES = 36
@@ -118,7 +116,7 @@ def replay(name: str) -> int:
     return bad
 
 
-if __name__ == "__main__":
-    if not sys.argv[1:]:
+def main(argv: list[str]) -> None:
+    if not argv:
         sys.exit(__doc__)
-    sys.exit(1 if sum(replay(n) for n in sys.argv[1:]) else 0)
+    sys.exit(1 if sum(replay(n) for n in argv) else 0)

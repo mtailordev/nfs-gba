@@ -1,6 +1,6 @@
 """Replay traced car steps on the game's own code in unicorn, and record what each step does to memory.
 
-    python tools/trace_oracle.py accel drive ...   # needs the trace_race.py outputs of each scenario
+    .venv/Scripts/python.exe tools/oracle/cases.py car accel drive ...   # needs the car recorder's outputs (record.py car) of each scenario
 
 For every step of a trace (docs/engine/physics.md) this loads the full RAM the reference build had at the step's
 entry (<name>.ramdelta) into the function oracle (tools/oracle/oracle.py: memory map, BIOS calls, return trap,
@@ -21,8 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "oracle"))
-from oracle import REGS, Gba, canonical, data_dir  # noqa: E402
+from oracle import REGS, Gba, canonical, data_dir
 
 WORLD = 0x030000C0
 HANDLER = 0x0814BD4C
@@ -67,7 +66,7 @@ def run_step(gba: Gba, entity: int):
 
 
 def ram_states(work: Path, name: str):
-    """The full EWRAM + IWRAM at each traced step, from <name>.ramdelta (tools/trace_race.py)."""
+    """The full EWRAM + IWRAM at each traced step, from <name>.ramdelta (the car recorder, tools/recorders/car.py)."""
     first = np.concatenate([np.fromfile(work / f"{name}.wram.bin", dtype=np.uint8),
                             np.fromfile(work / f"{name}.iwram.bin", dtype=np.uint8)])
     data = (work / f"{name}.ramdelta").read_bytes()
@@ -114,7 +113,7 @@ def replay(name: str) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    if not sys.argv[1:]:
+def main(argv: list[str]) -> None:
+    if not argv:
         sys.exit(__doc__)
-    sys.exit(1 if sum(replay(n) for n in sys.argv[1:]) else 0)
+    sys.exit(1 if sum(replay(n) for n in argv) else 0)
