@@ -7,9 +7,10 @@ reads the canonical ROM from the vault and writes only under `$NFSGBA_DATA`. Use
 | Tool | What it answers |
 |---|---|
 | `tools/oracle/oracle.py` | What does game function X return, and which bytes does it change, for these inputs on this RAM snapshot? |
-| `tools/oracle/prove.py` + `crates/nfsgba-formats/tests/oracle_cases.rs` | Is the oracle right? It is checked against ported functions, and the saved cases check the Rust ports |
-| `tools/trace_oracle.py` | Per-step replay of recorded car traces (vehicle-physics); runs on the oracle |
-| `tools/coverage.py` + `tools/coverage.lua` | Which functions run in real play, per scenario, and how often |
+| `tools/oracle/cases.py prove` + `crates/nfsgba-formats/tests/oracle_cases.rs` | Is the oracle right? It is checked against ported functions, and the saved cases check the Rust ports |
+| `tools/oracle/cases.py SET` | The one oracle case CLI: every case set (prove, car, fuzz, calls, suspension, ai, rules, menus, race-init, race-init-inputs) is a module in `tools/oracle/` |
+| `tools/record.py RECORDER` | The one recorder: mGBA with `tools/mgba_remote.lua` and the probe modules in `tools/recorders/`; extra Lua loads only through `NFSGBA_MGBA_EXTRA` |
+| `tools/record.py coverage` (`tools/recorders/coverage.py` + `coverage.lua`) | Which functions run in real play, per scenario, and how often |
 | `tools/rom_attribution.py` | Which known structure owns each ROM byte, and what is still unexplained |
 | `tools/notes_merge.py` | Folding agents' symbol notes into `symbols.csv` without silent choices |
 
@@ -40,7 +41,7 @@ savestate, run `python tools/mgba_ctl.py "load NAME" "dump NAME"` with mGBA runn
 - **`writes` leaves out the call's own stack frames.** A write counts as a frame when it lands below the initial sp and within a push's reach (64 bytes) of the sp of that moment. IWRAM globals are never hidden, whatever their address.
 - **Translation cache:** code bytes changed behind the CPU's back (inputs, restores) invalidate unicorn's translation cache, so rewritten IWRAM code runs as written.
 
-**Checked against ported functions** (`prove.py`, cases saved to `data/work/<sha8>/harness/oracle/*.jsonl`; `oracle_cases.rs` compares the Rust ports):
+**Checked against ported functions** (`cases.py prove`, cases saved to `data/work/<sha8>/harness/oracle/*.jsonl`; `oracle_cases.rs` compares the Rust ports):
 
 | Function | Cases | Result |
 |---|---|---|
@@ -49,7 +50,7 @@ savestate, run `python tools/mgba_ctl.py "load NAME" "dump NAME"` with mGBA runn
 | `apply_sector_light_to_palette` `0x0813A514` | 2,000 random positions in random sectors (1,889 changed the palette) | 0 mismatches against `sector_light` + `tint_palette` |
 | same, at the reference state | 1 | palette RAM equals the dump in 254/256 entries; 192 and 208 differ, exactly the glass slots of FIDELITY R17 |
 | `recip_div` `0x03004CA4` (IWRAM, ARM) | 5,000 | equal to `(a · recip[b]) >> 24` |
-| car handler `0x0814BD4C` (`trace_oracle.py`) | 9 traces, 1,149 steps | every step reproduces the next traced state; `<name>.oracle.txt` byte-identical to the pre-refactor output; `nfsgba-sim` trace tests pass; no unaligned access in any step |
+| car handler `0x0814BD4C` (`cases.py car`) | 9 traces, 1,149 steps | every step reproduces the next traced state; `<name>.oracle.txt` byte-identical to the pre-refactor output; `nfsgba-sim` trace tests pass; no unaligned access in any step |
 
 **Speed:** about 7,000–10,000 calls/s for small functions with `align="ignore"`, and about 700–900/s for
 `apply_sector_light_to_palette` with the alignment check on. The 1,149 car steps, each with a full RAM load, take 7 s.
@@ -63,7 +64,7 @@ capture of each agent. mGBA is still needed for new snapshots and for whole-fram
 
 ## Coverage map
 
-`tools/coverage.py [SCENARIO ...]` launches mGBA with `coverage.lua`. It sets a breakpoint on each of the 880
+`tools/record.py coverage [SCENARIO ...]` launches mGBA with the probe `coverage.lua`. It sets a breakpoint on each of the 880
 function entries in `carbon_decomp.c`, and stops its own mGBA by PID when the key plan ends. It writes
 `data/out/coverage/<sha8>/coverage.csv` (address, name, kind, hits per scenario) and `summary.txt`.
 Screenshots of each scenario's end are in `data/work/<sha8>/harness/cov-*.png`.
@@ -171,11 +172,13 @@ Merging the current `symbols.csv` into itself gives 244 duplicates and 0 conflic
 ## Scenario library (design)
 
 A scenario is **a savestate plus a key script**, so it replays deterministically in mGBA: the emulator is
-deterministic from a savestate (`trace_race.py` relies on this).
+deterministic from a savestate (every recorder relies on this).
+
+**Built (2026-09-29):** `tools/record.py run SCENARIO.json` replays `{"session", "state", "probes", "commands"}` (a savestate, remote commands, probe modules); the recorders in `tools/recorders/` keep their own scenario tables. The design notes below remain the plan for a shared scenario store.
 
 - **Store:** `data/work/<sha8>/scenarios/<name>.ss` and `<name>.keys`, one mgba_remote command per line (`hold KEYS N`, `wait N`, `trace NAME`, `untrace`, `shot`, `dump`). A `scenarios.md` table lists what each one exercises: mode, route, car, weather, the menus passed. Never commit them (they are save data).
-- **Replay:** `python tools/mgba_ctl.py "load NAME" <commands from NAME.keys>`, with the existing remote. `coverage.py` accepts the same plans in its own step syntax, and a scenario file can feed both.
-- **Record:** the physics agent's `trace NAME [SKIP]` / `untrace` (mgba_remote.lua) already writes the full EWRAM + IWRAM per car step. `trace_race.py` turns that into `<name>.ramdelta` (the runs that differ from the first step). A second recorder is not needed. Two extensions are worth adding when needed: a `trace` variant that fires every VBlank instead of every car step, and deltas against the previous step instead of the first.
+- **Replay:** `python tools/mgba_ctl.py "load NAME" <commands from NAME.keys>`, with the existing remote. `record.py coverage` accepts the same plans in its own step syntax, and a scenario file can feed both.
+- **Record:** the physics agent's `trace NAME [SKIP]` / `untrace` (mgba_remote.lua) already writes the full EWRAM + IWRAM per car step. The car recorder (`record.py car`) turns that into `<name>.ramdelta` (the runs that differ from the first step). A second recorder is not needed. Two extensions are worth adding when needed: a `trace` variant that fires every VBlank instead of every car step, and deltas against the previous step instead of the first.
 - **Disk budget:** measured deltas are 4–17 KB per step (`accel` 4.1, `drive` 7.5, `long` 7.7, `start` 16.5 KB/step), against 288 KB for raw RAM. At 60 frames/s, ten minutes of play is 36,000 frames. That's about 0.3–0.6 GB against the first frame; zlib should bring it to roughly 0.1–0.2 GB, and deltas against the previous frame much less. A library of 30 one-minute scenarios therefore fits in about 1 GB.
 - **Scenarios to add first:**
   - one per race mode (circuit, sprint, elimination, hunter), each with a finish;
