@@ -2057,10 +2057,11 @@ mod tests {
                     let back = Save::parse(out[..].try_into().unwrap()).unwrap();
                     assert_eq!(back.encode(heap[..].try_into().unwrap())[..], out[..], "{}", at());
                     // `<log>.sav`, when kept, is the .sav mGBA wrote after the log's last save.
-                    let sav = data_dir()
-                        .join("work/e5298b24/race-rules")
-                        .join(t.file.replace(".log", ".sav"));
-                    if let Ok(sav) = std::fs::read(sav) {
+                    let sav = t
+                        .file
+                        .strip_suffix(".log")
+                        .map(|f| data_dir().join("work/e5298b24/race-rules").join(f));
+                    if let Some(Ok(sav)) = sav.map(|f| std::fs::read(f.with_extension("sav"))) {
                         last_sav.insert(t.file.clone(), (eeprom_to_buffer(&sav) == out[..], at()));
                     }
                 }
