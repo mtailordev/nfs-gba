@@ -6,7 +6,7 @@ address,name,kind,comment
 0x081372e4,race_menu_palette_setup,function,sets world palettes from level record +0x00 + (+0x5A)*2 (menu/event screen)
 0x081370d4,menu_scene_setup_a,function,menu palette setup (0x33EF14 palettes)
 0x081371a4,menu_scene_setup_b,function,menu palette setup (0x33EF14 palettes)
-0x08138a9c,race_load_palettes,function,loads city palette rec+0x00 + (rec+0x5A)*2 and second palette rec+0x04 + (rec+0x58)*2
+0x08138a9c,race_load_palettes,function,loads city palette rec+0x00 + (rec+0x5A)*2 and second palette rec+0x04 + (rec+0x58)*2; also initialises the view struct (near 64, focal 150)
 0x08139454,race_load_level,function,copies level descriptor pointers into the world struct and allocates buffers
 0x081397d8,race_init,function,race start: load level/route, spawn entities, palettes
 0x08139e34,race_start_from_table_a,function,calls race_init path with record index*0x68 + 0x7F2B08
@@ -16,26 +16,26 @@ address,name,kind,comment
 0x0813b190,draw_model_param_block,function,packs model bank pointers into a draw parameter block
 0x03000304,raster_wall_columns,function,wall rasteriser: column-mapped textures via map[u] << log2h
 0x03000978,transform_walls,function,rotates wall points by the camera matrix and fills the wall draw buffer
-0x03000b44,draw_sector_pass_b,function,sector draw pass (road surface?)
+0x03000b44,clip_flat_outline,function,clips the floor/ceiling outline to the portal's columns
 0x030013ac,setup_wall_spans,function,projects wall ends and heights; wall u0/u1 and v setup
-0x03001ae4,sort_sector_entities,function,depth-sorts a sector's entity list
-0x03001cf0,draw_sector_entities,function,draws entities (vehicles) of a sector: LOD and material selection
-0x03002084,draw_sector_overlay,function,second pass per sector
+0x03001ae4,sort_sector_entities,function,sorts a sector's entities farthest first by (x'^2+d^2)>>8 into +0x04; runs handlers
+0x03001cf0,draw_sector_entities,function,per entity: clip span, depth/row culls, LOD +0x36-1 / +0x36, 0x1000 cut (bit 6), material, texture, body + spoiler
+0x03002084,draw_sector_walls,function,draws the sector's walls; defers span-flag-2 walls (8-bit mask)
 0x0300224c,draw_sector,function,scene: draws a sector (walls, floor, ceiling, entities) and recurses containers
 0x03002da0,draw_flat_textured,function,floor/ceiling textured pass
 0x03003180,draw_flat_fill,function,floor/ceiling solid-colour pass
-0x03003808,raster_polygon,function,textured polygon rasteriser for models
-0x03004018,transform_model_vertices,function,rotates/translates model vertices and projects them (reciprocal table)
-0x03004190,draw_model_polygons,function,per polygon: size byte, indices, backface cull, raster_polygon
-0x03004e24,collect_sector_entities,function,gathers entities of a sector for drawing
+0x03003808,raster_polygon,function,outcode, clip, edges from the top corner, spans
+0x03004018,transform_model_vertices,function,projects a model's vertices; drops the model if a vertex depth > 0x6000
+0x03004190,draw_model_polygons,function,back-face cull (cross >= 0 drawn) then raster_polygon per polygon
+0x03004e24,collect_sector_entities,function,resets the draw list and sorts the sector's (or a container's children's) entities
 0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)
 0x0816a708,__divsi3,function,libgcc signed divide (truncating; x/0 = 0)
 0x0816a7e4,__modsi3,function,libgcc signed remainder
-0x03004d48,draw_wall_column_pair_transparent,function,wall column pair; writes only when both texels are non-zero (texture first texel 0)
-0x03004db0,draw_wall_column_pair_opaque,function,wall column pair; always writes
-0x03004fa8,draw_floor_span,function,floor/ceiling span; byte store every 2 bytes (half horizontal resolution)
-0x03002c40,draw_floor_span_long,function,splits floor spans into 16-pixel pieces for draw_floor_span
-0x03004a74,blit_scaled_transparent,function,scaled 8bpp blit skipping index 0; writes two buffers
+0x03004d48,wall_column_transparent,function,wall column pair; skips pairs with a colour-0 texel
+0x03004db0,wall_column_opaque,function,wall column pair
+0x03004fa8,flat_span_affine,function,textured flat span: byte writes every 2 bytes (120-wide floors)
+0x03002c40,flat_span_perspective,function,long flat span in 16-pair perspective segments
+0x03004a74,blit_rotated_twice,function,rotated 8bpp blit (16.16 steps, no source bounds) skipping 0, each texel also at +off; rim drawing
 0x0813b6d0,load_car_palettes,function,copies car paint ramps to base palette slots 160/176/208 (16) and 240/248 (8)
 0x0812b1d8,copy_to_base_palettes,function,copies n colours to slot k of both base palette buffers; sets dirty 0x0300563C
 0x0815f948,sin_q14,function,sine: 0x4000 per turn; table 0x087C05F0 (half wave)
@@ -48,7 +48,7 @@ address,name,kind,comment
 0x08163e5c,remap_atlas_pixels,function,p<16: p+body; p<32: p+trim-16
 0x08163e34,remap_decal_pixels,function,p==key: value; else p+add
 0x08163870,blit_material_keyed,function,unpack material (fmt 3/4/5, 0x40 compressed) and blit, skipping key, adding offset
-0x08163d30,decompress_material,function,decompress via FUN_0815e6c8
+0x08163d30,unpack_to_buffer,function,allocates a 0x1011-byte ring and runs the ring LZ77 decoder at 0x08169208; was decompress_material: decompress via FUN_0815e6c8
 0x0813bf58,unpack_decal,function,unpack decal 0x087EF816 into 0x03006094[id] (0x10->0, +0xB0)
 0x0813bd90,draw_decal_on_atlas,function,rotated decal blit into the atlas, twice
 0x0813b634,pick_opponent_cars,function,cars[1..3] = 3*(rand%5)+i, paints = rand%15; paints[1] from 0x087F4344
@@ -58,7 +58,7 @@ address,name,kind,comment
 0x0812bfa4,garage_draw_car,function,tentative: garage turntable, shade_car_paint(.., 1, angle)
 0x0812beec,garage_load_car_atlas,function,tentative: sets the car, unpacks atlas and decal
 0x0812bf48,garage_load_car_palette,function,tentative: sets the car and paint, FUN_0813b6d0(0)
-0x0812ac14,vblank_irq,function,VBlank IRQ: counters; gradient pointer = base + 2*start; LYC = 0
+0x0812ac14,vblank_irq,function,game VBlank IRQ: sound DMA restart, mix, swap; counters; sky gradient pointer = base + 2*start; LYC = 0
 0x030001c0,vcount_irq_sky_gradient,function,VCount IRQ (ARM): PAL[0] = *grad++; LYC += 2; lines 0-78
 0x03005810,irq_dispatch,function,ARM IRQ dispatcher; handler table 0x030056D0
 0x0813a318,draw_skyline,function,skyline panorama blit into the mode-4 back buffer (256-byte rows; 32-byte fill)
@@ -70,9 +70,9 @@ address,name,kind,comment
 0x0816a2a4,call_via_r3,function,bx r3
 0x0813867c,camera_toggle_view,function,camera view 0 <-> 2 (SELECT)
 0x081378cc,camera_init,function,camera init: view 4/5, shake = 0, yaw from player
-0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre
-0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre
-0x0814bc30,draw_vehicle,function,(name tentative) vehicle draw; sets the horizon shift from the player's pitch in views < 2
+0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre; fixed camera looking at the player (focal 150)
+0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre; chase camera: matrix, focal effect, screen centre, start sector, list entry 0
+0x0814bc30,build_player_matrices,function,player car: builds its matrix slots (body and spoiler) each frame; sets the horizon shift from the player's pitch in views < 2
 0x08149b94,save_probe_profile,function,boot: read EEPROM slot, checksum+version 9, copy name and language
 0x08149d84,save_load_profile,function,read EEPROM, checksum, decode (save_decode) and rebuild unlocks
 0x08149fd8,save_write_profile,function,encode (save_encode) and write 64 EEPROM blocks
@@ -112,3 +112,216 @@ address,name,kind,comment
 0x081412ec,hunter_tuning_init,function,hunter life gain/drain constants
 0x08142f74,frames_to_centiseconds,function,frames*100/60
 0x0816a93c,__udivsi3,function,libgcc unsigned divide
+0x08151b10,snd_frame_update,function,LS_Play per-frame update: rate check, pending music, mix next buffer (docs/formats/audio.md)
+0x08151928,snd_dma_restart,function,VBlank: restart DMA1/DMA2 on the current mix buffer (ARM 0x0815ccc4)
+0x08151c48,snd_swap_buffers,function,after mixing: previous = current; current ^= 1
+0x08151f78,snd_init,function,LS_Play init(config, rate index, max sfx channels)
+0x08151554,snd_hw_setup,function,Direct Sound A+B, DMA1/2 to FIFO A/B, timer 0 reload per rate
+0x081519d0,snd_apply_rate,function,rate change (unused in Carbon) and music fade-in +3/frame
+0x0815176c,snd_start_requested_music,function,loads and starts the module requested by snd_play_module
+0x081517e8,snd_jingle_switch,function,second module state for jingles (unreachable in Carbon)
+0x08151e04,snd_load_module,function,GBAMOD30 header into the module state
+0x081521b4,snd_start_module,function,start the loaded module at an order
+0x0815240c,snd_stop_music,function,stop music, zero music channel volumes
+0x08152660,snd_mix,function,mixer driver: rows/ticks, voice list, segment cuts, loop wraps
+0x08152550,snd_row,function,decode and trigger one row, advance order
+0x0815248c,snd_read_cell,function,pattern stream decode for one channel
+0x08151d8c,snd_stream2,function,run-length stream, 2-byte values
+0x08151d60,snd_stream1,function,run-length stream, 1-byte values
+0x08153654,snd_trigger,function,note, instrument, volume column and effect of one row
+0x08153354,snd_tick,function,per-tick effects of the music channels
+0x081514a0,snd_note_period,function,note -> period and step (period mode)
+0x08151500,snd_update_step,function,step from period + slide + vibrato
+0x0815145c,snd_period_freq,function,period -> Hz through the 768-entry octave table
+0x081530b0,snd_tone_porta,function,tone portamento tick
+0x081531dc,snd_vibrato,function,vibrato tick
+0x08153068,snd_volume_slide,function,volume slide tick
+0x0815327c,snd_slide_down,function,portamento down (period +)
+0x081532e0,snd_slide_up,function,portamento up (period -)
+0x08153344,snd_volume_column,function,volume column overrides the volume every row and tick
+0x08151758,snd_play_module,function,request a module for the next update
+0x08152e40,snd_play_sfx,function,play sound effect(id, rate, slot, volume)
+0x08152f44,snd_set_sfx,function,set a sound slot's volume and rate
+0x08152f88,snd_stop_sfx,function,zero a sound slot's volume
+0x08152fb8,snd_set_sfx_volume,function,set a sound slot's volume
+0x08152fec,snd_set_sfx_rate,function,set a sound slot's rate in Hz
+0x08153034,snd_sfx_playing,function,sound slot end > 2
+0x081518d0,snd_set_master_volume,function,engine +0x1428
+0x081518e4,snd_set_music_volume,function,engine +0x142c
+0x081518f8,snd_set_sound_volume,function,engine +0x1430
+0x0815264c,snd_set_loop,function,engine +0x1440
+0x081516bc,snd_shutdown,function,stop DMA/timer, clear buffers, stop music, not running
+0x0815cca0,bios_div,function,Thumb stub: swi 6 (quotient)
+0x0815cca8,bios_mod,function,Thumb stub: swi 6, returns the remainder
+0x03005a00,snd_mix_voices,function,ARM mixing loop (LZ77 from 0x0815cfd4)
+0x08135df8,carbon_sound_init,function,allocates the sound work area and inits LS_Play at 10512 Hz
+0x08135fdc,carbon_play_sound,function,sound id -> slot (0x087ee24c) and option volume
+0x08136028,carbon_stop_sound,function,stop a sound id
+0x08136054,carbon_play_music,function,music id -> module (0x087ee238)
+0x081360b4,carbon_set_sound_rate,function,rate = x*8 Hz on the sound's slot
+0x03004828,build_visible_sectors,function,visible-sector list from the camera sector (<=25 entries, portal depth <5)
+0x03002614,expand_portal,function,appends the sectors seen through one list entry's portal walls
+0x03004ef0,merge_portal_spans,function,unions spans of repeated sectors via the sector map (never called in Carbon)
+0x030048c8,draw_visible_sectors,function,pass 0 draw_sector back to front then pass 1 entities
+0x03000800,find_camera_sector,function,sector of world+0xC0/+0xC8 from world+0xEA or its +0x32 neighbours
+0x030047a8,point_in_sector,function,edge cross-product test against a sector's walls
+0x0300121c,clip_wall_span,function,moves a wall span's start or end to the near plane by a 2.24 fraction
+0x03004ca4,recip_div,function,(a*recip[b])>>24 = a/(b+1)
+0x03004ccc,mul_frac24,function,(a*(u32)t)>>24
+0x03004cf8,recip_div_8,function,(a*recip[b])>>16 = (a<<8)/(b+1)
+0x03004d20,recip_div_16,function,(a*recip[b])>>8 = (a<<16)/(b+1)
+0x03004c40,recip_wide,function,recip[n] or recip[n>>1]>>1 above 0x7FFE
+0x03004c1c,fill_blocks16,function,stores a word into n>>4 16-byte blocks
+0x03002a0c,flat_edge_step,function,steps a flat polygon's left or right edge to its next vertex
+0x03005008,flat_top_vertex,function,finds a flat polygon's top vertex and rejects it outside E6..E8
+0x03005094,fill_span,function,solid-colour span at full resolution
+0x0815e674,iwram_call,function,calls IWRAM function *0x03006490+0xE4+index*4
+0x0815e690,iwram_call_ret,function,iwram_call with a return value
+0x08169208,lz77_ring_decode_rom,function,ROM copy of IWRAM 0x030042f4 (lz77_ring_decode)
+0x08164d90,blit_keyed,function,copies w x h bytes skipping a key byte through 16-bit read-modify-write; no clipping
+0x08136d74,menu_blit_material,function,blits menu material (unpacked if kind bit 6) at x y into the current frame buffer
+0x0812bd60,menu_button_prompts,function,button prompt bar: icons 156..161 and prompt texts in font 0xE
+0x081315a0,menu_screen_setup,function,menu state setup; state 0x2F loads the health screen colours from 0x7E5E48
+0x08162860,text_draw,function,draws a string: char map 0x7F5BC8; align 1 centre / -1 right; colour offset
+0x08162720,text_draw_glyph,function,draws one glyph (width table; key skip; 16-bit read-modify-write)
+0x08163080,text_measure,function,string width with a font
+0x08163278,text_draw_wrapped_checked,function,range check then text_draw_wrapped
+0x08162a1c,text_draw_wrapped,function,word-wrapped text: max width and lines; line height font +0x08
+0x08141578,text_menu,function,font id 0xC..0xF with text key or pointer into the current page; returns width
+0x081416d0,text_menu_both_pages,function,text_menu into both mode-4 pages; font 0xF uses material 12
+0x08141840,text_menu_wrapped,function,word-wrapped text into both mode-4 pages
+0x08141dd0,text_city_font_unused,function,uncalled variant reading glyphs from city materials 12..15
+0x08161a98,obj_upload_tiles,function,copies n x 32 bytes to OBJ tile slot + *0x030064E0
+0x08161c24,sprite_screen_update,function,sprite screen objects to shadow OAM (init or frame): position; hide; uploads; palette; blend; affine
+0x08161ea0,sprite_screen_alloc,function,allocates 0x37 sprite objects; flags = visible for the screen's elements
+0x08161eec,sprite_screen_select,function,sets the screen index then sprite_screen_alloc
+0x0816144c,oam_set_affine,function,affine matrix from scale x/y and angle
+0x08160fd0,oam_hide_range,function,hides n OAM entries (y 160; affine off)
+0x0815f988,cos_q14,function,sin_q14(a + 0x1000)
+0x08142148,hud_reset,function,hides the HUD objects and resets messages for the race mode
+0x08142f84,hud_update,function,minimap palette; per-mode HUD update; message tick
+0x081421b8,hud_update_mode0,function,HUD element updates for race modes 0 and 1
+0x0814228c,hud_update_mode3,function,HUD element updates for race mode 3
+0x08142360,hud_update_mode2,function,HUD element updates for race mode 2
+0x081428c0,hud_timer,function,race time digits mm:ss.cc (elements 5..10)
+0x081429c4,hud_split,function,split time digits and sign (elements 21..27)
+0x08142c4c,hud_lap,function,lap and total laps (elements 11..13)
+0x0814306c,hud_position,function,race position and racer count (elements 19..20)
+0x0814308c,hud_gear,function,gear digit (element 33)
+0x08142724,hud_speed,function,speed digits in km/h or mph (elements 34..36)
+0x08142bd8,hud_needle,function,rev needle angle (element 37)
+0x08142440,hud_minimap,function,minimap window of the 512x384 map rotated by heading; opponent dots
+0x08142ca8,hud_dial,function,dial segment frames from entity +0x4C8 (elements 29..31)
+0x08142b44,hud_portrait,function,portrait and 8-step bar (elements 43..44)
+0x081431a8,hud_arrow,function,animated arrow (element 45)
+0x081431f0,hud_panel_language,function,timer panel frame = language
+0x08143210,hud_split_panel_language,function,split panel frame and digit shift by language
+0x08142ec0,hud_message_show,function,starts a HUD message from the race mode's message table
+0x08142dec,hud_message_tick,function,counts down and blinks HUD messages
+0x08142d64,hud_message_hide,function,hides all HUD message elements
+0x081430c4,hud_minimap_palette,function,loads the route's minimap palette into OBJ colours 0xD0..0xDF
+0x08143144,map_world_to_screen,function,world position to map coordinates (scales 0x7F4480; offsets 0x7F44A8)
+0x08169988,blit_rotated_twice_rom,function,ROM copy of IWRAM 0x03004a74 (ARM)
+0x030042f4,lz77_ring_decode,function,ARM LZ77 (the game's decompressor): 0x1000 ring prefilled 0xFF from 0xFEE; writes the full header size (w*h+8)
+0x0815e6c8,iwram_call_4,function,calls the IWRAM copy of a ROM ARM function (overlay base 0x03006490) with 3 arguments
+0x0815e770,iwram_call_8,function,calls the IWRAM copy of a ROM ARM function (overlay base 0x03006490) with 7 arguments
+0x0815fd1c,rand_seed,function,*0x030064C8 = r0 & 0xFF
+0x08160af8,heap_alloc,function,allocates ceil(n/4) words; descriptor table *0x030064CC (8 bytes per block), arena *0x030064D0; one free word between blocks
+0x08160de4,heap_free,function,frees a heap_alloc block (verified by the car init and traffic traces)
+0x08163bfc,blit_material_keyed_inside,function,blit_material_keyed that writes only over atlas pixels in lo..hi (decal sets)
+0x08163990,blit_material_keyed_outside,function,blit_material_keyed that writes only over atlas pixels outside lo..hi (not used by the atlas path)
+0x08163e14,add_to_pixels_keyed,function,p != key: p + add
+0x081636d0,unpack_material_format4,function,(tentative) format-4 decoder used by blit_material_keyed; no vehicle material uses it
+0x08163d68,unpack_rle,function,(tentative) PackBits-like RLE: b&0x80 repeat next byte (b&0x7F)+1 times, else copy b+1 bytes
+0x0813bc38,setup_player_car,function,(tentative) player-only dressing: material or look, unpack_player_atlas, load_car_palettes(1)
+0x0813ff48,reload_player_car,function,(tentative) frees the decal, setup_player_car, unpack_decal
+0x0813ff44,empty_0813ff44,function,empty; called at the end of setup_race_cars
+0x0814a2a0,entity_update_rim,function,(tentative) race entity update; redraws the player's rim when rim_side_visible
+0x0814b168,car_racing_step,function,nitro drain; dynamics; visibility flags; rim redraw; suspension step when 0x0300610C is 0
+0x0814a390,entity_reset_rim,function,(tentative) calls unpack_decal for the player
+0x0814b98c,car_init,function,car handler state 0: physics struct; handling; upgrades; settling; route tables
+0x0814f9d0,rim_side_visible,function,0 when |angle_diff(a, b)| < 0x400 or in (0x1C00, 0x2400), else 1
+0x0815fc38,angle_diff,function,(tentative) signed difference of two angles (0x4000 per turn)
+0x0815fadc,abs_i32,function,absolute value
+0x0813765c,update_entities,function,calls the entity handler table 0x087F38B8 for each active entity (flags +0x08 & 3 == 3)
+0x0814bd4c,car_handler,function,entity handler 0..3: sector-list unlink/link; state 0 car_init; 0x100 racing; 2 finished (race-over fade)
+0x0814f510,car_unlink,function,sector_list_unlink(world; *entity)
+0x0814f51c,car_link,function,sector_list_link(world; *entity)
+0x081375ac,sector_list_unlink,function,removes an entity from its sector's list (world +0x0C heads; links at entity +0x02)
+0x08137578,sector_list_link,function,pushes an entity onto its sector's list
+0x0814b2a8,car_setup_handling,function,engine/gears/body/wheels from the handling record 0x087F1100 and the upgrades
+0x0814b098,car_nitro_drain,function,drains the nitro tank physics +0x4C8 while nitro is on
+0x0813d1f0,car_dynamics,function,one car step: controls; engine; gearbox; tyres; walls; integration; route (docs/engine/physics.md)
+0x0813c02c,car_auto_shift,function,automatic gearbox (5-step pause at physics +0x9C)
+0x08147ec4,car_wheel_contact,function,four wheels on the ground: suspension load and tyre friction impulses
+0x081484f0,car_tipped_dynamics,function,dynamics while tipped over (physics +0x138 < 0xF21)
+0x0814de40,car_suspension,function,suspension step while 0x0300610C is 0
+0x08145320,car_car_proximity,function,swept proximity test against the other racers
+0x08144fa4,car_car_response,function,car-to-car collision response
+0x08145ca8,car_walls,function,wall test at the point ahead of the car; scrape/crash sounds
+0x081459b8,car_wall_search,function,walls of a sector; recursing once through open portals
+0x081457b8,car_wall_response,function,wall impulse with clamped restitution; side flags; hunter hit
+0x0814136c,hunter_wall_hit,function,hunter races: wall impulse costs hunter life (physics +0x4E8)
+0x0813b5a0,break_wall,function,a breakable dynamic wall and its partner (0x087F3CDA) lose the solid flag
+0x08141284,traffic_wall_hit,function,clears 0x030061F0 (non-racer hitting a wall)
+0x081410a8,is_non_racer,function,entity index > opponent count
+0x08147b18,body_integrate,function,rigid body Euler step (position; quaternion; matrix; velocities)
+0x08148fe8,body_update_velocities,function,v = m^-1 p and w = I^-1 L
+0x08147ca0,body_init,function,rigid body at a position and heading; at rest
+0x081477ac,matrix_to_quat,function,unit quaternion of a rotation matrix
+0x08147618,quat_mul,function,quaternion product (20.12)
+0x081476d8,quat_matrix,function,rotation matrix of a quaternion (20.12)
+0x08147a6c,normalize_12,function,normalise a vector to 0x1000 via isqrt and the reciprocal table; returns the length
+0x0815fdd0,normalize_14,function,normalise a vector to 0x4000 by division
+0x08149150,dot_12,function,20.12 dot product
+0x08149038,vec_sub,function,a - b
+0x08149058,vec_add,function,a + b
+0x081490e0,vec_scale,function,s * v >> 12
+0x08149078,vec_mat_mul,function,v times a 3x3 matrix (20.12)
+0x0815fbd0,cross,function,cross product without scaling
+0x0815f9cc,atan2_q14,function,angle of (x; z); 0x4000 per turn
+0x0815fa54,isqrt,function,integer square root of a word (at least 1)
+0x08149178,recip_q24,function,about 2^24 / x via the reciprocal table 0x087C45F0
+0x0816a8b4,__muldi3,function,libgcc 64-bit multiply
+0x0814fa04,find_sector,function,sector containing a point (query at world +0xC0..+0xEA); find_camera_sector then find_sector_far
+0x0814dbbc,find_sector_far,function,sector search two portals away
+0x0814ca84,floor_height,function,floor height of a sector at x z (8.8): wall +0x38 + sector +0x26 and the floor plane
+0x0814f4a8,floor_sector,function,sector record or the one it defers its floor to (+0x20)
+0x08144f38,control_action,function,control binding test (table 0x087F5494; set 0x0300629C)
+0x08144f1c,select_bindings,function,binding set 0 with the automatic gearbox; else 1
+0x0814007c,route_waypoint,function,waypoint address of segment + index
+0x0814009c,route_waypoint_at,function,normalised waypoint address
+0x0813e93c,route_along_line,function,how far along its waypoint line a car is
+0x0814032c,car_route_progress,function,a car's distance along the route (physics +0xAC)
+0x0813f234,route_track_segment,function,main route / side segment switching by sector (0x087F37D8)
+0x0813edd8,route_track_waypoint,function,waypoint advance; wrong-way counter physics +0x4EC
+0x0813ebac,route_gap,function,time gap to the neighbouring car (0x0300615C)
+0x081402bc,route_lateral,function,signed distance across the route at the car's waypoint
+0x08140274,nearest_lane,function,nearest of the 4 lane offsets 0x087F4120
+0x0814078c,wingman_command,function,control action 8 (R+L) with a wingman
+0x0814efa8,car_put_back_on_road,function,resets a stuck car onto the route
+0x08160b94,heap_alloc_zeroed,function,heap_alloc then clear (size/4 words; then size%4 bytes at the start)
+0x08160cbc,fill_words,function,fill n words
+0x08160c84,fill_bytes,function,fill n bytes
+0x08140148,car_upgrades,function,upgrade levels physics +0x3E0 from the car record bytes +7..+16
+0x0814f198,car_nitro_setup,function,nitro tank and factors
+0x0813e430,race_start_setup,function,race-controller globals; 20 settling steps of the car on the ground
+0x0813f744,route_distances,function,cumulative waypoint distances (+0x10); side-segment scales 0x03006120
+0x081400bc,race_time_limit,function,*0x03006154 = 0x4650 (0x2328 in career)
+0x08143b2c,traffic_countdown,function,player step: spawns traffic when the countdown 0x03006264 runs out
+0x08143d48,traffic_spawn,function,traffic car on the main route ahead/behind the player in a random lane
+0x08137534,free_entity,function,first entity from world +0xF8 (+0xFA of them) whose flag bit 0 is clear
+0x03004470,atan2_fast,function,IWRAM ARM: atan2 via recip_div_16 (divisor clamped to 0x7FFE)
+0x03000220,iwram_divmod,function,IWRAM ARM: signed divide storing a remainder; negative divisors divide by -|a|
+0x0300514c,polygon_outcode,function,model polygon outcode: 4 if no corner inside in x or none in y; bit 0/1 outside in x/y
+0x03003d70,clip_polygon,function,Sutherland-Hodgman of a model polygon against the view rect (x then y), halfword results
+0x03003acc,clip_polygon_edge,function,clips one edge to lo..=hi on x or y with u/v; 1 visible, 2 start clipped, 4 end clipped
+0x03005320,polygon_top_corner,function,first corner with the least y
+0x03003464,polygon_edge_back,function,next polygon edge walking corners backwards: 16.16 x, u/v steps per row
+0x03003634,polygon_edge_forward,function,next polygon edge walking corners forwards
+0x030051f4,draw_polygon_span,function,textured model span: texel pointer stepped by du/dv with 8-bit fraction carries, no wrap
+0x0814eba0,assign_entity_slot,function,gives an entity drawn last frame a matrix slot (counter 0x03005394) and builds it; clears +0x0A bit 2
+0x0814da68,build_entity_matrix,function,slot matrix: rot(+0x30) * camera * rot(+0x32) (or physics matrix, bit 5) + camera-space position; only if +0x0A bit 1 or depth <= 0xDAC
+0x0814ec0c,assign_billboard_slot,function,(name tentative) slot with the camera rotation and the camera-space position
+0x0814e628,opponent_effects,function,(name tentative) rear effect sprites of a car via FUN_0814e414
+0x0814e7b0,spawn_effect_sprite,function,(name tentative) projects a point and allocates a scaled sprite object (FUN_08162048)

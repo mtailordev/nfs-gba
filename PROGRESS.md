@@ -16,7 +16,7 @@ Done and committed:
   - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
   - world scale: one unit for cars and city, about 48 per metre.
 - **Rust workspace:**
-  - `crates/nfsgba-formats` has 21 real-data tests (modules `paint`, `sky` and `career` from the agents);
+  - `crates/nfsgba-sim` has 4 tests (2 trace tests over 9 scenarios); `crates/nfsgba-formats` has 35 real-data tests (modules `atlas`, `career`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10;
   - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
   - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
   - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
@@ -36,19 +36,27 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **viewer-indexed:** done and merged. R1/R2 closed (`docs/engine/viewer-rendering.md`).
 - **car-paint:** done and merged. Car palette slots 160–255 exact in `paint.rs`; R4 closed; the viewer part of R3 is open (`docs/formats/car-paint.md`).
 - **sky:** done and merged. Gradient and skyline exact in `sky.rs`; the viewer parts of R5/R6 are open (`docs/engine/sky.md`). It found that the reference race is **environment 11**, not 1.
-- **sector-renderer:** R7–R11. Owns `crates/nfsgba-formats/src/render.rs`, `docs/engine/renderer.md`.
-- **vehicle-physics:** car simulation plus trace harness. Owns `crates/nfsgba-sim`, `docs/engine/physics.md`, `tools/trace_*`.
-- **audio:** GBAMOD30 and the LS_Play mixer. Owns `crates/nfsgba-audio`, `docs/formats/audio.md`.
-- **ui-2d:** HUD, fonts, menus, sprites and the raw 8bpp region. Owns `crates/nfsgba-formats/src/ui.rs`, `docs/formats/ui.md`, `tools/ui_*`.
+- **sector-renderer:** done and merged. `render.rs` reproduces the reference frame's world pixels exactly (visible list, walls, flats, projection); R7/R9 closed; found wall v units (R20, fixed in `Wall::uv`) and flat heights (R19). The entity draw is decoded but not reimplemented (R12).
+- **vehicle-physics:** done and merged. `crates/nfsgba-sim` reproduces the player car's per-frame update exactly (1,149 traced steps, 9 scenarios, with RAM writes and sounds); its `tools/trace_oracle.py` replays ROM code in unicorn. Unported paths: D9–D13; AI and traffic: D4.
+- **audio:** done and merged. `crates/nfsgba-audio` reproduces LS_Play bit for bit (13,800 traced frames); `nfsgba-audio-render` writes WAVs to `data/out/audio` (`docs/formats/audio.md`). Hook: `Engine::vblank` once per frame, gameplay calls the `carbon_*` functions.
+- **ui-2d:** done and merged. Five menu screens byte-exact from ROM, HUD sprites bit-exact, the game's decompressor, fonts and Windows-1252 text (`ui.rs`, `docs/formats/ui.md`, `tools/ui_export.py` in `.venv`). HUD and menu logic not ported yet (U1–U4).
 - **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).
-- **viewer-sky-paint** (started after the first merges): viewer parts of R3/R5/R6. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
-- **car-atlas:** R13, the player's decals and overlays, and how opponents' cars, paints and materials are chosen. Owns `paint.rs` (+ `atlas.rs`), `docs/formats/car-paint.md`.
+- **viewer-sky-paint:** done and merged. One race palette, the per-line backdrop and the skyline layer in the viewer (R3, R5 closed; R6 leftovers only); level chase camera with focal 150 (part of R11).
+- **car-atlas:** done and merged. `atlas.rs`: the player's atlas (overlay, decal set, wheel rims) and the opponents' choice, pixel-exact at four race starts; R13 closed. The viewer does not use it yet (R23).
+- **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
+- **entity-draw:** done and merged. `render/entities.rs`: the car draw is exact, so `draw_world` reproduces whole frames pixel for pixel (17 captures); R12 closed. Matrix-slot building is still an input (R25).
+- **viewer-geometry:** R23 racers and atlas from `atlas`, R8, R10, R11, R14, R19, R22 in the viewer, plus an original-resolution mode from `render::draw_world`. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
+- **hud-logic:** U1/U2, the HUD element logic and the minimap, traced frame by frame against shadow OAM, tiles and OBJ palette. Owns `ui.rs` (+ `hud.rs`), `docs/formats/ui.md`, `tools/ui_*`.
+- **harness:** shared tooling so agents stop hand-driving mGBA: a unicorn function oracle (call any game function on a RAM snapshot, diff its writes), a function coverage map over real play, and a merge tool for machine-readable integration notes. Owns `tools/oracle/`, `tools/coverage*`, `tools/notes_merge.py`, `docs/engine/harness.md`.
+- **ai-traffic:** D4's AI part: opponent handler 0x29 and traffic handler 0x36, trace-exact. Owns new `nfsgba-sim` modules (`ai.rs`, `traffic_ai.rs`), `docs/engine/ai.md`.
+- **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
 Next, driven by `docs/FIDELITY.md`:
-1. **Viewer integration of R3/R5/R6:** one race palette from `paint::race_palette`; the backdrop per screen line and the skyline layer from `sky`.
-2. **R7–R11, R14–R16:** from the sector-renderer agent (portal traversal, step walls, draw limits, projection, index-0 pairs, half-resolution floors).
+1. **Viewer (next agent):** R23 racers and player atlas from `atlas`; R8 step walls, R10 traversal and limits, R11 principal point and projection, R14 pixel pairs, R19 flat heights, R22 row 159; move the viewer's `grid_headings` (template entity `+0x2C`) into `Route`.
+2. **Viewer geometry (after viewer-sky-paint merges):** R8 portal step walls, R10 traversal and limits, R11 projection, R19 flat heights; optionally a 240×160 original-resolution mode from `render::draw_world`.
+2b. **Entity draw (R12):** reimplement `draw_sector_entities`/`raster_polygon` in `render.rs` and check the 536 car pixels of the reference frame.
 3. **R13:** decals and overlays on the player's atlas; opponent material choice.
 4. **Gameplay parity (roadmap step 4):** handling, AI and cops, traced against the reference build.
 

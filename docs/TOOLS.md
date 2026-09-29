@@ -36,6 +36,8 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 Lua API: `callbacks:add("frame", fn)`, `emu:currentFrame()`, `emu:readRegister("pc")`, `emu:read32(addr)`, standard `io` for writing trace files.
 
 **Remote control for the canonical ROM:** `python tools/mgba_ctl.py start`, then batches such as `python tools/mgba_ctl.py "hold A 10" "wait 120" "shot x" "dump x" "save x"`, then `stop`. Output goes to `$NFSGBA_DATA\work\<sha1-8>\mgba\`.
+
+**Extra emulator scripts:** `NFSGBA_MGBA_SCRIPTS=<path>` makes `mgba_ctl.py start` load more Lua next to the remote. `tools/mgba_frame_probe.lua`: write `NAME [ADDR=VALUE …]` to `probe.tmp` in the session folder and rename it to `probe.txt`; it saves the renderer's inputs at the start of `draw_visible_sectors` (`NAME.iwram.bin`, `NAME.wram.bin`, `NAME.vram.bin`) and the finished page a frame later (`NAME.final.bin`), optionally after patching RAM. `emu:setBreakpoint` works on IWRAM ARM code. Physics traces: the `trace NAME [SKIP]` command logs full RAM per car step (`docs/engine/physics.md`).
 - **Menus** need presses of at least 10 frames.
 - **Route to a race from a fresh save:** A (language: English) → A → A → START → A (intro screens) → profile name (DOWN, A, START) → main menu → A (Quick Play) → A (Random) → A → A.
 - **Savestates** `mainmenu.ss` and `race.ss` are kept in the work folder.

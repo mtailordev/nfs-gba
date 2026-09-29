@@ -8,6 +8,7 @@ Commands are listed in mgba_remote.lua. Screenshots, dumps, savestates, save gam
 $NFSGBA_DATA/work/<sha1-8>/<session>/, never next to the vault ROM. Several emulators can run at once with
 different sessions: NFSGBA_MGBA_SESSION (default "mgba"). NFSGBA_MGBA overrides the mGBA executable (default
 ext/mgba-dev/mGBA.exe in this checkout; git worktrees have no ext/, so point it at the main checkout's).
+NFSGBA_MGBA_SCRIPTS adds more scripts (os.pathsep-separated), e.g. tools/mgba_frame_probe.lua.
 """
 import json
 import os
@@ -33,6 +34,8 @@ def main(args: list[str]) -> None:
     work.mkdir(parents=True, exist_ok=True)
     if args == ["start"]:
         cmd = [str(MGBA), "--script", str(ROOT / "tools" / "mgba_remote.lua")]
+        for script in filter(None, os.environ.get("NFSGBA_MGBA_SCRIPTS", "").split(os.pathsep)):
+            cmd += ["--script", script]
         for key in ("savegamePath", "savestatePath", "screenshotPath", "patchPath", "cheatsPath"):
             cmd += ["-C", f"{key}={work}"]
         cmd += ["-C", "mute=1", str(rom)]

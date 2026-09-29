@@ -32,7 +32,7 @@ The material table (level record `+0x1C`) holds **227 self-indexed records** of 
 
 | Offset | Meaning |
 |---|---|
-| `+0x00` | u16 index (records are self-indexed) |
+| `+0x00` | u16 runtime slot = its own index (records are self-indexed); `draw_sector_walls` never draws a material whose slot is 0, and only material 0 has that |
 | `+0x02` | u16 kind. **0 = plain:** row-major texels. **2 = column-mapped:** the building facades. **1:** a sky gradient (see below) |
 | `+0x04` | kind 2: offset (from the texel base) of the **column map**, one byte per u |
 | `+0x08` | offset of the texels, from the texel base (level record `+0x08`) |
@@ -41,9 +41,9 @@ The material table (level record `+0x1C`) holds **227 self-indexed records** of 
 
 - **Column-mapped textures:** wall texture u picks a column through `map[u]`. That column's `height` texels are stored contiguously at `texels + column × height` (column-major), and repeated columns are stored only once. For example, material 5 (512×128) has 51 unique columns. `FUN_03000304` (the wall rasteriser) reads textures exactly this way.
 - **Kinds in use:** 107 facades of 512×128 and 30 of 512×64 (kind 2); floor textures of 64×64, 128×128, 512×128 and 512×512 (kind 0); 8×8 flat textures.
-- **Palette:** level record `+0x00` (`0x71F1E8`, 256 × BGR555). Index 0 (magenta `0x7C1F`) is transparent (rooflines, cut-outs).
-- **Runtime palette:** in a race the palette in RAM is *computed*. No 32-colour run of it exists anywhere in the ROM, and the reference race looks night-tinted (for instance, blue-white kerbs where the ROM palette has red-white). It is probably time of day or fog; not decoded.
-- **Material 0 means "not drawn".** `FUN_0300224c` runs a sector's floor/ceiling passes only if `+0x08` or `+0x04` is non-zero. The 91 solid walls with material 0 are assumed to be invisible collision walls; drawn, they appear as blank slabs.
+- **Palette:** level record `+0x00` (`0x71F1E8`, 256 × BGR555), picked by the environment. Index 0 (magenta `0x7C1F`) is the backdrop, not a colour: transparent wall textures (first texel 0) skip a 2-pixel pair unless both texels are non-zero, and opaque ones let the backdrop (sky gradient) show through (FIDELITY R14).
+- **Runtime palette:** in a race the palette is tinted every frame by the wall light at the player's position (`apply_sector_light_to_palette`, exact in `nfsgba_formats::tint_palette`); car slots come from `load_car_palettes` (`docs/formats/car-paint.md`).
+- **Material 0 means "not drawn"** (confirmed from code and in the reference frame). `draw_sector` runs a sector's floor/ceiling passes only if `+0x08` or `+0x04` is non-zero, and `draw_sector_walls` skips material 0 walls (the 91 invisible collision walls).
 
 ## Skies (verified)
 
@@ -59,11 +59,13 @@ Which sky belongs to which district or event, and the panorama's scroll factor, 
 |---|---|---|
 | `+0x00` | u16 | first wall. Sectors tile the wall array in order |
 | `+0x02` | u16 | wall count |
-| `+0x04` | u16 | **ceiling** material (tunnels and overpasses), 0 = none. Drawn by `FUN_03002da0` pass 1, or filled with colour `+0x0D` by `FUN_03003180` |
-| `+0x08` | u16 | **floor** material, 0 = none. Pass 0, or filled with colour `+0x0C` |
+| `+0x04` | u16 | **ceiling** material (tunnels and overpasses), 0 = none. Drawn by `FUN_03002da0` pass 1, or filled with colour `+0x0C` by `FUN_03003180` |
+| `+0x08` | u16 | **floor** material, 0 = none. Pass 0, or filled with colour `+0x0D` |
 | `+0x0A` | u16 | index into a 0x14-byte table (world `+0x1C`); `0xFFFF` = none. Flag `0x40` there hides the sector |
-| `+0x0C`, `+0x0D` | u8 | solid fill colour (palette index) for the floor/ceiling pass; 0 = textured |
+| `+0x0C`, `+0x0D` | u8 | solid fill colour (palette index) for the **ceiling / floor** pass; 0 = textured (from the renderer code; no frame has exercised a fill yet) |
 | `+0x12` | u8 | flags (bit 3: container, draw the linked list at `+0x24` instead) |
+| `+0x20` | u16 | alias (renderer.md) |
+| `+0x22` | u16 | start-sector alias (renderer.md) |
 | `+0x24` | u16 | next sector in a list, `0xFFFF` ends it |
 | rest | | unknown |
 
@@ -77,22 +79,22 @@ A wall is the edge from its point to the next wall's point in the same sector; t
 | `+0x04` | i32 | z of the start point |
 | `+0x08` | i16, i16 | top, bottom height at the start (`-y` is up) |
 | `+0x0C` | i16, i16 | top, bottom height at the end |
-| `+0x10`, `+0x14` | i32 | texture v at the top, start and end (16,384 = one texture height) |
-| `+0x18`, `+0x1C` | i32 | texture v at the bottom, start and end |
+| `+0x10`, `+0x14` | i32 | texture v at the top, start and end, in 1/128 texel rows (16,384 = 128 rows) |
+| `+0x18`, `+0x1C` | i32 | texture v **span** (top to bottom), start and end. The end values `+0x14`/`+0x1C` only count with flag `0x80` (perspective v), which no wall has |
 | `+0x20`, `+0x24` | i32 | **floor** texture u, v at this corner (16,384 = one texture) |
 | `+0x28` | u16 | wall texture u start, in texels (`u0 = +0x28 << 7`) |
-| `+0x2A` | i16 | index into a 0x20-byte table (world `+0x18`) of position and height offsets, or `-1`. **Hypothesis:** moving or animated pieces |
+| `+0x2A` | i16 | moving piece: index into world `+0x18` (0x20 bytes: dx, dz, ceiling dy, floor dy, top dy, bottom dy, material offset, flags), or `-1` |
 | `+0x2C` | u16 | material |
-| `+0x2E` | u16 | flags. Bit 1 runs u the other way; bit `0x2000` is also used |
+| `+0x2E` | u16 | flags: 1 = open portal, not drawn; 2 = u runs the other way; `0x80` = perspective v; `0x800` = portal forces entities into pass 0; `0x1000` = blocks the camera-sector search; `0x2000` = two-sided |
 | `+0x30` | i16 | **portal link**: neighbouring sector, or `-1` for a solid wall |
-| `+0x32` | i16 | usually the same as `+0x30` |
-| `+0x38`, `+0x3A` | i16 | offsets used when drawing the road surface |
+| `+0x32` | i16 | neighbour for the camera-sector search (usually the same as `+0x30`) |
+| `+0x38`, `+0x3A` | i16 | **floor and ceiling height** at this corner; the flats use these, not `+0x08`/`+0x0A` (they differ at 384 floor corners) |
 | `+0x40` | u16 | wall texture u span, in 1/256 textures (`u1 = u0 + (+0x40 << (log2w − 1))`, texel = `u >> 7`) |
-| `+0x42` | i16 | v offset (× 0x80), usually 0 |
+| `+0x42` | i16 | v offset in texel rows (the renderer adds `+0x42 · 128`), usually 0 |
 
 **Texture mapping (verified).**
-- **Walls:** u in texels is `u >> 7`, and v runs from the top values to the bottom values, with 16,384 = one texture. Wall 0 comes out at 20 units per texel both ways (square texels), and facades render straight.
-- **Floors:** the corner u and v divided by 16,384. Every 512×512 floor gives 8.53 units per world unit on both axes, and straight roads land their kerbs exactly on the road edges. Both are implemented in `Wall::uv` and in the viewer.
+- **Walls:** u in texels is `u >> 7`. v is in 1/128 texel rows: the top is `+0x10 + +0x42·128`, the bottom adds the span `+0x18`, and both ends of a wall share them (`docs/engine/renderer.md`). 2,119 of the 2,305 drawn walls span exactly one texture height. (Until 2026-09-29 this doc said 16,384 = one texture, which showed 64-row textures at half height.)
+- **Floors:** the corner u and v divided by 16,384. Every 512×512 floor gives 8.53 units per world unit on both axes, and straight roads land their kerbs exactly on the road edges. Confirmed in the renderer (`flat_span_affine` masks). Walls are implemented in `Wall::uv`, floors in the viewer.
 
 Screen projection (`FUN_03000978`): rotate (x, z) by the camera matrix (2.14 fixed point), give up past depth `0x5FFF`, then map both ends and both heights through the same reciprocal table the vehicles use.
 

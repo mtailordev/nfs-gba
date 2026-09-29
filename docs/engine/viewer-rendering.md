@@ -139,3 +139,96 @@ The scripts are in the session scratchpad `viewer-indexed/` (`compare.py`, `texz
 - **New R15:** "Observer sector found by point-in-polygon; the game tracks the player's sector through portals (`0x03005614`). Exact source: the sector update in the player/camera code."
 - **New R16:** "Floors and ceilings are drawn at half horizontal resolution (`0x03004fa8`, one byte per two pixels; confirmed on s15). The viewer draws at full window resolution. Belongs with R10/R11."
 - **R3/R4:** add "Viewer hook: `CarPalette::slots` (raw BGR555 for slots 192..=223); one palette per car, which R3 must replace with the game's slot assignment (160..=191 for other cars)."
+
+## Race palette and sky layer (R3, R5, R6)
+
+This section supersedes the car and sky rows of "What uses which palette", the `CarPalette::slots` hook, and items 3 and 4 of the NOT 1:1 list above.
+
+### How it works
+
+**One race palette** (`Tint`, `tint` system), shared by the city, the four race cars and the skyline, built every frame in the game's order (`docs/formats/car-paint.md`, "Frame timing"):
+1. `race_base`: the environment's city palette plus `paint::load_car_palettes` with the reference race's racers (`RACE_CARS` = [2, 9, 10, 11], `RACE_PAINTS` = [11, 11, 11, 5], the player's record with paint 11 and glass 0). These are inputs taken from the race dump; the game draws them from the RNG and the save.
+2. Glass: slots 192 and 208 = `paint::glass_shades` for the player's heading.
+3. `paint::race_palette(base, m)`: the light tint (R2), with 192 and 208 left raw. Before the first light the palette is `base`.
+
+**Race cars.** They stand on the route's grid, facing the template entity heading (`+0x2C >> 8`, read by `grid_headings`).
+- The player uses car 2, material 8 (car table `+0x0C` + record `[3]`), remapped by `paint::remap_atlas(.., 0xD0, 0xC0)`.
+- The opponents use materials 140, 141 and 142 (entity `+0x48` in the reference race), drawn raw because their pixels are already final slots.
+- All four draw model car table `+0x14` (our `models[1]`). This is `draw_sector_entities`' close model `+0x36 − 1`, the same for all four entities in the dump.
+
+**Showroom.** Each car gets its own palette, as the garage builds it: `load_car_palettes` with `race = false`, paint number = car row, and glass at turntable angle 0. It is tinted like the city. This is a display only.
+
+**Sky layer.** A quad follows the camera 20 km out, behind all geometry. It uses the `Indexed` material with `SCREEN | OPAQUE`:
+- Its index texture is the 240×160 GBA screen as it is before the world is drawn: `sky::draw_skyline` on a cleared screen.
+- Each window pixel reads the GBA pixel `floor((p − viewport origin) / viewport size · (240, 160))`.
+- Index 0 shows the backdrop.
+
+**Backdrop.** A 160×1 texture: line `y` = `bgr555(gradient_buffer[backdrop_entry(gradient_start, y)])`. Palette entry 0 is not tinted.
+
+**Camera inputs** (`sky` system; redrawn when the environment, yaw or horizon changes):
+- **Yaw:** the view direction in the game's convention, rounded. Heading 0 faces raw +z and 0x1000 faces +x; checked against the racing lines of all 44 routes.
+- **Horizon:** `150 · tan(pitch)`, clamped to ±32 as `camera_update` does.
+- **View:** 2 (chase). Shake is 0.
+
+**Window.** 960×640, so every GBA pixel is exactly 4×4 window pixels. Other sizes scale each axis on its own; a window that is not 3:2 stretches the sky layer.
+
+**Index 0 on world surfaces (R14, partly).** City textures whose first stored texel is non-zero (the opaque wall drawer) now show the backdrop line colour for index 0. Transparent textures still discard per pixel. Cars discard index 0, because the game's rule for models is not known.
+
+**Chase camera.** Level, with yaw = the player's heading, and the car at (0, 134, 343) in camera space (the reference race's vehicle matrix). Projection: vertical FOV `2·atan(80/150)` = 56.14°. This touches R11; see the integration notes.
+
+### Verification
+
+The scripts are in the session scratchpad `vsp/`: `verify_sky.py`, `verify_s15.py`, `strip.py`, `car.py`. The viewer renders at 960×640 and the centre pixel of each 4×4 block is compared.
+
+- **Sky layer against the game's skyline captures** (`data/work/e5298b24/sky/`: the 7 chase-view breakpoint captures h0–h5 and w1).
+  - **Yaws:** 0x0FFD, 0x1018, 0x0DA9, 0x0E21, 0x23E6, 0x39E7, 0x37F6.
+  - **Setup:** `NFSGBA_ROUTE=23` (the race palette), with the camera 400 m above the city looking level along the capture's yaw.
+  - **Expected colour:** the capture's index through race palette RAM; index 0 through the game's gradient buffer (`c0.gradbuf.bin`) at entry `21 + y/2`.
+  - **Result:** 107,520 / 107,520 GBA pixels (rows 0–63) equal.
+- **Sky against s15,** from the game's camera (eye raw (118039, 30, −64321), yaw 0xFFD, level).
+  - **Pixels checked:** 4,925 s15 pixels that the game left as sky (VRAM index 0, or the h0 skyline index) and that no sprite covers.
+  - **Equal:** 4,555.
+  - **The other 370:** all are pixels where the viewer draws world geometry instead (224 on row 159, see below; 49 at the far building; 97 at the left roof edge). None shows a wrong sky colour.
+- **Cars** (chase shot, route 23):
+  - Every pixel of the player car's box is an exact colour of the race dump's palette RAM (0 exceptions).
+  - 25 of the 27 colours that s15 draws from slots 192–223 appear.
+  - The two missing ones are near-whites, (247, 247, 231) and (231, 231, 214), and were not traced. Candidates are model 12 (the player's second piece) or the decals (R12/R13).
+- **Unit test `camera_angles`:** yaw round trip, horizon sign and clamp.
+
+### Not 1:1 (remaining)
+
+- **R6 leftover bytes.** The game's fill drops `bytes % 32` above the skyline and never clears below it, so those bytes keep the page's previous frame. The viewer starts each sky layer from a cleared screen. The chase view has none: 240·20 is a multiple of 32.
+- **Free-camera horizon.** It comes from the pitch; the game never pitches. At the ±32 clamp, the backdrop reaches gradient entries 64–76 (ROM bytes after the gradient), as in the game's bumper view.
+- **Racer state.** The racers are the reference race's constants. The game picks them with `pick_opponent_cars` (RNG) and the save. The rule for opponent materials is open (R13); 131 + car id fits all three reference opponents (hypothesis).
+- **Chase-camera dynamics.** The game's camera trails the car: yaw 0xFFD against heading 0x1000 at the start. That moves the skyline source column from 0 to 238, i.e. 2 pixels plus the next texture row, through the row-copy quirk.
+- **Unchanged:** R14 (pair rule), R17 (glass scanline window), R18 (hardware line timing), and the model LOD, model 12, decals and overlays (R10/R12/R13).
+
+**Finding: row 159 is never drawn by the world.** The world clip bounds `world +0xE2…+0xE8` are (x0 0, x1 240, y0 0, y1 159) in the race dump.
+- In the chase view, row 159 is index 0 across the width in both pages of the race dump and of snaps c0–c2, so the bottom line shows the backdrop. The viewer draws the world there.
+- In the bumper view (c3–c5), 148–162 of the 240 pixels of row 159 are index 0, so something else draws part of that row.
+- This is viewer geometry (R11), outside this work.
+
+## Integration notes (race palette and sky layer)
+
+**FIDELITY.md:**
+- **R3 → Closed:** "Car paint: exact in formats and viewer. One shared palette from `paint::race_palette` (`load_car_palettes` with the race's racers, glass shades from the player's heading); player atlas through `remap_atlas`; opponents' raw materials. Checked on the route-23 chase shot: every player-car pixel is a race palette RAM colour; 25/27 of s15's car-slot colours are present (`docs/engine/viewer-rendering.md`)." The racer choice itself goes to a new D-entry (below).
+- **R5 → Closed:** "Backdrop per screen line in the viewer (`sky::backdrop_entry`/`gradient_start` on a 160-line texture; the window maps onto 240×160). Checked: 107,520/107,520 pixels against 7 skyline captures, and 4,555/4,555 s15 sky pixels where the viewer shows sky."
+- **R6 → Closed,** except the leftover bytes: "Skyline: `sky::draw_skyline` into a 240×160 index screen behind the world, yaw and horizon from the camera. Checked as R5." Keep R6 open only for "fill leftovers (`bytes % 32` above, nothing below) keep the page's previous frame; the viewer clears. None in the chase view."
+- **R14:** partly done. Opaque city textures (first stored texel non-zero) show the backdrop for index 0; the pair rule for transparent walls and the rule for models remain.
+- **R11:** note what this work touched (the owner may replace it): FOV `2·atan(80/150)`, a 960×640 window, and a level chase camera with the car at (0, 134, 343) in camera space. The principal point (120, 79) and the integer projection are not done.
+- **New R entry (row 159):** "The world's clip rect is rows 0..158 (`world +0xE2…+0xE8` = 0, 240, 0, 159); in the chase view the bottom line shows the backdrop. The viewer draws the world on all rows. In the bumper view part of row 159 is drawn by something else."
+- **New D entry (racers):** "The viewer uses the reference race's racers as constants (cars [2, 9, 10, 11], paints [11, 11, 11, 5], record paint 11, opponent materials 140–142). Exact source: `pick_opponent_cars` (RNG `0x7C03F0`, index `0x030064C8`), the save's car records, and `setup_race_cars`."
+
+**address-map.md:**
+- World `+0xE2…+0xE8`: clip x0, x1, y0, y1 = 0, 240, 0, 159 in the race.
+- Route template entity `+0x2C`: heading, 8.8 (`0x100000` = 0x1000 for route 23). Direction raw `(sin, cos)` in (x, z); checked against all 44 racing lines.
+- Entity `+0x36`: close model + 1 (car table `+0x14` + 1). `draw_sector_entities` draws `+0x36 − 1`, and the next model beyond depth 0x1FF.
+- Entity `+0x64`: second model piece, drawn with matrix slot `+0x88 + 1`; negative swaps the order. It is 12 for the player.
+- Entity `+0x0A` bit 1: LOD depth forced to 0 (the opponents' 0x22).
+- Entity `+0x88` = 0xFF: no matrix slot, not drawn by `draw_sector_entities` (all three opponents in the reference race, which were about 20,000 units ahead).
+- Car table: `+0x14` = close model (`models[1]`), `+0x10` = far model (`models[2]`). `+0x12` equals `+0x10` and `+0x16` equals `+0x14` for all 15 cars.
+- Vehicle materials 131–145: 15 raw 128×100 opponent atlases. The reference opponents (cars 9, 10, 11) use 131 + car (hypothesis).
+
+**symbols.csv:** no new functions.
+
+**Viewer-local ROM reader:** `grid_headings` (route table `0x7F2798` → template entities `+0x2C`) lives in the viewer. It could move to `nfsgba_formats::Route` as `headings`.
