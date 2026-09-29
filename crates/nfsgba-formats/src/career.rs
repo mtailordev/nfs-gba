@@ -637,24 +637,32 @@ pub fn payout_place(order: &[u8]) -> u8 {
     }
 }
 
-/// The ranking `career_race_payout` starts with (`FUN_0812e8e4`, rows swapped by `FUN_0812e860`), on the ranked
-/// results at `0x03005730`: per slot a byte at `+0`, the entity id at `+4`, bytes at `+8` and `+0xC`, and `u32` at
-/// `+0x10` (best lap), `+0x20` (time) and `+0x30` (hunter life). Hunter (mode 2) ranks by life, most first
-/// (unsigned); circuit, elimination and sprint by time, least first (signed). A bubble sort over `opponents + 1`
-/// slots with `opponents + 1` passes; ties keep their order.
-pub fn rank_results(t: &mut [u8; 0x40], opponents: u32, mode: u32) {
-    let key = |t: &[u8; 0x40], k: usize| match mode {
-        2 => i64::from(u32_at(t, 0x30 + 4 * k)),
-        _ => i64::from(u32_at(t, 0x20 + 4 * k) as i32),
-    };
-    if mode > 3 {
-        return;
+/// How `career_race_payout` ranks the results first: hunter (mode 2) by life, most first; circuit, elimination and
+/// sprint by time, least first; other modes not at all. `(key, descending)` for [`rank_results`].
+pub fn payout_ranking(mode: u32) -> Option<(u32, bool)> {
+    match mode as i32 {
+        2 => Some((4, true)),
+        0 | 1 | 3 => Some((1, false)),
+        _ => None,
     }
+}
+
+/// `FUN_0812e8e4(key, descending)` (rows swapped by `FUN_0812e860`) on the ranked results at `0x03005730`: per slot a
+/// byte at `+0`, the entity id at `+4`, bytes at `+8` and `+0xC`, and `u32` at `+0x10` (best lap), `+0x20` (time)
+/// and `+0x30` (hunter life). Key 1 compares the time (signed), 2 the `+0xC` byte, 4 the life (unsigned); other keys
+/// never swap. A bubble sort over `opponents + 1` slots with `opponents + 1` passes; ties keep their order.
+pub fn rank_results(t: &mut [u8; 0x40], opponents: u32, key: u32, descending: bool) {
+    let value = |t: &[u8; 0x40], k: usize| match key {
+        1 => i64::from(u32_at(t, 0x20 + 4 * k) as i32),
+        2 => i64::from(t[0xC + k]),
+        4 => i64::from(u32_at(t, 0x30 + 4 * k)),
+        _ => 0,
+    };
     let n = opponents as usize;
     for _ in 0..=n {
         for k in 0..n {
-            let (a, b) = (key(t, k), key(t, k + 1));
-            if if mode == 2 { a < b } else { b < a } {
+            let (a, b) = (value(t, k), value(t, k + 1));
+            if if descending { a < b } else { b < a } {
                 for (at, size) in [(0x10, 4), (0, 1), (4, 1), (0x20, 4), (0xC, 1), (0x30, 4), (8, 1)] {
                     for i in 0..size {
                         t.swap(at + size * k + i, at + size * (k + 1) + i);
@@ -1748,7 +1756,8 @@ mod tests {
         }
     }
 
-    /// Every line of `data/work/e5298b24/race-rules/*.log`, file by file in name order.
+    /// Every line of `data/work/e5298b24/race-rules/*.log` (mGBA traces) and `oracle-*.jsonl` (oracle cases from
+    /// `tools/oracle_race_rules.py`, the same keys; the line number stands for the frame), file by file.
     fn traces() -> Vec<Trace> {
         let dir = data_dir().join("work/e5298b24/race-rules");
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -1757,18 +1766,28 @@ mod tests {
         };
         let mut files: Vec<_> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "log") && p.file_name().is_some_and(|n| n != "log.txt"))
+            .filter(|p| p.extension().is_some_and(|x| x == "log" || x == "jsonl"))
             .collect();
         files.sort();
         let mut out = Vec::new();
         for f in files {
             let name = f.file_name().unwrap().to_string_lossy().into_owned();
-            for line in std::fs::read_to_string(&f).unwrap().lines() {
-                let kv: std::collections::HashMap<_, _> = line
-                    .split_whitespace()
-                    .filter_map(|w| w.split_once('='))
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect();
+            let json = name.ends_with(".jsonl");
+            for (i, line) in std::fs::read_to_string(&f).unwrap().lines().enumerate() {
+                let mut kv: std::collections::HashMap<String, String> = if json {
+                    let v: serde_json::Map<String, serde_json::Value> = serde_json::from_str(line).unwrap();
+                    v.into_iter()
+                        .map(|(k, v)| (k, v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
+                        .collect()
+                } else {
+                    line.split_whitespace()
+                        .filter_map(|w| w.split_once('='))
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect()
+                };
+                if json {
+                    kv.insert("frame".into(), i.to_string());
+                }
                 if let (Some(frame), Some(func)) = (kv.get("frame"), kv.get("fn")) {
                     out.push(Trace {
                         file: name.clone(),
@@ -1793,8 +1812,13 @@ mod tests {
         let mut last_sav = std::collections::HashMap::new();
         for t in traces() {
             let at = || format!("{} frame {} {}", t.file, t.frame, t.func);
-            let lapped_at_build = *built.get(&t.file).unwrap_or(&false);
-            let line_for = |race: &Race, route: usize| RacingLine::new(&rom, route, race.mode == 3).unwrap();
+            // Oracle cases name the snapshot's line (`sprint`) and plane build (`built`); traces follow the race.
+            let lapped_at_build =
+                t.kv.get("built")
+                    .map_or(*built.get(&t.file).unwrap_or(&false), |b| b != "0");
+            let sprint = t.kv.get("sprint").map(|s| s != "0");
+            let line_for =
+                |race: &Race, route: usize| RacingLine::new(&rom, route, sprint.unwrap_or(race.mode == 3)).unwrap();
             // Scenes without a racing line (route 0: an all-zero world copy) have no rules to check.
             let g = ["g", "pre.g"].into_iter().find(|k| t.kv.contains_key(*k));
             if let Some(g) = g
@@ -1945,15 +1969,33 @@ mod tests {
                         at()
                     );
                 }
+                "rank_results" => {
+                    let mut ranked: [u8; 0x40] = t.bytes("pre.ranked").try_into().unwrap();
+                    let (key, desc) = (t.get("key").parse().unwrap(), t.get("desc") != "0");
+                    rank_results(&mut ranked, t.get("opponents").parse().unwrap(), key, desc);
+                    assert_eq!(ranked[..], t.bytes("post.ranked")[..], "{}", at());
+                }
                 "career_race_payout" => {
                     if t.kv.contains_key("pre.ranked") {
                         let mut ranked: [u8; 0x40] = t.bytes("pre.ranked").try_into().unwrap();
-                        let (opponents, mode) = (t.get("opponents").parse().unwrap(), t.get("mode").parse().unwrap());
-                        rank_results(&mut ranked, opponents, mode);
+                        let opponents = t.get("opponents").parse().unwrap();
+                        if let Some((key, desc)) = payout_ranking(t.get("mode").parse().unwrap()) {
+                            rank_results(&mut ranked, opponents, key, desc);
+                        }
                         assert_eq!(ranked[..], t.bytes("post.ranked")[..], "{} ranking", at());
                     }
+                    // Afterwards `FUN_0812ee14` runs whenever 0x030000A0 is not 0 (the oracle stubs it).
+                    if let Some(after) = t.kv.get("after") {
+                        assert_eq!(after != "0", t.get("career") != "0", "{}", at());
+                    }
                     if t.get("career") != "1" {
-                        continue; // only career events (0x030000A0 = 1) pay
+                        // Only career events (0x030000A0 = 1) pay.
+                        assert_eq!(
+                            (t.get("pre.cash"), t.get("pre.events")),
+                            (t.get("post.cash"), t.get("post.events"))
+                        );
+                        *counts.entry(t.func.clone()).or_default() += 1;
+                        continue;
                     }
                     let mut save = blank_save();
                     save.cash = t.get("pre.cash").parse().unwrap();
