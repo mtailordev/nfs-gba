@@ -87,7 +87,7 @@ KIND_SCREENS = {  # kind name -> (index in KIND_HANDLERS, screens)
     "intro": (6, [21, 22, 23, 24, 25, 26, 37, 47, 48]), "kind38": (7, [38, 39, 40, 41, 42, 43]),
 }
 # Ported handlers: every exit (each is only `FUN_081372D8(world)`), the intro kind and those listed per kind.
-PORTED_KINDS = ["intro", "kind7", "event"]
+PORTED_KINDS = ["intro", "kind7", "event", "career"]
 PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
@@ -104,6 +104,7 @@ STUBS.update({
     0x081372D8: 1,  # scene teardown (every exit handler)
     0x08143284: 0, 0x081435C4: 0,  # map screens: zone colours, map draw
     0x08141C88: 7,  # text box (font, key or pointer, x, y, width, lines, colour)
+    0x0812EFE8: 0,  # career_race_payout
 })
 STACK_TEXT = (0x0300_7000, 0x0300_7C00)  # stub pointer arguments in here are the game's stack strings
 MENU_FRAME, GAME_STATE_STEP, MAIN_FRAME, GOTO_SCREEN = 0x0812B5F0, 0x0812ACEC, 0x0812AE64, 0x0812BB5C
@@ -282,6 +283,16 @@ def menu_state(rng, screens):
     ]
 
 
+def record_ties(rng):
+    """Track records (profile +0x218) and best laps (results +0x10, both copies) often equal, above or below."""
+    if rng.random() < 0.5:
+        return [(PROFILE_AT + 0x218, bytes(rng.randrange(256) for _ in range(48)))]
+    v = rng.randrange(1, 0xFFFF)
+    lap = v + rng.choice([0, 0, -1, 1])
+    return [(PROFILE_AT + 0x218, struct.pack("<24H", *[v] * 24)),
+            (0x03005660, struct.pack("<4i", *[lap] * 4)), (0x03005740, struct.pack("<4i", *[lap] * 4))]
+
+
 def kind_extra(rng, kind):
     """The state a kind's handlers read beyond `menu_state`."""
     pick = rng.choice
@@ -292,7 +303,27 @@ def kind_extra(rng, kind):
             (PROFILE_AT + 0x404, bytes([pick([0, 0, 1, 2, 3, 4])])),
             (PROFILE_AT + 0x1FB, bytes([rng.randrange(8)])),
         ]
-    if kind in ("event", "career"):
+    if kind == "career":
+        keys = [pick([0x31A, 0x194, 0x39A, 0xC6, 0x3CF, 0xA3, 0x3C1, 0x100, 0x2AB]) for _ in range(pick([0, 1, 2, 4]))]
+        stack = bytes(pick([0xC, 0xC, 6, 5, 0xB, rng.randrange(0x31)]) for _ in range(8))
+        return [
+            (0x03005650, bytes(rng.randrange(256) for _ in range(0x40))),
+            (0x03005730, bytes(rng.randrange(256) for _ in range(0x40))),
+            (0x03005658, bytes(pick([0, 8, 8, 1]) for _ in range(4))),
+            (0x03005738, bytes(pick([0, 8, 8, 1]) for _ in range(4))),  # knocked out, in the ranked copy too
+            (0x03005784, word(pick([0, 1, 2, 3, 3, 3]))),
+            (0x030056E0, word(pick([0, 1, 2, 3, 3, 5, -1]))),
+            (0x03000048, word(pick([2, 3, 5, 6, 7, 8, 9]))),
+            (0x030000A0, word(pick([0, 1, 2]))),
+            (0x03005388, word(rng.randrange(1, 43))),  # route numbers 1..42 (0x7E49C4 has 43 entries)
+            (PROFILE_AT + 0x3B4, word(pick([0, 1])) + word(pick([0, 0, rng.randrange(100000), -5]))),
+            (PROFILE_AT + 0x4A8, struct.pack(f"<H{len(keys)}HH", pick([0, 1]), *keys, 0)),
+            *record_ties(rng),
+            (PROFILE_AT + 0x344, stack),
+            (0x0300593C, bytes([pick([0xFF, 0, 1, 2, 3, 7])])),
+            (0x030064C0, struct.pack("<H", pick([0, 1, 1, 1, 2, 0x10]))),
+        ]
+    if kind == "event":
         zone = rng.randrange(6)
         cursors = bytes(rng.randrange(6 if z == 5 else 12) for z in range(6))
         return [
@@ -336,6 +367,10 @@ def kind7(_gba, rng, n=1600):
 
 def event(_gba, rng, n=1600):
     return kind_cases(rng, "event", n)
+
+
+def career(_gba, rng, n=1600):
+    return kind_cases(rng, "career", n)
 
 
 def main(which):

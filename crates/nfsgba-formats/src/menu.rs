@@ -272,6 +272,9 @@ pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
         (Kind::Event, 0) => event_enter(g),
         (Kind::Event, 1) => event_update(g),
         (Kind::Event, 2) => event_draw(g, full),
+        (Kind::Career, 0) => career_zone_enter(g),
+        (Kind::Career, 1) => career_zone_update(g),
+        (Kind::Career, 2) => career_zone_draw(g, full),
         // Every kind's exit handler (`0x08132780`, `0x0812E850`, …) is only this call: the menu scene's teardown.
         (_, 3) => g.unported(SCENE_EXIT, &[WORLD]),
         _ => g.unported(kind.handlers()[phase], args),
@@ -1552,6 +1555,336 @@ pub fn event_draw(g: &mut Gba, _full: u32) -> u32 {
     0
 }
 
+// The race results (Career kind: 0xB the record and unlocks page, 0xC the standings). Results at `0x03005650`,
+// ranked copy at `0x03005730` (0x40 bytes: `+4` entity ids, `+8` knocked out (8), `+0x10` best laps, `+0x20`
+// finish times, `+0x30` hunter life).
+const RESULTS: u32 = 0x0300_5650;
+const RANKED: u32 = 0x0300_5730;
+const OPPONENTS: u32 = 0x0300_5784;
+const RACE_MODE: u32 = 0x0300_56E0;
+const RESULT_PAGES: u32 = 0x087E_510C;
+const CAREER_RACE_PAYOUT: u32 = 0x0812_EFE8; // (): `career::race_payout` models it; not wired to RAM here
+const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
+
+/// `rank_results` (`0x0812E8E4`, key, descending) on the ranked results: [`crate::career::rank_results`] over
+/// `*0x03005784 + 1` slots.
+fn rank_results(g: &mut Gba, key: u32, descending: bool) {
+    let mut t: [u8; 0x40] = std::array::from_fn(|i| g.u8(RANKED + i as u32));
+    crate::career::rank_results(&mut t, g.u32(OPPONENTS), key, descending);
+    for (i, &b) in t.iter().enumerate() {
+        g.set_u8(RANKED + i as u32, b);
+    }
+}
+
+fn result_page(g: &Gba) -> u32 {
+    match g.u32(SCREEN) {
+        0xB => RESULT_PAGES,
+        0xC => RESULT_PAGES + 0x18,
+        _ => 0,
+    }
+}
+
+/// `career_zone_enter` (`0x0812F204`). On 0xB (after a race): clears the record flags, zeroes the ranked slots past
+/// the racers, copies the results (`FUN_0812EB70`), ranks an elimination by time then knock-out, clears the payout,
+/// and outside race phases 6–8 checks the record time (`FUN_0812F180`, not in two-player career) and pays out; with
+/// no new record it goes straight to the standings (0xC). Then the page's background.
+pub fn career_zone_enter(g: &mut Gba) -> u32 {
+    let mut page = result_page(g);
+    if g.u32(SCREEN) == 0xB {
+        let p = g.u32(PROFILE);
+        g.set_u32(p + 0x3B4, 0);
+        g.set_u16(p + 0x4A8, 0);
+        g.set_u16(p + 0x4AA, 0);
+        for i in g.i32(OPPONENTS) + 1..4 {
+            let i = i as u32;
+            g.set_u32(RANKED + 0x10 + 4 * i, 0);
+            g.set_u32(RANKED + 0x20 + 4 * i, 0);
+            g.set_u32(RANKED + 0x30 + 4 * i, 0);
+            g.set_u8(RANKED + 8 + i, 0);
+        }
+        // FUN_0812EB70: the results into the ranked table.
+        for i in 0..0x40 {
+            g.set_u8(RANKED + i, g.u8(RESULTS + i));
+        }
+        if g.u32(RACE_MODE) == 1 {
+            rank_results(g, 1, false);
+            for i in 9..0xC {
+                g.set_u8(RANKED + i, 8);
+            }
+            rank_results(g, 2, false);
+        }
+        g.set_u32(g.u32(PROFILE) + 0x3B8, 0);
+        if g.u32(0x0300_0048).wrapping_sub(6) > 2 {
+            if g.i32(CAREER) < 2 {
+                record_time(g);
+            }
+            g.unported(CAREER_RACE_PAYOUT, &[]);
+        }
+        if g.u32(g.u32(PROFILE) + 0x3B4) == 0 {
+            let at = g
+                .u32(PROFILE)
+                .wrapping_add(0x344)
+                .wrapping_add(g.i8(BACK_TOP) as i32 as u32);
+            g.set_u8(at, 0xC);
+            g.set_u32(SCREEN, 0xC);
+            page = RESULT_PAGES + 0x18;
+        }
+    }
+    let (m, pal) = (
+        g.u16(page + 8) as i16 as i32 as u32,
+        g.u16(page + 10) as i16 as i32 as u32,
+    );
+    menu_scene_setup(g, m, pal, 0xFFFF);
+    1
+}
+
+/// `FUN_0812F180`: a new track record (profile `+0x218` per track, u16 frames) when the player's best lap beats
+/// it in a finished race of a known mode; sets the record flags `+0x3B4` and `+0x4A8`.
+fn record_time(g: &mut Gba) {
+    let p = g.u32(PROFILE);
+    let mut t = g.u32(0x087E_49C4_u32.wrapping_add(g.u32(ROUTE).wrapping_mul(4))) as i32;
+    if t > 0xB {
+        t -= 0xC;
+    }
+    let at = p.wrapping_add((0x218 + 2 * t) as u32);
+    let old = g.u16(at) as i32;
+    let mode = g.i32(RACE_MODE);
+    if (0..4).contains(&mode) {
+        rank_results(g, 2, false);
+        if g.u32(0x0300_0048) != 8 && g.u8(RANKED + 8) != 8 && g.i32(RANKED + 0x10) < old {
+            g.set_u16(at, g.u32(RANKED + 0x10) as u16);
+            let p = g.u32(PROFILE);
+            g.set_u32(p + 0x3B4, 1);
+            g.set_u16(p + 0x4A8, 1);
+        }
+    }
+}
+
+/// `career_zone_update` (`0x0812F364`): A on 0xB clears the record flag and, with no unlock message left, goes to
+/// the standings (0xC); A on 0xC ranks by position and returns to the career menu (screen 6), dropping the back
+/// stack to below the first 0xC.
+pub fn career_zone_update(g: &mut Gba) -> u32 {
+    if g.u32(SCREEN) == 0xB {
+        if g.u16(KEYS) == 1 {
+            g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+            let p = g.u32(PROFILE);
+            if g.u16(p + 0x4A8) != 0 {
+                g.set_u16(p + 0x4A8, 0);
+                g.set_u8(p + 0x340, 0);
+                g.set_u16(KEYS, 0);
+                if g.u16(g.u32(PROFILE) + 0x4AA) != 0 {
+                    return 1;
+                }
+            }
+            g.set_u8(BACK_TOP, g.u8(BACK_TOP).wrapping_sub(1));
+            goto_screen(g, 0xC);
+        }
+    } else if g.u16(KEYS) == 1 {
+        g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+        rank_results(g, 2, false);
+        if g.u32(SCREEN) == 0xC {
+            let top = g.i8(BACK_TOP) as i32;
+            let mut i = 0;
+            let mut found = false;
+            if top > 0 {
+                while g.u8(g.u32(PROFILE).wrapping_add(0x344 + i as u32)) != 0xC {
+                    i += 1;
+                    if g.i8(BACK_TOP) as i32 <= i {
+                        break;
+                    }
+                }
+                found = (g.i8(BACK_TOP) as i32) > i;
+            }
+            if found {
+                g.set_u8(BACK_TOP, i as u8);
+            }
+            g.set_u8(BACK_TOP, g.u8(BACK_TOP).wrapping_sub(1));
+            goto_screen(g, 6);
+            mark_screen_changed(g);
+        }
+    }
+    1
+}
+
+/// A racer's name for the standings: the player's (profile), a boss's (`0x7E4954[id − 0x10]`) or an opponent's
+/// (`id + 0xA4` above 0x3F).
+fn racer_name(g: &Gba, id: u8) -> u32 {
+    match id {
+        0 => g.u32(PROFILE),
+        0x40.. => id as u32 + 0xA4,
+        _ => g.u16(0x087E_4954_u32.wrapping_add(((id as i32 - 0x10) * 2) as u32)) as u32,
+    }
+}
+
+/// `career_zone_draw` (`0x0812F450`). 0xB: the new record (track, best lap) or the unlock messages
+/// (`FUN_0812EC68`). 0xC: the standings per race mode (hunter: life; circuit and elimination: finish time and best
+/// lap, dashes when knocked out; sprint: finish time), the payout, the prompts.
+pub fn career_zone_draw(g: &mut Gba, _full: u32) -> u32 {
+    let page = result_page(g);
+    g.unported(INTRO_PAGE_SETUP, &[g.u32(0x0300_57F0)]);
+    let prompts = |g: &mut Gba| {
+        let (l, r) = (
+            g.u16(page + 4) as i16 as i32 as u32,
+            g.u16(page + 6) as i16 as i32 as u32,
+        );
+        g.unported(MENU_BUTTON_PROMPTS, &[l, r, u32::MAX]);
+    };
+    let text = |g: &mut Gba, font: u32, key: u32, x: u32, y: u32, a: u32, c: u32| {
+        g.unported(TEXT_MENU, &[font, key, x, y, a, c]);
+    };
+    let alt = |g: &mut Gba, m: u32, x: u32, y: u32| {
+        g.unported(MENU_BLIT_MATERIAL_ALT, &[WORLD, m, x, y]);
+    };
+    if g.u32(SCREEN) == 0xB {
+        let p = g.u32(PROFILE);
+        if g.u16(p + 0x4A8) == 0 {
+            if g.u16(p + 0x4AA) == 0 {
+                return 0;
+            }
+            unlock_messages(g);
+            prompts(g);
+            return 0;
+        }
+        let slot = g.u32(0x087E_49C4_u32.wrapping_add(g.u32(ROUTE).wrapping_mul(4)));
+        rank_results(g, 2, false);
+        g.unported(MENU_BLIT_MATERIAL, &[WORLD, 6, 0x20, 0x1F]);
+        text(g, 0xD, 0x165, 0x78, 0x3B, 1, 8);
+        let name = g.u16(0x087E_4A70_u32.wrapping_add(slot.wrapping_mul(4))) as u32;
+        text(g, 0xD, name, 0x78, 0x48, 1, 8);
+        let s = time_text(g, frames_to_centiseconds(g.i32(RANKED + 0x10)));
+        let arg = g.text_arg(s);
+        text(g, 0xD, arg, 0x78, 0x55, 1, 0);
+        g.unported(MENU_BLIT_MATERIAL, &[WORLD, 0x9C, 100, 0x61]);
+        text(g, 0xD, 0xD7, 0x78, 100, 0, 0);
+        return 0;
+    }
+    let heading = g.u32(page);
+    if heading != u32::MAX {
+        text(g, 0xC, heading, 0xEC, 2, u32::MAX, 0);
+    }
+    match g.i32(RACE_MODE) {
+        2 => rank_results(g, 4, true),
+        0 | 1 | 3 => rank_results(g, 1, false),
+        _ => {}
+    }
+    match g.i32(RACE_MODE) {
+        2 => {
+            alt(g, 0xD6, 0x88, 0x17);
+            text(g, 0xE, 0x157, 0xA8, 0x1B, 1, 0);
+            let mut k = 0;
+            while k <= g.u32(OPPONENTS) {
+                let y = 0x10 * k;
+                alt(g, 0xD2, 0x28, y + 0x27);
+                alt(g, 0xD3, 0x88, y + 0x27);
+                let name = racer_name(g, g.u8(RANKED + 4 + k));
+                text(g, 0xE, name, 0x30, y + 0x2B, 0, 8);
+                let v = (g.u32(RANKED + 0x30 + 4 * k).wrapping_mul(100) >> 0x13) as i32;
+                let mut s = number_text(g, v);
+                thousands(g, &mut s, v);
+                let arg = g.text_arg(s);
+                text(g, 0xE, arg, 0xA8, y + 0x2B, 1, 8);
+                k += 1;
+            }
+        }
+        0 | 1 => {
+            alt(g, 0xD6, 0x68, 0x17);
+            alt(g, 0xD6, 0xA8, 0x17);
+            text(g, 0xE, 0x2CB, 0x88, 0x1B, 1, 0);
+            text(g, 0xE, 0x94, 200, 0x1B, 1, 0);
+            let mut k = 0;
+            while k <= g.u32(OPPONENTS) {
+                let y = 0x10 * k;
+                alt(g, 0xD2, 8, y + 0x27);
+                alt(g, 0xD3, 0x68, y + 0x27);
+                alt(g, 0xD3, 0xA8, y + 0x27);
+                let name = racer_name(g, g.u8(RANKED + 4 + k));
+                text(g, 0xE, name, 0x10, y + 0x2B, 0, 8);
+                if g.i8(RANKED + 8 + k) == 8 {
+                    text(g, 0xE, 0x155, 0x88, y + 0x2B, 1, 8);
+                    let mut s = b"--:--:--".to_vec();
+                    match g.u32(LANGUAGE) {
+                        3 => s[5] = b',',
+                        1 | 2 | 4 => s[5] = b'.',
+                        _ => {}
+                    }
+                    let arg = g.text_arg(s);
+                    text(g, 0xE, arg, 200, y + 0x2B, 1, 8);
+                } else {
+                    let s = time_text(g, frames_to_centiseconds(g.i32(RANKED + 0x20 + 4 * k)));
+                    let arg = g.text_arg(s);
+                    text(g, 0xE, arg, 0x88, y + 0x2B, 1, 8);
+                    let s = time_text(g, frames_to_centiseconds(g.i32(RANKED + 0x10 + 4 * k)));
+                    let arg = g.text_arg(s);
+                    text(g, 0xE, arg, 200, y + 0x2B, 1, 8);
+                }
+                k += 1;
+            }
+        }
+        3 => {
+            alt(g, 0xD6, 0x88, 0x17);
+            text(g, 0xE, 0x2CB, 0xA8, 0x1B, 1, 0);
+            let mut k = 0;
+            while k <= g.u32(OPPONENTS) {
+                let y = 0x10 * k;
+                alt(g, 0xD2, 0x28, y + 0x27);
+                alt(g, 0xD3, 0x88, y + 0x27);
+                let name = racer_name(g, g.u8(RANKED + 4 + k));
+                text(g, 0xE, name, 0x30, y + 0x2B, 0, 8);
+                if g.i8(RANKED + 8 + k) == 8 {
+                    text(g, 0xE, 0x155, 0xA8, y + 0x2B, 1, 8);
+                } else {
+                    let s = time_text(g, frames_to_centiseconds(g.i32(RANKED + 0x20 + 4 * k)));
+                    let arg = g.text_arg(s);
+                    text(g, 0xE, arg, 0xA8, y + 0x2B, 1, 8);
+                }
+                k += 1;
+            }
+        }
+        _ => {}
+    }
+    let p = g.u32(PROFILE);
+    if g.u32(p + 0x3B8) != 0 {
+        alt(g, 0xD2, 0x28, 0x70);
+        alt(g, 0xD3, 0x88, 0x70);
+        text(g, 0xE, 0x196, 0x2C, 0x74, 0, 8);
+        let v = g.i32(p + 0x3B8);
+        let mut s = number_text(g, v);
+        thousands(g, &mut s, v);
+        let arg = g.text_arg(s);
+        text(g, 0xE, arg, 0xA8, 0x74, 1, 8);
+    }
+    rank_results(g, 2, false);
+    prompts(g);
+    0
+}
+
+/// `FUN_0812EC68`: the unlock messages after a race (heading 0xD6, then each text key in profile `+0x4AA…`, 0x31A
+/// skipped, headings of new cars and districts 2 rows lower and highlighted).
+fn unlock_messages(g: &mut Gba) {
+    g.unported(TEXT_BOX, &[0xE, 0xD6, 0x78, 2, 0xF0, 2, 8]);
+    let mut y = 0xD;
+    if g.u16(g.u32(PROFILE) + 0x4AA) == 0 {
+        return;
+    }
+    let mut k = 2;
+    loop {
+        let key = g.u16(g.u32(PROFILE) + 0x4A8 + k) as u32;
+        k += 2;
+        if key != 0x31A {
+            if matches!(key, 0x194 | 0x39A | 0xC6 | 0x3CF | 0xA3 | 0x3C1) {
+                y += 2;
+                g.unported(TEXT_MENU, &[0xE, key, 0x78, y, 1, 8]);
+            } else {
+                g.unported(TEXT_MENU, &[0xE, key, 0x78, y, 1, 0]);
+            }
+        }
+        y += 0xB;
+        if g.u16(g.u32(PROFILE) + 0x4A8 + k) == 0 {
+            break;
+        }
+    }
+}
+
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
     let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
@@ -1996,6 +2329,12 @@ mod tests {
     #[test]
     fn career_event_screen_matches_the_game() {
         replay("event");
+    }
+
+    /// The race results (11, 12): `tools/ui_menu_oracle.py career`.
+    #[test]
+    fn race_results_match_the_game() {
+        replay("career");
     }
 
     const KINDS: [Kind; 8] = [
