@@ -346,3 +346,8 @@ address,name,kind,comment
 0x08143248,hud_message_entry,function,message table entry: 0x087F437D (modes 0/1) / 0x087F43FD (2) / 0x087F43BD (3) + 4*msg
 0x08161a34,obj_tile_address,function,0x06010000 + 32*(tile + *0x030064E0) when DISPCNT OBJ 1-D mapping; else 0
 0x0816165c,obj_palette_write,function,copies n colours to OBJ palette RAM from index k (-1 when out of range)
+0x08160624,rotation_y,function,3x4 matrix: rotation about y by an angle (cos 0 -sin / 0 0x4000 0 / sin 0 cos), zero translation
+0x08160668,rotation_z,function,3x4 matrix: rotation about z by an angle, zero translation
+0x081607e0,transform_point,function,out = (v · M >> 14) + translation (row vector times the 3x3, then m9..m11)
+0x081608fc,rotate_vector,function,out = v · M >> 14 (row vector times the 3x3, no translation)
+0x08137744,camera_push_out_of_walls,function,pushes the camera out to 80 units from flag-0x1000 (or low 0x4000) walls of the camera sector

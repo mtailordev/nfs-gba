@@ -117,6 +117,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F55FC` | 2 | car-to-car axle offsets | engine/physics |
 | `0x7F5904` | 8 words | grip per floor surface | engine/physics |
 | `0x7F5988` | 10 × 5 words | upgrade weights | engine/physics |
+| `0x7F39BC` / `0x7F39D4` / `0x7F39EC` | 6 each | per camera view: x offset (all 0), height 8.8 (−100, −140, −150, −115, −80, −105), distance (0, −290, −300, −150, 200, −120); orbit distance = `distance·256 + (0x80 − focal)·0x200` | engine/viewer-rendering |
 | `0x7F38B8` | 65 × 4 | **entity handler table** (world `+0x78`, by entity `+0x4E`; `update_entities`): 0..3 car handler, 0x29 opponents, 0xE empty, 0x36 AI/traffic | engine/physics |
 | `0x7F4378` | 5 | HUD digit x shift per language | formats/ui |
 | `0x7F437D`, `0x7F43BD`, `0x7F43FD` | 16 × 4 | HUD message tables (race modes 0/1, 3, 2) | formats/ui |
@@ -227,13 +228,16 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030061B0…0x030061F4`, `0x0300617C` | hunter tuning; `0x03006184` = hunter wall-hit factor (0x240) |
 | `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
 | `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre (120, 79), `+0x0C` pitch 240, `+0x10` near 64, `+0x1C` focal 150 |
-| `0x03000214` | camera yaw (0x4000 per turn; the skyline scrolls by it) |
+| `0x03000214` | camera look yaw (0x4000 per turn; the skyline scrolls by it) = `atan(player − camera)` from the previous frame's camera position (`atan2_fast`); 0xFFD in the reference race, the atan's value at (344, 0) |
+| `0x03005F94` | chase orbit yaw; eases towards the driver's heading by `clamp(diff, ±0x600) >> 3` unless `0x03006148` |
+| `0x030056A0` / `0x030000A4` | camera x / z, 8.8 |
+| `0x03005778` | smoothed floor height at the camera (`floor_height`): the height limit for flag-0x4000 walls in the camera wall push |
 | `0x03005F9C` | camera yaw, 14-bit (renderer camera; the rim redraw test uses it) |
 | `0x03005624` | flag: no atlases, all racers dressed from `0x7EEA44` |
 | `0x03005650` | 4 bytes: per-racer copy of entity `+0x89` |
 | `0x0300565C` | 4 bytes: per-racer byte, 0xFF = empty slot |
 | `0x030064CC` / `0x030064D0` | heap descriptor table (8 bytes per block) / arena (`heap_alloc`) |
-| `0x03005FA4` | camera height offset (8.8) |
+| `0x03005FA4` | camera height offset (8.8) = the view's height table entry (chase −150·256) |
 | `0x03006148` | when set, the camera sits `0x82` above the player instead of 16 |
 | `0x030057A0` | camera matrix in the race |
 | `0x03006920` | entity visited bitmap, 32 bytes, cleared each frame by `draw_visible_sectors` |
@@ -261,7 +265,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030056E8` | gradient read pointer (VBlank sets base + 2·start) |
 | `0x03006490` | IWRAM overlay base − 0xE4 (`0x03000220`): ROM `0x08165218` ↔ IWRAM `0x03000304` |
 | `0x0300649C` | pointer to the 32-byte-block fill `0x030002C0` |
-| `0x03005614` | u32 player's current sector (760 at the start of the reference race) |
+| `0x03005614` | u32 **camera** sector (written by `camera_update`, searched 72 units ahead of the camera; `apply_sector_light_to_palette` reads it with the player's position; 760 in the reference race) |
 | `0x03005720` | u32 current route index (23 in the reference race) |
 | `0x030055F0` | pointer to the base palette buffer (`0x02001008` in the race); the light tint reads it |
 | `0x0300577C` | pointer to the second base palette buffer (`0x02000E04`) |
@@ -299,7 +303,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x04` | vehicle texel base |
 | `+0x0C` | u16 per sector: head of its entity list (`0xFFFF` = none) |
 | `+0x10` / `+0x14` | walls / sectors |
-| `+0x18` | moving wall pieces, 0x20 bytes, by wall `+0x2A`: dx, dz, ceiling dy, floor dy, top dy, bottom dy, material offset, flags |
+| `+0x18` | moving wall pieces (in every captured race all 122 are zero offsets with flags 1, open), 0x20 bytes, by wall `+0x2A`: dx, dz, ceiling dy, floor dy, top dy, bottom dy, material offset, flags |
 | `+0x1C` | sector offsets, 0x14 bytes, by sector `+0x0A`: `+4` ceiling dy, `+6` floor dy, `+8` flags replacing sector `+0x12` (`0x40` = hidden) |
 | `+0x20` / `+0x24` | city / vehicle materials |
 | `+0x30` / `+0x34` | loaded palettes |
@@ -349,7 +353,7 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x4E` | handler index (`0x7F38B8`): 0 player, 0x29 opponents, 0xE empty slots, 0x36 AI/traffic |
 | `+0x64` | second model on matrix slot `+0x88 + 1` (spoiler: 12 Cobalt, 4 car 0; from `0x7F0636[car·0x10 + rec[0]]`, clamped at 0); negative: drawn before as model `−n` |
 | `+0x70` | 0x640 at setup |
-| `+0x74` | start sector (template entities) |
+| `+0x74` / `+0x78` | start sector (template entities; the viewer reads `+0x78`) |
 | `+0x84` | RAM address of the unpacked atlas (`0x03006164[racer]`, bit 3) |
 | `+0x88` | matrix slot (world `+0xFC`); `0xFF` = not drawn |
 | `+0x89` | car id (index into the 0x11-byte car records) |
@@ -362,7 +366,9 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 |---|---|
 | `+0xA8` | position |
 | `+0xAC` | distance |
+| `+0x00` | heading the chase camera follows (0x1000 in the reference race) |
 | `+0x3C` / `+0x40` / `+0x44` | revs / gear / speed (read by the HUD) |
+| `+0x11C` / `+0x124` | travel vector (speed effect on the focal; hypothesis) |
 | `+0x90` | wheel angle (`>> 8`; the rim redraw rotates by it) |
 | `+0xB4` | best lap |
 | `+0xB8` | lap start |

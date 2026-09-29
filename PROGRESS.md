@@ -47,7 +47,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **car-atlas:** done and merged. `atlas.rs`: the player's atlas (overlay, decal set, wheel rims) and the opponents' choice, pixel-exact at four race starts; R13 closed. The viewer does not use it yet (R23).
 - **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
 - **entity-draw:** done and merged. `render/entities.rs`: the car draw is exact, so `draw_world` reproduces whole frames pixel for pixel (17 captures); R12 closed. Matrix-slot building is still an input (R25).
-- **viewer-geometry:** R23 racers and atlas from `atlas`, R8, R10, R11, R14, R19, R22 in the viewer, plus an original-resolution mode from `render::draw_world`. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
+- **viewer-geometry:** done and merged. The viewer uses the game's chase camera, projection and per-frame visible list; racers from `atlas`; an original-resolution mode equal to s15 on every non-HUD pixel (R8, R15, R19, R22, R23 closed; R10, R11, R14 narrowed; R27 high-res differences).
 - **hud-logic:** done and merged. `hud.rs`: every HUD element, the messages and the minimap, exact over 7,096 traced frames (U1, U2 closed). The HUD arrow is the off-route warning `0x0300601C`.
 - **harness:** done and merged. `tools/oracle` (unicorn function oracle; `trace_oracle.py` runs on it; 93,169 cases vs the Rust ports, 0 mismatches), `coverage.py` (465 of 880 functions run in 4 scenarios; 200 of those unnamed), `rom_attribution.py` (98.907% of the ROM claimed), `notes_merge.py`. See `docs/engine/harness.md`.
 - **ai-traffic:** D4's AI part: opponent handler 0x29 and traffic handler 0x36, trace-exact. Owns new `nfsgba-sim` modules (`ai.rs`, `traffic_ai.rs`), `docs/engine/ai.md`.
@@ -57,7 +57,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
 Next, driven by `docs/FIDELITY.md`:
-1. **Viewer (next agent):** R23 racers and player atlas from `atlas`; R8 step walls, R10 traversal and limits, R11 principal point and projection, R14 pixel pairs, R19 flat heights, R22 row 159; move the viewer's `grid_headings` (template entity `+0x2C`) into `Route`.
+1. **Viewer:** hook up `nfsgba-sim` (drive the player car live) and `hud`; painter's order (R10), the speed effect (R11), model index 0 (R14).
 2. **Viewer geometry (after viewer-sky-paint merges):** R8 portal step walls, R10 traversal and limits, R11 projection, R19 flat heights; optionally a 240×160 original-resolution mode from `render::draw_world`.
 2b. **Entity draw (R12):** reimplement `draw_sector_entities`/`raster_polygon` in `render.rs` and check the 536 car pixels of the reference frame.
 3. **R13:** decals and overlays on the player's atlas; opponent material choice.
