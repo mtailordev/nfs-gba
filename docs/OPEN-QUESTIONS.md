@@ -34,6 +34,15 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 15. **Does the GBA Carbon have free roam, or can its city data support it?** The city is one connected sector world shared by all 12 environments, which is promising.
 
+## From the game's booklet (2026-09-30; notes in `data/reference/guidebook.md`, not in git)
+
+Check each against the ROM during coverage:
+- **Wingman charges:** the booklet says the first wingmen have 3 uses per race, later ones more, with a green/orange/red availability bar and a flashing "use now" icon. Where are the charge count and the bar in the code?
+- **Wingman as a ghost:** the booklet says wingmen can act as ghosts. What does that mean in the code?
+- **Buttons the booklet and `docs/formats/ui.md` disagree on:** garage rotate (booklet: D-pad up/down; ui.md: L/R) and the zone map (booklet: L; ui.md: SELECT). The race bindings match the ROM table (nitro A+L automatic, A+UP manual).
+- **The Summary screen's four car bars** (acceleration, top speed, handling, visual): which values feed them?
+- **Fresh-profile defaults** (chase view, MPH, HUD on, automatic): confirm in `profile_reset`.
+
 ## Answered
 
 - ~~The 65-entry function table at `0x7F38B8`~~ **Answered:** the entity handler table (`update_entities`; world `+0x78` by entity `+0x4E`) ([engine/physics.md](engine/physics.md)).
