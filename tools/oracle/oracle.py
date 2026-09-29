@@ -29,7 +29,8 @@ from pathlib import Path
 import numpy as np
 import unicorn
 import unicorn.arm_const as A
-from unicorn import UC_ARCH_ARM, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE, UC_MODE_ARM, Uc
+from unicorn import (UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE,
+                     UC_MODE_ARM, Uc)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common import data_dir  # noqa: E402
@@ -46,7 +47,9 @@ REGIONS = [  # mGBA memory-domain name, base, size; all writable
 ]
 TRAP = 0x0F00_0000  # unused on the GBA; the return address every call gets
 SP = 0x0300_7C00  # below the reference race's live stack (sp = 0x03007CE4 at the dump)
-SCRATCH = 0x2000  # stack bytes below `sp` left out of `writes`
+# A write counts as stack scratch (left out of `writes`) when it lands below the call's initial sp and at most this
+# far below the sp of the moment: unicorn stores a push before it updates sp, and a push (stmdb) spans 64 bytes.
+PUSH = 64
 REG_NAMES = [f"r{i}" for i in range(13)] + ["sp", "lr", "pc", "cpsr"]
 REGS = {n: getattr(A, f"UC_ARM_REG_{n.upper()}") for n in REG_NAMES}
 DMA_CNT_H = {0x040000BA: 0, 0x040000C6: 1, 0x040000D2: 2, 0x040000DE: 3}
@@ -56,7 +59,7 @@ DMA_CNT_H = {0x040000BA: 0, 0x040000C6: 1, 0x040000D2: 2, 0x040000DE: 3}
 class Result:
     regs: dict
     stop: str  # "return", "halt", "intrwait", "vblank", "unaligned ...", "swi 0x..", "limit: ...", "error: ..."
-    writes: list  # [(address, bytes)]: runs of changed bytes, stack scratch below sp left out
+    writes: list  # [(address, bytes)]: runs of changed bytes, the call's own stack frames left out
     notes: list = field(default_factory=list)
     log: list = field(default_factory=list)  # [(address, size, value)] of CPU writes when log_writes=True
     base: "Gba" = None
@@ -93,6 +96,9 @@ class Gba:
         uc.mem_map(TRAP, 0x400)
         uc.hook_add(UC_HOOK_INTR, self._intr)
         uc.hook_add(UC_HOOK_MEM_WRITE, self._dma, begin=0x040000B0, end=0x040000DF)
+        uc.hook_add(UC_HOOK_MEM_WRITE, self._stack, begin=0x0300_0000, end=0x0300_7FFF)
+        self._scratch = np.zeros(0x8000, dtype=bool)  # IWRAM bytes the current call used as stack
+        self._sp0 = SP
         self._mem_hook = None
 
     # --- memory helpers -------------------------------------------------------------------------------------------
@@ -131,11 +137,12 @@ class Gba:
 
     # --- the call ------------------------------------------------------------------------------------------------
     def call(self, fn: int, mode: str | None = None, regs: dict | None = None, stack=(), mem=(), align="stop",
-             log_writes=False, keep=False, max_insns=100_000_000, **reg_kw) -> Result:
+             log_writes=False, keep=False, max_insns=100_000_000, stubs=None, **reg_kw) -> Result:
         """Run `fn` until it returns to the trap. `mode`: "thumb" if fn is odd or omitted for a ROM address, "arm"
         for IWRAM/EWRAM by default. `regs`/keyword registers: r0..r12, sp. `stack`: words placed at sp (5th and
         later arguments). `mem`: [(address, bytes)] applied for this call only. `keep=True` keeps the new state as
-        the next call's starting point (not the snapshot)."""
+        the next call's starting point (not the snapshot). `stubs`: {address: fn(uc)}: calls to these functions
+        run `fn(uc)` instead (it may read arguments and set r0) and return at once."""
         uc = self.uc
         thumb = mode == "thumb" or (mode is None and (fn & 1 or 0x0800_0000 <= fn < 0x0E00_0000))
         fn &= ~1
@@ -159,15 +166,21 @@ class Gba:
         elif not want_hook and self._mem_hook is not None:
             uc.hook_del(self._mem_hook)
             self._mem_hook = None
-        self._align, self._logging = align == "stop", log_writes
+        self._align, self._logging, self._sp0 = align == "stop", log_writes, sp
+        stub_hooks = [uc.hook_add(UC_HOOK_CODE, self._stub, user_data=f, begin=a & ~1, end=a & ~1)
+                      for a, f in (stubs or {}).items()]
         try:
             uc.emu_start(fn | thumb, TRAP, count=max_insns)  # a timeout would cost a thread per call
             pc = uc.reg_read(A.UC_ARM_REG_PC)
             stop = self._stop or ("return" if pc == TRAP else f"limit: {max_insns} instructions")
         except unicorn.UcError as e:
             stop = self._stop or f"error: {e} at pc {uc.reg_read(A.UC_ARM_REG_PC):#010x}"
+        finally:
+            for h in stub_hooks:
+                uc.hook_del(h)
         out = {n: uc.reg_read(REGS[n]) for n in REG_NAMES}
-        writes, dirty = self._diff(sp)
+        writes, dirty = self._diff()
+        self._scratch[:] = False
         for name in dirty:
             if keep:  # the new state becomes the next call's start
                 self.base[name][:] = self.mem[name]
@@ -179,15 +192,14 @@ class Gba:
                 self.poke(addr, data)
         return Result(out, stop, writes, self._notes, self._log, self)
 
-    def _diff(self, sp: int):
+    def _diff(self):
         runs, dirty = [], []
         for name, base, _ in REGIONS:
             changed = np.flatnonzero(self.mem[name] != self.base[name])
             if changed.size:
                 dirty.append(name)
-            if name == "iwram":  # stack scratch below sp: restored, but not reported
-                lo, hi = sp - SCRATCH - base, sp - base
-                changed = changed[(changed < lo) | (changed >= hi)]
+            if name == "iwram":  # the call's own stack frames: restored, but not reported
+                changed = changed[~self._scratch[changed]]
             if changed.size == 0:
                 continue
             breaks = np.flatnonzero(np.diff(changed) > 1)
@@ -205,6 +217,14 @@ class Gba:
             uc.emu_stop()
         if self._logging and access == UC_MEM_WRITE:
             self._log.append((addr, size, value & ((1 << (8 * size)) - 1)))
+
+    def _stack(self, uc, access, addr, size, value, _):
+        if uc.reg_read(A.UC_ARM_REG_SP) - PUSH <= addr < self._sp0:
+            self._scratch[addr - 0x0300_0000:addr - 0x0300_0000 + size] = True
+
+    def _stub(self, uc, addr, size, f):
+        f(uc)
+        uc.reg_write(A.UC_ARM_REG_PC, uc.reg_read(A.UC_ARM_REG_LR))  # bit 0 picks Thumb or ARM, as bx lr would
 
     def _dma(self, uc, access, addr, size, value, _):
         for reg, ch in DMA_CNT_H.items():

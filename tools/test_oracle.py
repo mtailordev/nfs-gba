@@ -47,6 +47,16 @@ class OracleTest(unittest.TestCase):
         r = self.gba.call(CODE, mode="thumb", mem=mem, r0=0x0203_FD00, r1=0x0203_FE00, r2=3 | 1 << 24 | 1 << 26)
         self.assertEqual(r.read(0x0203_FE00, 16), b"\xAA\xBB\xCC\xDD" * 3 + self.gba.read_base(0x0203_FE0C, 4))
 
+    def test_stack_frames_are_left_out_and_stubs_return(self):
+        # push {r4, lr}; str r1, [r0]; bl <stub>; pop {r4, pc}: the push is stack, the IWRAM global is a write
+        seen = []
+        code = thumb(0xB510, 0x6001, 0xF000, 0xF802, 0xBD10, 0x0000, 0x4770)  # bl +4 -> the bx lr at CODE+0xC
+        r = self.gba.call(CODE, mode="thumb", mem=code, r0=0x0300_6104, r1=0x0BAD_F00D,
+                          stubs={CODE + 0xC: lambda uc: seen.append("stub")})
+        self.assertEqual(r.stop, "return")
+        self.assertEqual(seen, ["stub"])
+        self.assertEqual(r.writes, [(0x0300_6104, bytes.fromhex("0df0ad0b"))])
+
     def test_unaligned_access_stops(self):
         r = self.gba.call(CODE, mode="thumb", mem=thumb(0x6808, 0x4770), r1=0x0203_FE01)  # ldr r0, [r1]
         self.assertTrue(r.stop.startswith("unaligned read of 4"), r.stop)
