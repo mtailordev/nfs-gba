@@ -251,6 +251,8 @@ fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
     match (kind, phase) {
         (Kind::Intro, 0) => intro_enter(g),
         (Kind::Intro, 1) => intro_update(g),
+        (Kind::Intro, 2) => intro_draw(g),
+        (Kind::Intro, 3) => g.unported(0x0813_72D8, &[WORLD]), // intro_exit (0x08132780) is only this call
         _ => g.unported(kind.handlers()[phase], args),
     }
 }
@@ -427,6 +429,166 @@ pub fn intro_enter(g: &mut Gba) -> u32 {
         _ => {}
     }
     1
+}
+
+// Drawing primitives the draw handlers call; not ported onto `Gba` yet (their pixel output is exact in `ui.rs`).
+pub const MENU_BLIT_MATERIAL: u32 = 0x0813_6D74; // (world, material, x, y)
+pub const TEXT_MENU: u32 = 0x0814_1578; // (font, text key or pointer, x, y, colour/alignment, …)
+pub const TEXT_MENU_WRAPPED: u32 = 0x0814_1B40; // (font, key, x, y, width, lines, colour)
+pub const MENU_BUTTON_PROMPTS: u32 = 0x0812_BD60; // (left key, right key, -1)
+const FLASH: u32 = 0x0300_53B4; // frame counter; bit 4 blinks the cursors and PRESS START
+
+/// `intro_draw` (`0x08131FE0`): the intro screens' page (`FUN_081364C4`), heading, content and button prompts.
+/// The health and safety screens (0x2F, 0x30) only set up the page.
+pub fn intro_draw(g: &mut Gba) -> u32 {
+    let screen = g.u32(SCREEN);
+    let page = intro_page(screen).expect("intro_draw on a screen without an intro page");
+    let count = g.u16(page + 0xA) as i16 as i32;
+    let items = g.u32(page + 0x10);
+    let buffer = g.u32(0x0300_57F0);
+    g.unported(0x0813_64C4, &[buffer]);
+    if screen.wrapping_sub(0x2F) <= 1 {
+        return 0;
+    }
+    let neg1 = u32::MAX;
+    if screen == 0x16 {
+        let key = if g.u16(g.u32(PROFILE) + 0x494) == 2 {
+            0x122
+        } else {
+            0x10C
+        };
+        g.unported(TEXT_MENU, &[0xC, key, 0xEC, 2, neg1, 0]);
+    } else {
+        let title = g.u16(page) as i16 as i32;
+        if title != -1 {
+            g.unported(TEXT_MENU, &[0xC, title as u32, 0xEC, 2, neg1, 0]);
+        }
+    }
+    let lang = g.u32(LANGUAGE);
+    let blit = |g: &mut Gba, m: u32, x: u32, y: u32| {
+        g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, x, y]);
+    };
+    match screen {
+        0x15 => credits_draw(g),
+        0x16 => {
+            g.unported(TEXT_MENU, &[0xD, 0x164, 0x4A, 0x14, neg1, 8]);
+            g.unported(TEXT_MENU, &[0xD, NAME, 0x78, 0x14, 1, 0]);
+            let letters = match lang {
+                1 => Some(0xDE),
+                2 => Some(0xE0),
+                3 => Some(0xDF),
+                4 => Some(0xE1),
+                _ => None,
+            };
+            if let Some(m) = letters {
+                g.unported(0x0813_6E60, &[WORLD, m, 0x58, 0x77]);
+            }
+            let (row, col) = (g.i32(KEYBOARD_ROW), g.i32(KEYBOARD_COLUMN));
+            if row == 4 {
+                let b = if col > 6 {
+                    2
+                } else if col > 2 {
+                    1
+                } else {
+                    0
+                };
+                blit(g, 0xB4, (67 * b + 0x11) as u32, (row * 20 + 0x22) as u32);
+            } else {
+                blit(g, 0xB3, (col * 20 + 0x14) as u32, (row * 20 + 0x24) as u32);
+            }
+        }
+        0x17 => {
+            blit(g, 0xCB, 0x30, 0x8A);
+            if lang <= 4 {
+                blit(g, 0xC4 + lang, 0, 0x96); // logo line per language
+            }
+            blit(g, if lang == 4 { 0xC9 } else { 0xCA }, 0x60, 4);
+            let deadline = g.i32(g.u32(PROFILE) + 0x3B0);
+            if g.i32(TICKS) > deadline && g.u32(FLASH) & 0x10 != 0 && lang <= 4 {
+                blit(g, 0xBF + lang, 0xAA, 0x50); // PRESS START, blinking
+            }
+        }
+        0x18 => {
+            g.unported(TEXT_MENU, &[0xD, 0x19A, 0x78, 6, 1, 0]);
+            g.unported(TEXT_MENU, &[0xD, 0x19B, 0x78, 0x10, 1, 0]);
+            g.unported(TEXT_MENU_WRAPPED, &[0xE, 0x199, 8, 0x1E, 0xE0, 0xF, 8]);
+        }
+        0x19 => {
+            // The cursor on the selected language, blinking: (material, x, y) per item from the page's list + 2.
+            for i in 0..count.max(0) as u32 {
+                let item = items + 2 + 10 * i;
+                if g.u32(FLASH) & 0x10 != 0 && g.u32(LANGUAGE_CURSOR) == i {
+                    let [m, x, y] = [0, 2, 4].map(|o| g.u16(item + o) as i16 as i32 as u32);
+                    blit(g, m, x, y);
+                }
+            }
+        }
+        0x1A => {
+            let logo = match lang {
+                1 => Some(0xBA),
+                2 => Some(0xBB),
+                4 => Some(0xBD),
+                _ => None,
+            };
+            if let Some(m) = logo {
+                blit(g, m, 0, 0x91);
+            }
+        }
+        _ => {}
+    }
+    let (left, right) = (
+        g.u16(page + 2) as i16 as i32 as u32,
+        g.u16(page + 4) as i16 as i32 as u32,
+    );
+    g.unported(MENU_BUTTON_PROMPTS, &[left, right, neg1]);
+    0
+}
+
+/// The credits page (screen 0x15): the current entry's lines (u16 count, then (flags, text key) pairs), centred in
+/// 0x90 rows. Flags: bits 0–1 colour (× 8), 0x2000 small font and 4 rows more, 0x1000 6 more, 0x800 12 more; on the
+/// first line 0x8000 starts at row 0x28 and 0x4000 at row 0. Some keys sit lower in French, Spanish and Italian.
+fn credits_draw(g: &mut Gba) {
+    let p = g.u32(CREDITS);
+    let n = g.u16(p) as u32;
+    let mut height = 12 * n as i32;
+    for k in 0..n {
+        let f = g.u16(p + 2 + 4 * k);
+        height += [(0x2000, 4), (0x1000, 6), (0x800, 0xC)]
+            .iter()
+            .filter(|(b, _)| f & b != 0)
+            .map(|(_, h)| h)
+            .sum::<i32>();
+    }
+    let mut y = (0x90 - height) >> 1;
+    let mut k = 0;
+    while k < g.u16(g.u32(CREDITS)) as u32 {
+        let entry = g.u32(CREDITS) + 4 * k;
+        let flags = g.u16(entry + 2);
+        let colour = ((flags & 3) << 3) as u32;
+        let font = if flags & 0x2000 != 0 { 0xC } else { 0xD };
+        if flags & 0x8000 != 0 && k == 0 {
+            y = 0x28;
+        }
+        if g.u16(g.u32(CREDITS) + 2) & 0x4000 != 0 && k == 0 {
+            y = 0;
+        }
+        let key = g.u16(entry + 4);
+        match g.u32(LANGUAGE) {
+            1 if key == 0x1B || key == 0x1D => y += 0xE,
+            4 if key == 0x1F => y += 0xE,
+            3 if key == 0x19A => y += 4,
+            _ => {}
+        }
+        g.unported(TEXT_MENU_WRAPPED, &[font, key as u32, 2, y as u32, 0xEE, 0xF, colour]);
+        let flags = g.u16(g.u32(CREDITS) + 4 * k + 2);
+        y += [(0x2000, 4), (0x1000, 6), (0x800, 0xC)]
+            .iter()
+            .filter(|(b, _)| flags & b != 0)
+            .map(|(_, h)| h)
+            .sum::<i32>();
+        y += 0xC;
+        k += 1;
+    }
 }
 
 /// `intro_update` (`0x081318E4`): the boot and intro screens. Timed screens move on once the tick counter passes
@@ -1178,6 +1340,10 @@ mod tests {
                 }
                 "0x812ae64" => {
                     main_frame(&mut g);
+                    None
+                }
+                "0x812d334" => {
+                    draw_screen(&mut g, c["arg"].as_u64().unwrap() as u32);
                     None
                 }
                 "0x812bb5c" => {
