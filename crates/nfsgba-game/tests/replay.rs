@@ -8,6 +8,10 @@ use nfsgba_formats as rom;
 use nfsgba_game::{Checkpoint, Game, trace::Trace, view::WORLD};
 use nfsgba_sim::Mem;
 
+thread_local! {
+    static STANDIN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 const EW: usize = 0;
 const IW: usize = 0x4_0000;
 const PAL: usize = IW + 0x8000;
@@ -124,6 +128,15 @@ fn assist(next: &[u8], effects: &[u8], at: Checkpoint, g: &mut Game) -> bool {
             take(g, next, list..list + 16);
         }
         Checkpoint::Slots => {
+            // How often the live-play stand-in (`standin::slot_matrix`) gives the player's slot as the game did.
+            let player = ents + 0xA4 * g.sim.mem.u32(0x0300_0060);
+            let slot = next[off(player + 0x88)] as u32;
+            let at = off(g.sim.mem.u32(WORLD + 0xFC) + 0x30 * slot);
+            let want: Vec<i32> = (0..12)
+                .map(|k| i32::from_le_bytes(next[at + 4 * k..at + 4 * k + 4].try_into().unwrap()))
+                .collect();
+            let got = nfsgba_game::standin::slot_matrix(&g.sim.mem, player);
+            STANDIN.with(|c| c.set(c.get() + (got.map(Vec::from) == Some(want)) as usize));
             // R25: matrix slots, entity slot bytes and flags, the slot counter, the effect-sprite list.
             let slots = g.sim.mem.u32(WORLD + 0xFC);
             take(g, next, slots..slots + 64 * 0x30);
@@ -202,5 +215,10 @@ fn frames_match_the_trace() {
             }
         }
     }
+    eprintln!(
+        "{} frames exact; the slot stand-in gave the player's matrix in {} of them",
+        trace.timing.len() - failed,
+        STANDIN.with(|c| c.get())
+    );
     assert_eq!(failed, 0, "{failed} of {} frames differ", trace.timing.len());
 }
