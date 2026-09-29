@@ -699,36 +699,89 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     Ok(())
 }
 
-/// The race globals the hunter rules read (`nfsgba_formats::career::Race`).
+/// The race globals of `nfsgba_formats::career::Race` from RAM.
 pub fn race(m: &Mem) -> Race {
+    let mut results = [0; 0x40];
+    results.copy_from_slice(m.bytes(0x0300_5650, 0x40));
     Race {
+        mode: m.u32(0x0300_56E0),
+        lapped: m.i32(route::CIRCUIT) != 0,
+        laps: m.i32(0x0300_56E4),
         opponents: m.u32(route::OPPONENTS),
+        time: m.u32(0x0300_5800),
         finished: m.i32(0x0300_61A4) != 0,
-        ..Race::default()
+        view: m.u32(0x0300_57F8),
+        player: m.u32(PLAYER),
+        difficulty: m.u32(0x0300_5608),
+        state48: m.u32(RACE_PHASE),
+        rand: m.u32(0x0300_64C8),
+        wrong_way: m.i32(0x0300_5384) != 0,
+        results,
     }
 }
 
-/// Car `e`'s fields that the hunter rules use (`nfsgba_formats::career::Racer`): entity `+0x00`/`+0x4A`, driver
-/// `+0xA8` place, `+0x4E8` life, `+0x4EC`/`+0x4EE` wrong-way and wall counters, `+0x4F0` hit counter.
+/// Writes back what the race rules change: someone finished (0x030061A4), the result bytes (0x03005650..), the
+/// rand_table index.
+pub fn store_race(m: &mut Mem, r: &Race) {
+    if r.finished != (m.i32(0x0300_61A4) != 0) {
+        m.set_i32(0x0300_61A4, r.finished as i32);
+    }
+    m.set_bytes(0x0300_5650, &r.results);
+    m.set_u32(0x0300_64C8, r.rand);
+}
+
+/// Car `e` as `nfsgba_formats::career::Racer`: entity `+0x00` id, `+0x08` flags, `+0x0C/+0x14` position, `+0x4A`
+/// state, `+0x72` section, `+0x90` segment; driver `+0xA8` place, `+0xAC` distance, `+0xB4/+0xB8/+0xBC` best lap,
+/// lap start, finish, `+0xC5` laps left, `+0xF8..` knock-out words, `+0x444` side, `+0x4D6` section changed,
+/// `+0x4D8` flags, `+0x4E8` life, `+0x4EC/+0x4EE/+0x4F0` wrong-way, wall and hit counters.
 pub fn racer(m: &Mem, e: u32) -> Racer {
     let p = m.u32(e + 0x8C);
     Racer {
         id: m.u16(e),
+        section: m.u16(e + 0x72),
+        segment: m.i16(e + 0x90),
         state: m.u16(e + 0x4A),
+        entity_flags: m.u16(e + 8),
+        x: m.i32(e + 0xC),
+        z: m.i32(e + 0x14),
         place: m.i32(p + 0xA8),
+        distance: m.i32(p + 0xAC),
+        best_lap: m.u32(p + 0xB4),
+        lap_start: m.u32(p + 0xB8),
+        finish: m.u32(p + 0xBC),
+        laps_left: m.i8(p + 0xC5),
+        flags: m.u16(p + 0x4D8),
         life: m.i32(p + 0x4E8),
         wrong_way: m.i16(p + 0x4EC),
         wall: m.i16(p + 0x4EE),
         hit: m.i16(p + 0x4F0),
-        ..Racer::default()
+        knockout: [m.u32(p + 0xF8), m.u32(p + 0xFC), m.u32(p + 0x100)],
+        side: m.i32(p + 0x444),
+        section_changed: m.u16(p + 0x4D6),
     }
 }
 
-/// Writes back what the hunter rules change: life and the hit counter.
+/// Writes car `e`'s `Racer` fields back (unchanged ones rewrite the same bytes).
 pub fn store_racer(m: &mut Mem, e: u32, r: &Racer) {
     let p = m.u32(e + 0x8C);
+    m.set_u16(e + 0x72, r.section);
+    m.set_i16(e + 0x90, r.segment);
+    m.set_u16(e + 0x4A, r.state);
+    m.set_u16(e + 8, r.entity_flags);
+    m.set_i32(p + 0xA8, r.place);
+    m.set_i32(p + 0xAC, r.distance);
+    m.set_u32(p + 0xB4, r.best_lap);
+    m.set_u32(p + 0xB8, r.lap_start);
+    m.set_u32(p + 0xBC, r.finish);
+    m.set_u8(p + 0xC5, r.laps_left as u8);
+    m.set_u16(p + 0x4D8, r.flags);
     m.set_i32(p + 0x4E8, r.life);
+    m.set_i16(p + 0x4EC, r.wrong_way);
+    m.set_i16(p + 0x4EE, r.wall);
     m.set_i16(p + 0x4F0, r.hit);
+    m.set_vec3(p + 0xF8, r.knockout.map(|v| v as i32));
+    m.set_i32(p + 0x444, r.side);
+    m.set_u16(p + 0x4D6, r.section_changed);
 }
 
 /// `FUN_0814efa8`: put car `e` back on the road at waypoint `w` (24 bytes: x, z, `+0x0A` u16 heading, `+0x14`

@@ -11,6 +11,9 @@ byte it changed, for crates/nfsgba-sim/tests/trace.rs. Seeded: reruns give the s
   wingman  wingman_command FUN_0814078c with random wingman state: wingman (0x03006104), commands left
            (0x030061DC), running (0x030061E8), cooldown (0x030061D8), role (0x030061F8), the wingman's car
            (0x0300619C) and the racers' places (driver +0xA8).
+  lap      lap_crossing FUN_0813f098 for a racer put on or near the line (section, segment), armed or not
+           (driver +0x4D8 bit 1), with random laps left, places, best lap and lap start, race mode (elimination),
+           laps, lapped flag, race time, the camera car and the someone-finished flag: lap, knock-out and finish.
 """
 import json
 import random
@@ -56,7 +59,31 @@ def wingman(gba, r, entities, sections):
     return {}, patch, {}
 
 
-FUNCTIONS = {"spawn": (0x08143D48, spawn), "wingman": (0x0814078C, wingman)}
+def lap(gba, r, entities, sections):
+    opponents = struct.unpack("<I", gba.read_base(0x03005784, 4))[0]
+    who = r.randrange(opponents + 1)
+    e = entities + 0xA4 * who
+    count = struct.unpack("<H", gba.read_base(sections, 2))[0]
+    lapped = r.choice([0, 1])
+    patch = [(0x0300608C, u32(lapped)), (0x030056E0, u32(r.choice([0, 1, 1, 2, 3]))),
+             (0x030056E4, u32(r.randint(1, 4))), (0x03005800, u32(r.randrange(1 << 16))),
+             (0x030061A4, u32(r.choice([0, 0, 1]))), (0x030057F8, u32(r.randrange(opponents + 1))),
+             (e + 0x72, struct.pack("<H", r.choice([0, 0, 0, 1]))),
+             (e + 0x90, struct.pack("<h", r.choice([count - 1, count - 2, 0, r.randrange(count)])))]
+    places = list(range(1, opponents + 2))
+    r.shuffle(places)
+    for k in range(opponents + 1):
+        p = struct.unpack("<I", gba.read_base(entities + 0xA4 * k + 0x8C, 4))[0]
+        if not 0x02000000 <= p < 0x02040000:
+            continue
+        flags = struct.unpack("<H", gba.read_base(p + 0x4D8, 2))[0]
+        patch += [(p + 0xA8, u32(places[k])), (p + 0xC5, bytes([r.choice([1, 1, 2, 3, 0])])),
+                  (p + 0x4D8, struct.pack("<H", flags | 2 if r.random() < 0.8 else flags & ~2)),
+                  (p + 0xB4, u32(r.choice([0, r.randrange(1 << 14)]))), (p + 0xB8, u32(r.randrange(1 << 15)))]
+    return {"who": who}, patch, dict(r1=e)
+
+
+FUNCTIONS = {"spawn": (0x08143D48, spawn), "wingman": (0x0814078C, wingman), "lap": (0x0813F098, lap)}
 
 
 def main(count: int) -> None:
@@ -88,8 +115,12 @@ def main(count: int) -> None:
                 writes = [f"{a + j:08x}={v:02x}" for a, b in r.writes if base.RAM[0] <= a < base.RAM[1]
                           for j, v in enumerate(b)]
                 ret = r.regs["r0"] & 0xFFFFFFFF
-                key = f"{fn} kind {inputs['kind']} {'spawned' if ret != 0xFFFF else 'none'}" if fn == "spawn" \
-                    else f"{fn} {'given' if ret else 'not given'}"
+                if fn == "spawn":
+                    key = f"spawn kind {inputs['kind']} {'spawned' if ret != 0xFFFF else 'none'}"
+                elif fn == "wingman":
+                    key = f"wingman {'given' if ret else 'not given'}"
+                else:
+                    key = f"lap {'crossed' if writes else 'not crossed'}"
                 seen[key] = seen.get(key, 0) + 1
                 cases.append({"fn": fn, "trace": name, "step": k, **inputs,
                               "patch": [(a, d.hex()) for a, d in patch], "ret": ret, "writes": writes})

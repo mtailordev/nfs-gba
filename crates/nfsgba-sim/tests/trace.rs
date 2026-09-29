@@ -429,6 +429,10 @@ fn calls_match_the_oracle() {
                 nfsgba_sim::traffic::spawn(&mut mem, near, c["kind"].as_u64().unwrap() as u32).map(Some)
             }
             "wingman" => nfsgba_sim::route::wingman_command(&mut mem).map(|()| None),
+            "lap" => {
+                let e = mem.u32(W_ENTITIES) + 0xA4 * c["who"].as_u64().unwrap() as u32;
+                nfsgba_sim::route::lap(&mut mem, e).map(|()| None)
+            }
             other => panic!("unknown function {other}"),
         };
         let got = match result {
