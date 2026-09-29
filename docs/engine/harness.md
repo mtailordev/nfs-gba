@@ -188,6 +188,18 @@ deterministic from a savestate (every recorder relies on this).
   - every environment once (sky, palette);
   - the pause menu options.
 
+## Tool bake-off (to fill in next session)
+
+Plan and candidates in `PROGRESS.md` ("Start here", B1–B5). One row per candidate; the decision goes into `docs/DECISIONS.md`.
+
+| # | Candidate | Test run | Speed | Exact vs fixtures | Deterministic | Breakpoints | Setup / licence | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| B1 | Oracle + synthesized states | | | | | | | |
+| B2 | Headless libretro mGBA core | | | | | | | |
+| B3 | gba-recomp native build | | | | | | | |
+| B4 | mGBA GDB stub (`mgba-sdl.exe -g`) | | | | | | | |
+| B5 | `nfsgba-game` as state generator | | | | | | | |
+
 ## Oracle gotcha (from the menus work)
 
 `Result.read` rebuilds memory from the snapshot plus the call's writes, **not** the call's `mem=` inputs: a byte set as an input that the call leaves alone reads back as the snapshot's value. Generators should apply the writes to their own inputs.

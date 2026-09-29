@@ -4,26 +4,27 @@ Session state for whoever picks this up next. Read `AGENTS.md` first, then this 
 
 ## Status (2026-09-29, after the project review)
 
-**Phase: consolidation.** No new subsystems until it is done (user decision, `docs/DECISIONS.md`).
+**Phase: consolidation, then milestones.** Next session: the tooling bake-off first ("Start here" below). No new subsystems until the consolidation is done (user decision, `docs/DECISIONS.md`).
 
 What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 - **Data:** every asset family decoded from the ROM (text, images, models, city, routes, audio, career tables, fonts, HUD and menu layouts); 98.9% of the ROM's bytes attributed (`tools/rom_attribution.py`).
 - **Crates:**
+  - `nfsgba-fixed`: the game's integer maths, once (division, reciprocal table, sine/atan, `isqrt`, `rand_table`, `angle_diff`);
   - `nfsgba-formats`: parsers, plus rendering (`render`, `sky`, `paint`, `atlas`), HUD (`hud`, `ui`), menus (`menu`), career and race rules (`career`);
   - `nfsgba-audio`: the LS_Play engine, bit-exact;
   - `nfsgba-sim`: the player car, the opponents, the wingman and traffic, with every car-step path ported;
   - `nfsgba-game`: the race start (`race_init`) and the race frame loop (`Game::frame`), exact over five recorded runs (2,445 frames) with nothing stood in;
-  - `nfsgba-viewer` (Bevy 0.19.1): high resolution, a 240×160 reference mode, and play mode (`NFSGBA_PLAY=1 NFSGBA_DUMP=game-loop/s18`).
+  - `nfsgba-viewer` (Bevy 0.19.1): high resolution, a 240×160 reference mode, and play mode (`NFSGBA_PLAY=1 NFSGBA_DUMP=game-loop/s18`);
+  - `nfsgba-testkit` (dev only): data loading, `NFSGBA_REQUIRE_DATA=1`, the fixture log.
+- **Checks:** `tools/gate.py` (rustfmt, clippy `-D warnings`, all tests with data required, Python tests, fixture manifest, notes, `NOT 1:1` markers) passes 7/7. The ledger has 36 open entries and 35 closed.
 - **Not yet:** boot → menus → race in our code (the menus port has logic but no drawing: U3, U7); the garage screens (Kind18); coverage of the 415 functions never reached; the high-resolution view agrees with the reference frame only 49% exactly (R27).
-- **Known structural debt (the independent audit, 2026-09-29):**
-  - 52% of the Rust keeps state in a GBA-layout RAM image;
-  - duplicated helpers and subsystems (camera ×2, racing line ×2, decoder ×2, `rand_table` ×3, maths helpers ×3);
-  - 71 tests pass silently without their data;
-  - the 1.4 GB of fixtures have no provenance and sit in per-agent folders;
-  - ROM data is read by hard-coded BN7E offsets;
-  - several Closed claims have no test.
+- **Structural debt still open (from the 2026-09-29 audit):**
+  - 52% of the Rust keeps state in a GBA-layout RAM image (the typed `World` step);
+  - the viewer's own camera copy (`game::Chase`) and two racing-line models (D16);
+  - ROM data read by hard-coded BN7E offsets (`GameData` step);
+  - several Closed claims have no test in the repo.
 
-Run everything: `cargo test --release --workspace` (about 3 minutes; the AI trace test alone takes about 70 s), `cargo clippy --release --workspace --all-targets`, `cargo fmt --all --check`, and the Python tools' tests (`cd tools && ../.venv/Scripts/python.exe -m unittest discover -p "test_*.py"`).
+  (Fixed since the audit: silent test skips, fixture provenance, duplicated helpers, recorders and oracle drivers.)
 
 ## Working rules (from the user)
 
@@ -33,35 +34,54 @@ Run everything: `cargo test --release --workspace` (about 3 minutes; the AI trac
 - **Never find anything twice.** Every ROM offset, RAM address and function goes into `docs/engine/address-map.md` and `docs/engine/symbols.csv` (applied to Ghidra by `tools/ghidra/ApplySymbols.java`).
 - **Oracle first:** port a function against `tools/oracle` on generated inputs over snapshots; use mGBA only for new snapshots and whole-frame traces.
 
-## Next steps: the consolidation phase
+## Start here (next session)
 
-1. **Test kit: done** (`crates/nfsgba-testkit`, `tools/gate.py`, `docs/engine/fixtures.csv`, `docs/engine/testkit.md`; every marker now names an open ID). **Run `tools/gate.py` before every merge.** The original plan was one shared test crate:
-   - one `rom()` and data loader, and `NFSGBA_REQUIRE_DATA=1` so missing data fails instead of skipping;
-   - a fixture manifest with provenance (sha1, ROM hash, recorder, command, savestate);
-   - a scenario library replacing the per-agent folders;
-   - exact stop lists and frame counts in the replay tests;
-   - the out-of-workspace oracle checker folded in.
-2. **One copy of everything** (running: *dedup* agent on `crates/` for the maths crate, decoder, dump loader and domain helpers; *tools* agent on `tools/` for one recorder, one oracle CLI and one script loader; the viewer's camera and R28 come after dedup):
-   - a fixed-point maths crate (`div`, `recip`, sine/atan, `isqrt`, `rand_table`, `angle_diff`);
-   - one camera (drop the viewer's `Chase`), one racing line, one decoder;
-   - one mGBA recorder with probe modules, and one oracle case CLI;
-   - one way to load extra emulator scripts.
-3. **Typed `World`:** move each subsystem to typed state behind the replay tests (car, AI and traffic, camera and slots, HUD, `race_init`, menus); ROM data parsed once into `GameData`, with the BN7E offsets in one layout table.
-4. **Ledgers gated:**
-   - every Closed line names its test;
-   - a checker for `NOT 1:1 (ID)` markers against open IDs;
-   - "Integration notes" sections and merged notes CSVs removed;
-   - a merge gate script (tests with required data, `notes_merge`, fmt, clippy).
+Everything is merged and pushed (`origin/main`), nothing runs, the gate passes 7/7. The first session spent far too many tokens (about 15–20 M in agents; see "How we work" for why). The next session starts with a **small tooling bake-off**, decides the toolchain, records it in `docs/DECISIONS.md`, and only then continues the consolidation below, under the efficiency rules.
 
-Then: boot → menus → race at 240×160 (a playable reference), the timing model, broader coverage (every car, route and mode, the garage, a career win, cops if any), the high-resolution renderer on typed state with automated comparisons, and link play and extras.
+### 1. Tooling bake-off (first task, timeboxed: a few hours, well under 1 M tokens)
 
-## How agents are run (lessons from the first 25)
+Goal: stop playing the game in the mGBA window to reach states. For each candidate, run one small test, measure, and fill the results table in `docs/engine/harness.md` ("Tool bake-off"). Then pick the stack.
 
-- Infrastructure first, one at a time; fan out only on top of it.
-- Size tasks to about 100 turns, each against a named acceptance test. Agents that ran into the 200-turn limit lost time.
-- Agents edit the ledger rows they own directly, and `tools/notes_merge.py --write` merges their `docs/engine/notes/*.csv`. Don't leave "Integration notes" sections behind.
-- Worktrees share one build directory (`CARGO_TARGET_DIR`) and are removed after their merge.
-- Every emulator session uses `NFSGBA_MGBA_SESSION=<agent>` and is stopped by its own PID, never by image name.
+| # | Candidate | Small test | Measure |
+|---|---|---|---|
+| B1 | **No emulator: the function oracle** (`tools/oracle`, unicorn) plus **synthesized states** (our exact `race_init::race_start` builds race states from setup inputs; poke the few RAM variables that select a screen/mode) | Port-check one small unported function end to end with `tools/oracle/cases.py` (cases → Rust test green); build a race state for a route/car/mode not in any fixture and run one original function on it | Time and tokens from nothing to a green test; calls/s; can the synthesized state replace an mGBA capture? |
+| B2 | **Headless mGBA as a libretro core** (`mgba_libretro.dll` from the libretro buildbot into `ext/`, never committed; MPL-2.0) driven from Python via `ctypes` (a ~200-line host: load core and ROM, `retro_run` per frame, input per frame, memory via the core's memory maps, `retro_serialize`/`unserialize`) | Reproduce an existing game-loop fixture (`game-loop/*` trace frames or `race-init` captures) byte for byte at frame boundaries; run the same input twice (determinism); try loading `race.ss` | Frames/s (target: far above real time); exact vs the fixtures; determinism; can it load our savestates, or do we reach states by input/RAM pokes? |
+| B3 | **gba-recomp** (`ext/gba-recomp`, a release build exists; MIT/Apache/CC0; generated code stays local, never committed) | Build a native Carbon binary; run to the reference race; compare RAM at a frame boundary with the `mgba/race` dump; try a hook on `main_frame` | Does it run Carbon correctly? Speed; hook API usability; exactness |
+| B4 | **mGBA's GDB stub** (`ext/mgba-dev/mgba-sdl.exe -g`), driven from Python over the GDB remote protocol | Break at `main_frame` (`0x0812ae64`), read IWRAM, continue 10 times | Latency per breakpoint; stability. Only needed if B2/B3 can't break on functions |
+| B5 | **Our own rewrite as the driver** (`nfsgba-game` from `race_start`) | Run 600 frames of a synthesized race with scripted keys, headless | Frames/s; is it a usable state generator for the oracle? |
+
+Decide by: exactness against the existing fixtures, speed, determinism, setup and maintenance cost, breakpoint support, licence. Expected outcome (to be confirmed, not assumed): B1 for all function-level porting; B2 (or B3 if it works) for whole-frame and long-run checks; B4 only as a fallback; the mGBA window and the Lua file-polling remote retired except for occasional manual looks. Write the decision into `docs/DECISIONS.md`, update `docs/TOOLS.md`, delete the losers' code.
+
+### 2. Consolidation (after the bake-off)
+
+Done: the test kit and merge gate (`tools/gate.py`, `docs/engine/testkit.md`, `docs/engine/fixtures.csv`); one recorder, one oracle CLI, one script loader (`tools/record.py`, `tools/oracle/cases.py`); one copy of the game's maths (`crates/nfsgba-fixed`), one decoder, one dump reader, one copy of each shared helper; ledgers gated (every `NOT 1:1` names an open ID).
+
+Left, in order:
+1. **One viewer path:** drive every viewer mode through `nfsgba-game` (one camera: drop the viewer's `game::Chase`; closes R28).
+2. **Typed `World`:** move each subsystem off the GBA RAM image to typed state behind the replay tests (car, AI and traffic, camera and slots, HUD, `race_init`, menus); RAM images only in tests; ROM data parsed once into `GameData` with the BN7E offsets in one layout table; one racing-line model (D16).
+
+### 3. Milestones after that
+
+1. **Playable reference:** boot → menus → race entirely in our code at 240×160 (menus drawing: U7; garage screens: U3; the race-start handover, intro, countdown, fades, race end, pause: G1).
+2. **Deterministic timing model** for live play (T1, T2).
+3. **Coverage:** every car, route and mode, the garage, a career win, AI hunter mode, cops if they exist (D4); the 415 functions never reached.
+4. **High-resolution engine** on typed state: painter's order (R10), the speed effect (R11), model index 0 (R14), framerate interpolation, an HUD blend (G2), automated comparison against the 240×160 reference (R27).
+5. **Extras:** link play over the network, then the sibling Pocketeers titles.
+
+## How we work (efficiency rules, 2026-09-29; binding)
+
+Why the first session was expensive: agents were spawned as *forks* (each copied the coordinator's whole, growing conversation and re-read it every turn); every agent ran on the most expensive model; agents played the game in the emulator to reach states and built their own recorders and oracles; invisible internals were chased to the byte; long prose docs, integration notes and hand-merging; one ever-growing coordinator session.
+
+Rules:
+- **Fresh sessions.** One milestone per session; `PROGRESS.md` is the handoff. Keep coordinator messages short.
+- **No forks.** Spawn fresh agents with a brief of at most one page: the files to read (only the ones needed), the files they own, the acceptance test, the budget (50–100 turns), "commit early".
+- **Right model for the job.** A cheaper model (Sonnet-class) for mechanical porting against the oracle, tests, tools and doc tidying; the top model only for hard reverse engineering, design and review.
+- **At most 2–3 agents at once**, with disjoint files. Infrastructure first, one at a time.
+- **Oracle first, emulator last.** Port function by function against `tools/oracle/cases.py` on real or synthesized states. Whole-frame checks use the tool the bake-off picks. Nobody navigates menus by hand to reach a state.
+- **Exact where it is observable** (the contract in `docs/DECISIONS.md`): gameplay state, rules, AI, physics, audio samples, save bytes, the 240×160 frame. Invisible internals (heap neighbour bytes, stale registers, mid-frame IRQ timing) are documented once as a ledger row and not chased further unless they change something observable.
+- **Minimal docs.** Code comments, one `docs/FIDELITY.md` row and address/symbol rows per finding (`docs/engine/notes/*.<agent>.csv` → `tools/notes_merge.py --write`). No prose write-ups, no "Integration notes" sections, no long reports.
+- **Better code, not just more.** New code on typed state, one copy of each helper (`nfsgba-fixed`, `nfsgba-testkit`), small modules; no new RAM-image code.
+- **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; worktrees share `CARGO_TARGET_DIR` and are removed after merging; an emulator session is stopped by its own PID.
 
 ## Environment notes
 

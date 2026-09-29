@@ -32,6 +32,8 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 
 ## How to launch
 
+**Candidates under evaluation (bake-off, `PROGRESS.md` B1–B5):** a headless mGBA **libretro core** (`mgba_libretro.dll` from the libretro buildbot, MPL-2.0, into `ext/`) driven from Python via `ctypes`; **gba-recomp** (`ext/gba-recomp`, built; MIT/Apache/CC0; its generated code stays local); mGBA's **GDB stub** (`ext/mgba-dev/mgba-sdl.exe -g`); and the no-emulator path (the oracle plus synthesized states). The mGBA window with the Lua remote below is the current tool and is expected to be retired for everyday work.
+
 **mGBA with a Lua script** (nightly, portable):
 
 ```powershell

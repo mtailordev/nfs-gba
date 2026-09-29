@@ -2,6 +2,12 @@
 
 Newest first. Each entry: what, why, alternatives.
 
+## 2026-09-29 (efficiency; the user's request)
+
+- **How we work from now on** (binding; details in `PROGRESS.md` "How we work"): fresh session per milestone with `PROGRESS.md` as the handoff; no forked agents, only fresh agents with a one-page brief; a cheaper model for mechanical porting, tests and tools, the top model for hard reverse engineering, design and review; at most 2–3 agents at once; oracle first and no playing the game in the emulator to reach states; exact where observable, invisible internals documented once and not chased; minimal docs; typed state and one copy of each helper in new code.
+  - Why: the first session spent about 15–20 M tokens in agents, mostly because forked agents carried the coordinator's whole conversation, everything ran on the top model, and agents drove the emulator window by hand.
+- **Tooling bake-off before any more porting.** The next session tests, each in one small timeboxed test: the function oracle with synthesized states (no emulator), a headless mGBA libretro core driven from Python, gba-recomp as a native reference, mGBA's GDB stub, and our own `nfsgba-game` as a state generator. It records the results in `docs/engine/harness.md` and the chosen toolchain here, and retires the rest (likely including the mGBA window plus Lua file-polling remote).
+
 ## 2026-09-29 (project review; the user's decisions)
 
 - **What "1:1" means (the contract every test checks).** In the user's words: rebuild everything from the game (assets, scripts, all mechanics, all graphics) 1:1, but as an adaptable engine that runs at pretty much any resolution and framerate while every core system stays exactly the game's, like the Skate 3 and IW4L Rust rewrites. So:
