@@ -5,7 +5,7 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, map, results, update_kind};
+use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, list, map, results, update_kind};
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
@@ -26,6 +26,8 @@ pub trait Host {
     fn career_opponents(&mut self, st: &mut MenuState);
     /// `menu_scene_setup` (material, palette, sprite screen): the screen's background, palettes and sprite screen.
     fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32);
+    /// `menu_scene_setup_a` (`first`) or `_b`, chosen by the caller.
+    fn scene_setup_ab(&mut self, st: &mut MenuState, first: bool, material: u32, palette: u32, sprite: u32);
     /// Black BG palette RAM (`fill_bg_palette(0, 0, 0x100)`).
     fn black_bg_palette(&mut self);
     /// `copy_mem(dst, src, n, width)`.
@@ -133,6 +135,15 @@ pub fn poke_back(st: &mut MenuState, top: i8, v: u8) {
     }
 }
 
+/// The back stack byte at `top` as the game indexes it (an `i8`): -1 is the last key-repeat byte.
+pub fn peek_back_i(st: &MenuState, top: i8) -> u8 {
+    match top {
+        -1 => st.profile.repeats[7] as u8,
+        t if t >= 0 => peek_back(st, t as usize),
+        _ => 0, // ponytail: further below the stack the game reads other profile bytes; the stack never goes there
+    }
+}
+
 /// Back stack slot `i` (profile `+0x344 + i`) read; past the 12 slots it reads the List cursors.
 pub fn peek_back(st: &MenuState, i: usize) -> u8 {
     match i.checked_sub(st.profile.back.len()) {
@@ -210,6 +221,18 @@ pub fn message_box_input(st: &mut MenuState, h: &mut impl Host) -> i32 {
         h.call(CARBON_PLAY_SOUND, &[3, 1]);
     }
     st.g.message_result
+}
+
+/// `FUN_08135640` (type, text, arg): opens a message box when none is open (and swallows the keys); 1 if opened.
+pub fn message_box_open(st: &mut MenuState, kind: u32, text: u32, arg: u32) -> u32 {
+    let open = st.g.message_box < 0;
+    if open {
+        st.g.message_box = kind as i32;
+        st.g.message_text = text;
+        st.g.message_arg = arg;
+        st.g.keys = 0;
+    }
+    open as u32
 }
 
 /// `message_box_close` (`0x08135678`): closes the box and swallows the keys.
@@ -440,7 +463,10 @@ pub fn main_frame(st: &mut MenuState, h: &mut impl Host) {
 
 /// Whether a kind's handler runs on typed state ([`run_typed`]); the others still run on the RAM image.
 pub fn is_typed(kind: Kind, phase: usize) -> bool {
-    matches!((kind, phase), (Kind::Kind7 | Kind::Event | Kind::Career, 0..=2))
+    matches!(
+        (kind, phase),
+        (Kind::Kind7 | Kind::Event | Kind::Career | Kind::List, 0..=2)
+    )
 }
 
 /// A typed handler (see [`is_typed`]).
@@ -455,6 +481,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Career, 0) => results::enter(st, h),
         (Kind::Career, 1) => results::update(st, h),
         (Kind::Career, 2) => results::draw(st, h),
+        (Kind::List, 0) => list::enter(st, h),
+        (Kind::List, 1) => list::update(st, h),
+        (Kind::List, 2) => list::draw(st, h),
         _ => unreachable!("{kind:?} phase {phase} is not typed"),
     }
 }

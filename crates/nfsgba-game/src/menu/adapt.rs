@@ -64,6 +64,9 @@ impl flow::Host for GbaHost<'_> {
     fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32) {
         self.on_ram(st, |g| menu_scene_setup(g, material, palette, sprite));
     }
+    fn scene_setup_ab(&mut self, st: &mut MenuState, first: bool, material: u32, palette: u32, sprite: u32) {
+        self.on_ram(st, |g| menu_scene_setup_ab(g, first, material, palette, sprite));
+    }
     fn black_bg_palette(&mut self) {
         fill_bg_palette(self.0, 0, 0, 0x100);
     }
@@ -118,35 +121,11 @@ pub use flow::CARBON_PLAY_SOUND;
 
 // The typed helpers for the screens still on the RAM image.
 
-const DIVIDEND_REMAINDER: u32 = 0x0300_6480;
-
-/// A text helper of [`text`] with the IWRAM divide routine's remainder taken from and put back into `g`.
-fn with_remainder<R>(g: &mut Gba, f: impl FnOnce(&mut u32) -> R) -> R {
-    let mut rem = g.u32(DIVIDEND_REMAINDER);
-    let r = f(&mut rem);
-    g.set_u32(DIVIDEND_REMAINDER, rem);
-    r
-}
-
-pub(super) fn number_text(g: &mut Gba, n: i32) -> Vec<u8> {
-    with_remainder(g, |rem| text::number_text(rem, n))
-}
-
-pub(super) fn thousands(g: &Gba, s: &mut Vec<u8>, n: i32) {
-    text::thousands(g.u32(LANGUAGE), s, n);
-}
-
 pub(super) fn hint_due(g: &mut Gba, screen: i32, event: i32) -> u32 {
     let mut st = load_state(g);
     let r = event::hint_due(&mut st, &g.rom, screen, event);
     store_state(g, &st);
     r
-}
-
-pub(super) fn career_event_to_globals(g: &mut Gba) {
-    let mut st = load_state(g);
-    event::career_event_to_globals(&mut st, &g.rom);
-    store_state(g, &st);
 }
 
 /// `list_slot` (`0x0812FD04`): the List screen's cursor slot (profile `+0x350 + slot`), −1 for other screens.

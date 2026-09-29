@@ -78,6 +78,22 @@ layout! {
         0x0300_6238 map_cursor: i8,
         0x0300_6239 map_moved: u8,
         0x0300_64C0 keys: u16,
+        /// Keys held (L and R turn the garage car).
+        0x0300_64C4 keys_held: u16,
+        /// The garage car record's working copy (17 bytes) and its turn angle.
+        0x0300_5700 garage_car: [u8; 17],
+        0x0300_5F9C garage_angle: u32,
+        /// EEPROM save buffer (passed to the save routines).
+        0x0300_57F4 save_buffer: u32,
+        /// Race setup scratch a free race sets (`+0x580C` 0, `+0x562C` 1..3, `+0x6118` 0..19).
+        0x0300_580C u_580c: u32,
+        0x0300_562C u_562c: u32,
+        0x0300_6118 u_6118: u32,
+        /// The garage's "upgrades changed" answer, kept for the save question.
+        0x0300_5954 upgrades_changed: u32,
+        /// The open message box's text key and argument.
+        0x0300_59F8 message_text: u32,
+        0x0300_59EC message_arg: u32,
         0x0300_64C8 rand_index: u32,
     }
 
@@ -102,6 +118,7 @@ layout! {
         /// The car in Quick Play (`+0x11`) and career (`+0x10`).
         0x10 career_car: i8,
         0x11 car: i8,
+        0x0C cash: i32,
         0x12 u_12: u16,
         /// The 15 cars' 17-byte records.
         0xF9 car_records: [[u8; 17]; 15],
@@ -114,22 +131,33 @@ layout! {
         /// The selected event slot in the zone.
         0x1FC event_slot: u8,
         /// 2 bits per career event: 1 won, 2 second, 3 not done.
+        /// The wingman (`+0x200`, 0 none) and its side (`+0x204`).
+        0x200 wingman: u32,
+        0x204 wingman_side: u8,
         0x205 events: [u8; 19],
         /// Record time (frames) per track: 12 circuits, then 18 sprints.
         0x218 records: [u16; 30],
         /// The event cursor per zone.
+        /// The garage upgrade pages' selection (`+0x364`, `+0x365`).
+        0x364 upgrade_a: u8,
+        0x365 upgrade_b: u8,
         0x388 event_cursors: [u8; 6],
         /// Race end: a new record was set (`+0x3B4`), the payout (`+0x3B8`).
         0x3B4 record_flag: u32,
         0x3B8 payout: u32,
         /// A new track record (`+0x4A8`) and the unlock message keys (`+0x4AA`, 0-terminated).
+        0x494 u_494: u16,
         0x4A8 new_record: u16,
         0x4AA unlock_messages: [u16; 14],
+        /// `+0x256`: a career zone step is due; `+0x258`: the upgrades save question is open.
+        0x256 zone_step: u16,
+        0x258 upgrades_saving: u16,
         0x2EE music: i8,
         0x2F6 u_2f6: u16,
         0x2F8 u_2f8: u32,
         0x32C last_player: u32,
         /// Key-repeat delays: left, right, up, down, A, B, L, R (`menu_frame`).
+        0x338 u_338: u32,
         0x33C repeats: [i8; 8],
         /// The screens to go back to.
         0x344 back: [u8; 12],
