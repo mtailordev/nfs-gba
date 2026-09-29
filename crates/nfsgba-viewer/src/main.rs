@@ -421,7 +421,14 @@ fn setup(
             }
         }
         for (k, a) in w.iter().enumerate() {
-            let flags = rt.wall_flags(a.piece, a.flags);
+            // A wall with a moving piece is made in the state a closed one starts in (`moving_pieces_init`: the
+            // wall's flags, bit 12 set, bit 0 clear); whether it is open or closed now is the game's piece
+            // (`poses` keeps `Tint::rt` current), which the portal pass's wall masks apply.
+            let flags = if a.piece != 0xFFFF {
+                (a.flags | 0x1000) & !1
+            } else {
+                a.flags
+            };
             if a.material == 0 || flags & 1 != 0 {
                 continue;
             }
@@ -916,12 +923,16 @@ fn blend_frame(a: &render::Frame, b: &render::Frame, t: f32) -> render::Frame {
 }
 
 /// Reads the game's camera and every entity's pose when it has stepped.
-fn poses(play: Res<play::Play>, mut smooth: ResMut<Smooth>) {
+fn poses(play: Res<play::Play>, mut smooth: ResMut<Smooth>, mut tint: ResMut<Tint>) {
     let key = Some((play.id, play.frames));
     if !play.paused && smooth.key == key {
         return;
     }
     let mem = &play.game.world;
+    // The moving pieces as the game holds them (open, or closed until broken).
+    if tint.rt.pieces != mem.pieces {
+        tint.rt.pieces.clone_from(&mem.pieces);
+    }
     let frame = view::frame(mem);
     let eye = game::frame_transform(&frame, world);
     let now = Poses {
