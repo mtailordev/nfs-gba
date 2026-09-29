@@ -496,3 +496,67 @@ address,name,kind,comment
 0x08143a90,traffic_setting,function,traffic tuning of a setting from 0x087F53EC (0x20 per setting)
 0x0813b4d0,moving_pieces_init,function,moving pieces' start state; the route's list 0x087F3A24 (0x10 per route index) starts closed
 0x0813b628,empty_0813b628,function,empty; called after moving_pieces_init
+0x0814f8ac,next_matrix_slot,function,next matrix slot from counter 0x03005394; 0xFF past 0x3F
+0x0814fa6c,wheel_ground_points,function,four wheel points around a car (heading only) on the floor of the sector found for each; leaves the last query in world +0xC0..+0xEA
+0x0814e050,build_car_matrix,function,car slot from the wheel planes (0x0300610C == 0) or the physics orientation; spawns contact sparks (profile +0x318); spoiler slot
+0x0814e8b4,exhaust_flames,function,player's exhaust/nitro flame sprites (table 0x087F3E00; driver +0x434/+0x436 animation)
+0x0814fb60,seen_from_behind,function,abs(angle_diff(a; b)) > 0x13FF
+0x0814e414,light_sprite,function,projects a car point through its slot and adds a light sprite (materials 0x0836CF5C; 0x1BC rear / 0x1FC brake)
+0x0814e52c,traffic_light_sprite,function,as light_sprite for traffic (material 0x0836F698)
+0x08162048,effect_sprite_alloc,function,first free object of the effect-sprite pool (header 0x03000058; +4 used)
+0x0814eca4,billboard_sprite,function,sprite at a slot's origin centred on (0x70; 0x50); scale from the reciprocal table
+0x08160708,copy_rotation,function,copies 9 words (a 3x3 rotation)
+0x08160434,mat_mul_34,function,3x3 product plus the sum of the translations (2.14)
+0x08140224,raised_camera_orientation,function,(not ported) orientation for the raised camera (0x03006148)
+0x08144c98,traffic_slots,function,matrix slots of the live traffic cars (0x03006270) and their rear lights seen from behind
+0x0814c37c,spawn_spark,function,spark entity (handler 0x34) at a car's corner flying off with its velocity / 0xC4 plus spread
+0x081694b0,rotation_x_rom,function,ROM copy of the IWRAM x rotation (2.14)
+0x08169508,rotation_y_rom,function,ROM copy of the IWRAM y rotation (2.14)
+0x081695b8,mat_mul_33_rom,function,ROM copy of the IWRAM 3x3 product (2.14; translation untouched)
+0x081694a0,cos_rom,function,ROM copy of the IWRAM cosine (table 0x087C05F0)
+0x08169464,sin_rom,function,ROM copy of the IWRAM sine (table 0x087C05F0)
+0x0815e9e8,debug_print_heap,function,debug console: prints a label (0x087C03D8) then the free heap (FUN_08160e74) via itoa; called after race start and menu start
+0x0815e850,debug_console_print,function,writes a string into the text console 0x030064B0 (24 columns; scrolls at row 0xA0 with copy_units/fill)
+0x08160e74,heap_free_bytes,function,free heap bytes: (0x030064D4 - sum of block sizes in the node list 0x030064CC) * 4
+0x081633cc,itoa,function,signed int to decimal string (divides through the IWRAM routine; remainder at 0x03006480)
+0x08135f38,snd_stop_all,function,snd_stop_sfx 0..3 and snd_stop_music; current music id 0x0300003C = -1 (race end and pause)
+0x0813609c,music_stop,function,current music id 0x0300003C = -1 and snd_stop_music (pause)
+0x0813a4e0,vcount_irq_off,function,clears DISPSTAT bit 5 (the sky gradient's VCount IRQ) on pause
+0x081396c4,race_cleanup,function,race end: frees the race heap blocks (planes/back tables; world +0x1C/+0x18/+0x48/+0xC/+0x68/+0x64/+0x6C/+0x60/+0xFC/+0x44/+0x40/+0x3C; view +0x14); sprite screen; effect list; atlas; drivers; stops timer 3
+0x081374b0,free_drivers,function,frees every racer's and extra entity's driver struct (entity +0x8C); the player's via FUN_0813ffbc first
+0x0813ffbc,free_player_extra,function,frees the player's block 0x03006094[id] when it has a driver
+0x0813ff28,free_atlas,function,frees the player atlas block 0x03006164
+0x08161e80,sprite_screen_free,function,oam_hide_range(0 0x37) and frees the sprite screen's +0x14 block
+0x0816203c,effect_list_free,function,frees the effect-sprite list *0x03000058 (the pointer stays)
+0x0812e9e8,results_tiebreak,function,repeats until no tie: two cars with the same result byte at 0x03005750 get it split by distance (driver +0xAC)
+0x0813a054,countdown_tiles_a,function,start set-up (0x03005714 == 3): obj_upload_tiles(0x1FC) from HUD material 0x0836CF5C +0x2C
+0x0813a080,countdown_tiles_b,function,start set-up: obj_upload_tiles(0x1E4) from material 0x0836D0E8 (6 frames)
+0x0813a0b0,countdown_tiles_c,function,start set-up: obj_upload_tiles(0x1CC) from material 0x0836D304 (6 frames)
+0x0813a0e0,countdown_tiles_d,function,start set-up: obj_upload_tiles(0x1BC) from material 0x0836F698
+0x0813a108,countdown_nop,function,empty (last of the start set-up calls)
+0x0814397c,map_enter,function,map screens: cursor from profile +0x1FB (x2) on 0xE else 0; view (0x100 0xC0); map_zone_palettes
+0x081439c0,map_select,function,map cursor = arg; moved flag +9 = 1 (state 0x03006230)
+0x08143284,map_zone_palettes,function,(not ported) the map's zone colours into the second base palette (unlock 0x118.. per zone)
+0x081435c4,map_draw,function,(not ported) scrolls the map view towards the cursor and draws the map and its markers
+0x0812d62c,thousands_separator,function,thousands separator for n > 999 (French space; German and Italian dot) inserted digits-3 from the left
+0x08162fc0,time_text_colons,function,"mm:ss:cc" of |centiseconds| capped at 0x57E3F
+0x0812fc00,time_text,function,time_text_colons then the last colon becomes a dot (fr de es) or comma (it)
+0x0812cf48,hint_due,function,(screen; event) 1 when a career hint (screen 0x28/0x2B) is due: hints seen +0x1F8+0x1F9 per zone and screen; clears +0x1FA
+0x0812eb70,copy_results_to_ranked,function,copies the 0x40-byte results 0x03005650 to the ranked copy 0x03005730
+0x0812f180,check_record_time,function,new track record (profile +0x218) from the best lap of a finished known-mode race; flags +0x3B4 +0x4A8
+0x0812ec68,draw_unlock_messages,function,race results page 0xB: heading 0xD6 and the unlock texts in profile +0x4AA.. (0x31A skipped)
+0x08135640,message_box_open,function,(type; text; arg) opens a message box when none is open; swallows the keys; 1 if opened
+0x081348e8,page_script,function,hint/story page script: sections [id; commands; 0xFFFF]; commands 0xFFF5..0xFFFD (sounds waits music flash grid pictures portraits)
+0x08134cc0,tutorial_race_setup,function,(0..2) one of the three tutorial races (career mode 2; car 5 with fixed upgrades; route 1 or 3); picks opponents
+0x08164bec,fill_rect8,function,(rect x0 y0 x1 y1; page; pitch; colour x 0x01010101) fills a rectangle of an 8bpp page (byte stores at odd edges)
+0x08141c88,text_box,function,(font; text key or pointer; x; y; width; lines; colour) text in a box through FUN_08162B6C; key per language table
+0x0815e04c,fill_bg_palette,function,(start; colour; count) BG palette entries from start set to colour
+0x08161754,scale_obj_palette,function,(source; r; g; b; first; n) OBJ palette entries = source channels x factor / 256 capped at 31
+0x081372d8,menu_scene_teardown,function,every menu kind's exit handler: FUN_08139B7C(world)
+0x0812d564,garage_copy_car_record,function,copies the car record of 0x03005718: bytes 0..6 to 0x03005700 and 7..16 to 0x03005707
+0x0812c81c,unlock_state,function,(tentative; stub in menu.rs) (unlock id) 1 owned; 2 locked; 0 or 3 not affordable: drives the car-select and crew prompts
+0x0812c8a8,buy_unlock,function,(tentative; stub) (unlock id) buys a car after the confirmed message box
+0x0812c5c4,unlock_owned,function,(tentative; stub) (unlock id) nonzero when owned (car select shows no price)
+0x081300e0,list_item_new,function,(tentative; stub) (screen; item) nonzero: the item gets a "new" mark
+0x081302c4,upgrades_changed,function,(tentative; stub) (not the performance page) nonzero when the upgrades changed (0x03005954; save question 0x376)
+0x08133d30,car_stats_draw,function,(tentative; stub) (car; x; y; 0) the car-select stat bars
