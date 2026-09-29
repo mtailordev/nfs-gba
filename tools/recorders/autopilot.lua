@@ -1,4 +1,4 @@
--- Autopilot for recording car traces (docs/engine/physics.md), loaded with `lua <path>/trace_autopilot.lua`
+-- Autopilot for recording car traces (docs/engine/physics.md), loaded with `lua <path>/autopilot.lua` (tools/recorders)
 -- (reloading replaces the logic). Each frame it reads the player's position and heading and steers towards a
 -- target, holding A (and any extra keys). Deterministic: it only reads emulated RAM. Control it with `luax`:
 --   luax AUTOPILOT.mode="race"   follow the car's own racing-line section, AUTOPILOT.ahead waypoints ahead

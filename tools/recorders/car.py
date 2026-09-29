@@ -1,27 +1,31 @@
 """Record the player car's per-step trace for scripted driving scenarios (docs/engine/physics.md).
 
-    python tools/trace_race.py                 # record every scenario (mGBA must be running: mgba_ctl.py start)
-    python tools/trace_race.py accel brake     # record some
-    python tools/trace_race.py --summary NAME  # print a recorded trace's key fields
+    .venv/Scripts/python.exe tools/record.py car                 # record every scenario
+    .venv/Scripts/python.exe tools/record.py car accel brake     # record some
+    .venv/Scripts/python.exe tools/record.py car --summary NAME  # print a recorded trace's key fields
 
-Scenarios run in the session directory: copy race.ss and mainmenu.ss there from data/work/<sha8>/mgba/. A scenario
+Scenarios run in the session directory (vehicle-physics): copy race.ss and mainmenu.ss there from
+data/work/<sha8>/mgba/. A scenario
 without its own `trace` command loads race.ss and traces all of its commands; one with `trace` (the race start)
 runs as written. Each writes <session>/<name>.csv, the memory dump of its first traced step and <name>.ramdelta
 (the full RAM at every step, as differences from that dump). Rerunning gives identical files: the emulator is
 deterministic from the savestate.
 """
 import csv
-import os
 import struct
-import subprocess
 import sys
 from pathlib import Path
+
+import mgba_ctl
+from recorders import running
+
+SESSION = "vehicle-physics"
 
 # The Quick Play menu route from mainmenu.ss (docs/TOOLS.md): Quick Play, Random, confirm, then the race info
 # screen's A starts the race (a 3-lap circuit, Mazda RX-7, heavy traffic).
 MENU_TO_RACE = ["load mainmenu", "wait 30", "hold A 10", "wait 60", "hold A 10", "wait 60", "hold A 10", "wait 60"]
-# The autopilot (tools/trace_autopilot.lua) drives the longer scenarios; each starts from its defaults.
-AUTOPILOT = [f"lua {Path(__file__).resolve().with_name('trace_autopilot.lua').as_posix()}", "luax AUTOPILOT.reset()"]
+# The autopilot (tools/recorders/autopilot.lua) drives the longer scenarios; each starts from its defaults.
+AUTOPILOT = [f"lua {Path(__file__).resolve().with_name('autopilot.lua').as_posix()}", "luax AUTOPILOT.reset()"]
 # Race-info screens saved from a fresh profile (docs/engine/physics.md, "Scenarios"): hunter-info (Quick Play
 # Random: hunter, Southside, Mazda RX-7, easy, 3 opponents, heavy traffic), easy-info (Quick Play Custom: Longpoint
 # circuit, 2 laps, easy, 3 opponents, no traffic, catch-up on, VW Golf GTI).
@@ -103,15 +107,12 @@ def ram_deltas(work: Path, name: str) -> None:
     raw.unlink()
 
 
-def run(names: list[str]) -> None:
-    from mgba_ctl import canonical, data_dir
-
-    work = data_dir() / "work" / canonical()[1] / (os.environ.get("NFSGBA_MGBA_SESSION") or "mgba")
-    ctl = [sys.executable, str(Path(__file__).with_name("mgba_ctl.py"))]
-    for name in names:
-        subprocess.run([*ctl, *commands(name)], check=True)
-        ram_deltas(work, name)
-        print("recorded", name)
+def run(names: list[str], session: str = SESSION) -> None:
+    with running(session) as (work, _):
+        for name in names:
+            mgba_ctl.send(*commands(name), session=session)
+            ram_deltas(work, name)
+            print("recorded", name)
 
 
 def summary(path: Path) -> None:
@@ -122,13 +123,9 @@ def summary(path: Path) -> None:
             print(row["frame"], f"phase={row['phase']}", f"input={int(row['input']):#06x}", f"dt={row['dt']}", *vals)
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
+def main(args: list[str]) -> None:
     if args[:1] == ["--summary"]:
-        from mgba_ctl import canonical, data_dir
-
-        work = data_dir() / "work" / canonical()[1] / (os.environ.get("NFSGBA_MGBA_SESSION") or "mgba")
-        summary(work / f"{args[1]}.csv")
+        summary(mgba_ctl.session_dir(SESSION) / f"{args[1]}.csv")
     else:
         unknown = [a for a in args if a not in SCENARIOS]
         if unknown:

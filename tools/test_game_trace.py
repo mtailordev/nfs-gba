@@ -1,4 +1,4 @@
-"""Smoke test for tools/game_trace.py: `pack` keeps the first state whole and every later state as byte runs that
+"""Smoke test for tools/recorders/game.py: `pack` keeps the first state whole and every later state as byte runs that
 rebuild it exactly (the format crates/nfsgba-game/src/trace.rs reads)."""
 import os
 import struct
@@ -9,7 +9,7 @@ from unittest import mock
 
 import numpy as np
 
-import game_trace
+from recorders import game as game_trace
 
 
 def unpack(work: Path, name: str):

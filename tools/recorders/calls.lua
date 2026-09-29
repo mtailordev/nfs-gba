@@ -1,4 +1,4 @@
--- Probe for the car-physics paths (docs/engine/physics.md), loaded with the remote command `lua <path>/trace_probe.lua`.
+-- Probe for the car-physics paths (docs/engine/physics.md), loaded with the remote command `lua <path>/calls.lua`.
 -- Counts calls of the functions below, split into the player's (an argument register holds the player's entity)
 -- and others, logs the first calls of each and every change of the race phase (0x03000048) and of 0x0300610C
 -- to probe.txt in the session directory, and writes the counts every 600 frames.

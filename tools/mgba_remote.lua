@@ -11,7 +11,7 @@
 --                              NAME.csv, at its entry: frame, keys, a few globals, entity 0 (0xA4 bytes) and its
 --                              physics struct (entity +0x8C, 0x4FC bytes) as hex. The first logged call also dumps
 --                              memory as NAME.<domain>.bin, and every call appends EWRAM + IWRAM to NAME.ram.bin
---                              (tools/trace_race.py turns that into deltas). SKIP: calls to leave out first
+--                              (the car recorder, tools/recorders/car.py, turns that into deltas). SKIP: calls to leave out first
 --                              (docs/engine/physics.md)
 --   lua FILE                   run a Lua file in this script's environment (probes such as tools/recorders/calls.lua)
 --   luax STATEMENT             run one Lua statement written without spaces (e.g. luax AUTOPILOT.mode="race")

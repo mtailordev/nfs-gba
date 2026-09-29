@@ -1,4 +1,4 @@
--- Function coverage for tools/coverage.py: a breakpoint on every function entry counts hits while a key plan runs.
+-- Function coverage (`record.py coverage`): a breakpoint on every function entry counts hits while a key plan runs.
 -- Env: NFSGBA_MGBA_DIR (session dir), COV_FUNCS (file, one hex address per line), COV_OUT (csv to write),
 -- COV_PLAN (comma-separated steps):
 --   load:NAME        load savestate NAME.ss from the session dir (breakpoints stay)

@@ -5,7 +5,7 @@
 -- that order) and a row to NAME.csv: the video frame, the held keys, and the VBlank counter 0x030053B4 at
 -- main_frame's entry, at update_entities' entry (0x0813765C) and at hud_update's entry (0x08142F84), plus the
 -- timer-3 ticks main_frame stored at 0x03005934 (read at update_entities). One extra state is written after the
--- last frame, so FRAMES frames give FRAMES + 1 states. tools/game_trace.py turns NAME.frames.bin into deltas.
+-- last frame, so FRAMES frames give FRAMES + 1 states. `record.py game pack` turns NAME.frames.bin into deltas.
 -- `NAME FRAMES racing` waits for the first main_frame entry of a race frame the game loop runs from start to end
 -- (game state 5, race phase 2, no palette fade, the race-start set-up 0x03005714 done) before recording.
 local dir = os.getenv("NFSGBA_MGBA_DIR")
