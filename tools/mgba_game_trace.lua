@@ -1,5 +1,5 @@
 -- Game-frame recorder for the game loop (docs/engine/game-loop.md), loaded next to tools/mgba_remote.lua
--- (NFSGBA_MGBA_SCRIPTS). Writing `NAME FRAMES` into gtrace.txt (write gtrace.tmp, then rename) arms it: from the
+-- (NFSGBA_MGBA_EXTRA). Writing `NAME FRAMES` into gtrace.txt (write gtrace.tmp, then rename) arms it: from the
 -- next entry of main_frame (0x0812AE64) it records FRAMES game frames. At each main_frame entry it appends the
 -- whole machine state to NAME.frames.bin (EWRAM 256 KiB, IWRAM 32 KiB, palette 1 KiB, VRAM 96 KiB, OAM 1 KiB, in
 -- that order) and a row to NAME.csv: the video frame, the held keys, and the VBlank counter 0x030053B4 at

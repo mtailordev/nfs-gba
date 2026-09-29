@@ -1,4 +1,4 @@
--- Race-start capture, loaded next to tools/mgba_remote.lua (NFSGBA_MGBA_SCRIPTS). Writing a NAME into
+-- Race-start capture, loaded next to tools/mgba_remote.lua (NFSGBA_MGBA_EXTRA). Writing a NAME into
 -- raceinit.txt (write raceinit.tmp, then rename it) arms it. At the next entry of race_start_from_table_a
 -- (0x08139E34, called by game_state_step's state 4) every memory domain except the cartridge is saved as
 -- NAME_pre.<domain>.bin; at its return (the caller's lr) again as NAME_post.<domain>.bin. raceinit_log.txt gets

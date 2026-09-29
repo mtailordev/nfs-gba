@@ -67,6 +67,6 @@ def run(names):
 if __name__ == "__main__":
     os.environ["NFSGBA_MGBA_SESSION"] = SESSION
     os.environ.setdefault("NFSGBA_MGBA", str(Path("E:/Games/rewrites/nfs_gba/ext/mgba-dev/mGBA.exe")))
-    os.environ.setdefault("NFSGBA_MGBA_SCRIPTS", str(ROOT / "tools" / "race_init_capture.lua"))
+    os.environ.setdefault("NFSGBA_MGBA_EXTRA", str(ROOT / "tools" / "race_init_capture.lua"))
     names = sys.argv[1:] or list(SCENARIOS)
     run(names)
