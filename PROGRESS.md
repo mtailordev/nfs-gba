@@ -54,6 +54,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
 - **menus:** done and merged (first part). `menu.rs`: `main_frame`, the game state machine, the 49-screen menu machine, all six fades and the whole intro flow, exact on 5,400 oracle cases. Open: 7 of 8 screen kinds (U3), drawing onto VRAM (U7).
 - **game-loop:** new crate `nfsgba-game`: one exact game frame (main_frame order, IRQs) composing sim, render, paint, sky, hud and audio; a drivable race from a dump in the viewer (`NFSGBA_PLAY=1`), verified frame by frame against a recorded mGBA input run. Owns `crates/nfsgba-game`, `crates/nfsgba-viewer`, `docs/engine/game-loop.md`.
+- **menus-2:** U3/U4: the seven remaining screen kinds (25 screens), the message-box draw and the menu scene setups, oracle-first. Owns `menu.rs`, `docs/formats/ui.md`, `tools/ui_menu_oracle.py`, `docs/engine/notes/*.menus-2.csv`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
