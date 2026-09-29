@@ -40,22 +40,38 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x77A000–0x78E000` | | route data: template entities, racing lines | formats/race-routes |
 | `0x797D10–0x7E53EC` | | text strings | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
+| `0x7BFD0C` / `0x7BFD18` | | EEPROM 4 Kbit / 64 Kbit descriptors (`eeprom_select_type`) | formats/career |
 | `0x7C03F0` | 256 × u16 | random table (`rand_table`, index `0x030064C8`) | formats/car-paint |
 | `0x7C05F0` | 0x2000 × i16 | sine table, half wave, 0x4000 = 1.0 (`sin_q14`) | formats/car-paint |
 | `0x7C45F0` | 32,767 × 4 | reciprocal table: entry k = 2^24/(k+1) (light interpolation, likely more) | FIDELITY R2 |
+| `0x7E4714` | 6 × 2 u16 | boss event pairs per zone | formats/career |
+| `0x7E4744` | 66 × 8 | career event table (mode, track, reverse, laps, traffic, AI skill, reward) | formats/career |
+| `0x7E4954` | 16 × u16 | boss name keys | formats/career |
+| `0x7E4974` / `0x7E4990` | 14 × u16 / 13 × 4 | wingman name keys / (role key, level) | formats/career |
+| `0x7E49C4` | 43 × u32 | route number → track-name slot | formats/career |
 | `0x7E4A70` / `0x7E4AA0` / `0x7E4AD0` | 12 / 12 / 18 × 4 | route name tables: `(u16 text key, u16 route)` for circuits forward, circuits reverse, sprints | formats/race-routes |
+| `0x7E4B18` | | progress unlock records | formats/career |
+| `0x7E4DE4` | | `(id, price)` pairs for parts (not decoded) | formats/career |
+| `0x7E503C` | 15 × i16 | car prices | formats/career |
+| `0x7E5070` | 4 × u16 | race mode name keys | formats/career |
+| `0x7E544C` | 0x14 each | menu records | formats/career |
+| `0x7E5E54…0x7E5EFF` | | setup option key lists | formats/career |
+| `0x7E6260` | 6 × 0x10 | setup screens (items 0x18 each) | formats/career |
 | `0x7E6EEC` | 20 × 0x80 | paint presets, used only by a menu function (race colours come from `0x36C95C`) | formats/vehicle-models |
 | `0x7E86A0` | 5,867 × 4 | text table: 977 keys, 5 × 977 strings, 5 module pointers | formats/text-table |
 | `0x7EEA24` | bytes | special ramp numbers: by `cars[1] − 15` (slot 160) or `cars[0]` (slot 208, paint ≥ 20) | formats/car-paint |
+| `0x7EEA33` | per car | new-profile per-car record `[6]` defaults | formats/career |
 | `0x7EEB70` | 0x9C per car | i16 (x, y) of decal-set materials in the atlas | formats/car-paint |
 | `0x7EEBBC` | 6 per set | decal sets: 3 i16 vehicle materials per record `[4]` | formats/car-paint |
 | `0x7EF5A0` / `0x7EF672` | 7 per car | overlay material per `(car·7 + rec[1])` / its (x, y) | formats/car-paint |
 | `0x7EF816` | 0x10 per entry | decals per `(car·15 + rec[2])`: two (x, y, material) placements | formats/car-paint |
+| `0x7F0626` | per car | style base byte | formats/career |
 | `0x7F0BD8` | 15 × 0x58 | car table (`+0x0C` first material, `+0x0E` palette bank = 1 for all) | formats/vehicle-models, formats/car-paint |
+| `0x7F2588` | 44 × 0xC | race slot per route number: environment, route index (`race_setup_route`) | formats/career |
 | `0x7F2798` | 44 × 0x14 | route table | formats/race-routes |
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments (plus variant at `0x7F2FE8`) | formats/city-sectors |
 | `0x7F38B8` | 65 × 4 | Thumb function table (states or menus?) | |
-| `0x7F4344` | u32 per event | opponent 1's paint (`pick_opponent_cars`) | formats/car-paint |
+| `0x7F4344` | 12 × u32 | opponent 1's paint per wingman 1..12 (`pick_opponent_cars` reads `[wingman − 1]`; wingman 0 reads `0x7F4340` = 11) | formats/car-paint |
 
 ### Level descriptor (0x68 bytes, `0x7F2B08`)
 
@@ -89,6 +105,32 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030000C0` | **world struct** (below) |
 | `0x03000060` | u32 player entity index (0) |
 | `0x0300006C` | environment index (**11** in the reference race) |
+| `0x03000040` | units setting |
+| `0x03000050` | catch-up |
+| `0x03000070` | mode flags |
+| `0x030000A0` | career flag |
+| `0x030000BC` | event AI skill |
+| `0x030053A4` | SFX setting |
+| `0x030053AC` | pointer to the player entity |
+| `0x030053E4` | camera setting |
+| `0x03005388` | route number (menu numbering; `0x7F2588` maps it) |
+| `0x03005600` | language |
+| `0x03005604` | traffic |
+| `0x03005608` | difficulty |
+| `0x03005610` | reverse |
+| `0x03005698` | HUD setting |
+| `0x030056E0` | race mode |
+| `0x030056E4` | laps |
+| `0x03005718` | player car |
+| `0x03005730` | finishing order bytes |
+| `0x0300578C` | music setting |
+| `0x03005798` | transmission |
+| `0x030057EC` | AI car count (opponents, + 1 with a wingman) |
+| `0x03005800` | race frame counter |
+| `0x03005FB8` | pointer to the backward-step table for branch starts (`racing_line_step`) |
+| `0x0300608C` | lapped race (0 = sprint) |
+| `0x030061A4` | someone finished |
+| `0x030061B0…0x030061F4`, `0x0300617C` | hunter tuning |
 | `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
 | `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre, `+0x1C` focal (0x96) |
 | `0x03000214` | camera yaw (0x4000 per turn) |
@@ -113,10 +155,11 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005808` | game state (5 = race; `main_frame` tints every game frame) |
 | `0x0300611C` | i8 car id per racer ([0] player → entity 0 `+0x89`; [1..3] opponents) |
 | `0x03005FEC` | i8 paint per racer ([0] = player record `[6]`, also at `0x030000B8`) |
-| `0x0300539C` | pointer to the car records (`0x02000901`, 0x11 bytes per car id; = save block `0x02000808 + 0xF9`, save block pointer `0x030056EC`) |
+| `0x0300539C` | pointer to the car records (`0x02000901`, 0x11 bytes per car id; = profile `+0xF9`) |
+| `0x030056EC` | pointer to the profile (`0x02000808`, saved to EEPROM) |
 | `0x03005700` | car record being edited in the garage |
 | `0x03005784` | opponent count (3) |
-| `0x03006104` | event number |
+| `0x03006104` | wingman (0 none, 1..12; `race_start_from_table_a`) |
 | `0x030057F8` | entity index whose heading `shade_car_paint` uses (0) |
 | `0x03006164` | per racer: pointer to the unpacked atlas (player `0x0201FB9C`) |
 | `0x03006094` | per entity: pointer to the unpacked decal |
@@ -141,7 +184,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x30` / `+0x34` | loaded palettes |
 | `+0x38` | route template entities |
 | `+0x3C` | entity array (0xA4 each) |
-| `+0x40` / `+0x44` | route 0x50 block / racing line (0x1800) |
+| `+0x40` / `+0x44` | racing-line section table / racing line (0x1800) |
 | `+0x48` | per-material runtime entries (8 bytes: `+4`, `+6` texture scroll) |
 | `+0x50` | view struct (`+0x08`/`+0x0A` screen centre, `+0x10` near limit, `+0x1C` focal) |
 | `+0x54` | camera matrix: 12 × i32, 3×3 rotation in 2.14 fixed point then translation |
@@ -175,6 +218,32 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x84` | RAM pointer to the unpacked atlas (`0x03006164[racer]`) |
 | `+0x88` | model slot (`0xFF` = none) |
 | `+0x89` | car id (index into the 0x11-byte car records) |
+| `+0x8C` | pointer to the driver struct (below; race: `0x0202C624` player, then `0x0202D168` + 0x500·k) |
+| `+0x90` | racing-line segment |
+
+### Driver (`*(entity + 0x8C)`)
+
+| Offset | What |
+|---|---|
+| `+0xA8` | position |
+| `+0xAC` | distance |
+| `+0xB4` | best lap |
+| `+0xB8` | lap start |
+| `+0xBC` | finish time |
+| `+0xC5` | laps left |
+| `+0x4D8` | race flags (bit 1: lap armed) |
+| `+0x4E8` | hunter life |
+
+### Profile (`*0x030056EC` = `0x02000808`)
+
+| Offset | What |
+|---|---|
+| `+0xF9` | car records, 0x11 bytes per car id |
+| `+0x200` | wingman selection |
+| `+0x205` | event status (2 bits per event) |
+| `+0x218` | record times |
+| `+0x3B8…+0x3F8` | setting values |
+| `+0x42D` | unlock bits (40 bytes) |
 
 ## Functions
 

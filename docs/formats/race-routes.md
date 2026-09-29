@@ -10,7 +10,7 @@
 | Offset | Meaning |
 |---|---|
 | `+0x00` | four **template entities** (0xA4 bytes each), copied into the entity array (world `+0x3C`). Position at `+0x0C/+0x10/+0x14` in 8.8 fixed point, city units |
-| `+0x04` | 0x50 bytes copied to world `+0x40` (unknown, probably checkpoints) |
+| `+0x04` | the **section table** (world `+0x40`): 8 bytes per section, `u16 count, u16 0, u32 first waypoint index`; it sits right before the racing line, so there are `(line − table) / 8` sections (`docs/formats/career.md`) |
 | `+0x08` | the **racing line** (world `+0x44`, a fixed 0x1800-byte copy) |
 | `+0x0C` | world counts (sectors, walls, entities = 4, materials, …), the same in every record |
 | `+0x10` | 0 |
@@ -19,12 +19,13 @@
 
 ## Racing line
 
-A list of 24-byte waypoints: `(x, z, ?, -1, cumulative distance, sector)`.
-- The distance is measured from the first waypoint and matches the waypoint spacing exactly.
-- The `?` field is usually 0; a few are large flag-like values (unknown).
-- The list ends at the first record that breaks the pattern.
+24-byte waypoints: `(i32 x, i32 z, ?, u16 link section, u16 link index, i32 cumulative distance, i32 sector)`, split into sections by the `+0x04` table.
+- **Section 0 is the lap.** Its last waypoint repeats the first, and that waypoint's distance is the lap length. The distance is measured from the first waypoint and matches the waypoint spacing exactly.
+- **Sections 1.. are shortcut branches.** A link (`0xFFFF` = none) points to the same place in another section: a fork on the lap points to the branch's first waypoint, and the branch's first and last waypoints point back to where it leaves and rejoins the lap.
+- The `?` field is usually 0; some are large flag-like values (unknown).
+- `routes()` returns the lap as `waypoints` and the branches as `branches`.
 
-Route 23 has 19 waypoints, a 58,231-unit line plus a closing straight: a circuit in the south-east district.
+Route 23 has a 36-waypoint lap of 108,219 units (a circuit in the south-east district) and one 8-waypoint branch, from lap waypoint 19 to lap waypoint 27.
 
 ## Routes and races
 
@@ -89,4 +90,4 @@ Route 23 has 19 waypoints, a 58,231-unit line plus a closing straight: a circuit
 ## Open
 
 - How career events choose route, mode (Elimination, Hunter) and environment. Some sectors carry a track name key at `+0x10` (e.g. sector records near `0x72C8C2`); purpose unknown.
-- The 0x50-byte `+0x04` block (checkpoints?), the waypoint `?` field, and the template entity fields besides position (start sector at `+0x74`).
+- The waypoint `?` field, and the template entity fields besides position (start sector at `+0x74`).

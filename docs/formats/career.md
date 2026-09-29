@@ -179,7 +179,7 @@ Checked: the reference race (screenshot `s11`: forward, 3 laps, easy, 3 opponent
 
 ## Race rules
 
-Each car has a driver struct at entity `+0x8C`. Entities are 0xA4 bytes at world `+0x3C`; the player is entity `*0x03000060`, at `*0x030053AC`.
+Each car has a driver struct, pointed to by entity `+0x8C` (reference race: `0x0202C624` for the player, `0x0202D168` + 0x500·k for the opponents). Entities are 0xA4 bytes at world `+0x3C`; the player is entity `*0x03000060`, at `*0x030053AC`.
 
 - **Racing line sections** (route `+0x04`). This fills the "unknown 0x50 bytes" in `race-routes.md`:
   - The table is 8 bytes per section: `u16 count, u16 0, u32 first waypoint`. It sits directly before the waypoints (`+0x08`), so the section count is `(line − table) / 8`.

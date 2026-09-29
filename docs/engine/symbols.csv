@@ -73,3 +73,42 @@ address,name,kind,comment
 0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre
 0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre
 0x0814bc30,draw_vehicle,function,(name tentative) vehicle draw; sets the horizon shift from the player's pitch in views < 2
+0x08149b94,save_probe_profile,function,boot: read EEPROM slot, checksum+version 9, copy name and language
+0x08149d84,save_load_profile,function,read EEPROM, checksum, decode (save_decode) and rebuild unlocks
+0x08149fd8,save_write_profile,function,encode (save_encode) and write 64 EEPROM blocks
+0x081492c0,save_encode,function,profile/globals -> 512-byte save buffer, checksum +0xBADD, version 9
+0x08149820,save_decode,function,512-byte save buffer -> profile/globals
+0x081510cc,eeprom_select_type,function,4 -> 4 Kbit descriptor 0x7BFD0C, 0x40 -> 64 Kbit
+0x08151194,eeprom_read_block,function,DMA3 read of one 64-bit block, stored as 4 u16 from the top
+0x081513b8,eeprom_verify_block,function,re-read and compare a block (0x8000 on mismatch)
+0x08151244,eeprom_write_block,function,DMA3 write of one 64-bit block
+0x08151410,eeprom_write_verify,function,write + verify, up to 3 tries
+0x081356dc,profile_reset,function,new-profile defaults (options, statuses 0xFF, record times, car r[6])
+0x08135958,rebuild_unlocks,function,clears profile+0x42D and re-applies start/progress/zone/flag unlocks
+0x0813589c,zone_unlocks,function,zone boss availability and boss-win unlocks
+0x08135d4c,event_status,function,2-bit status of an event (profile+0x205)
+0x08135d78,zone_completed_count,function,events of a zone with status 1 or 2 (zone 6: status 1)
+0x0812fc34,zone_ladder_index,function,zone*12 + completed events
+0x0812d7b0,unlock_set,function,set bit id in profile+0x42D
+0x0812d784,unlock_is_locked,function,bit id clear in profile+0x42D
+0x0812d960,unlock_price,function,price of an unlock id (cars 0x108+ from 0x7E503C)
+0x0812da08,career_event_to_globals,function,copies event record into race globals
+0x0812dd80,career_event_screen,function,zone event grid, lock icons, reward and record time
+0x0812efe8,career_race_payout,function,event status update and cash payout
+0x0812c30c,style_rating,function,career car rating -> reward percent tiers
+0x0812ffb0,quick_race_random,function,randomised Quick Play settings
+0x0812b5f0,race_setup_route,function,route number -> track slot, direction fix-up, environment and route index from 0x7F2588
+0x08132790,setting_variable,function,setup setting id -> variable address
+0x081328f4,setup_screen_enter,function,copies globals into profile+0x3BC.. for the setup screen
+0x08132ab8,setup_screen_update,function,edits settings and writes them back to the globals
+0x08130d8c,wingman_screen,function,wingman list with lock state, role and level
+0x081400ec,race_progress,function,lap length*(laps-laps left)+distance
+0x0813e860,racing_line_step,function,walks an index across racing-line sections
+0x0813f098,lap_crossing,function,lap/finish detection, lap times, elimination knock-out
+0x08143a4c,is_elimination,function,mode == 1
+0x0814f050,finish_time_estimate,function,extrapolated finish time for cars still racing
+0x08140f78,hunter_life_tick,function,per-frame hunter life change
+0x0814101c,hunter_hit,function,hunter life transfer on a car hit
+0x081412ec,hunter_tuning_init,function,hunter life gain/drain constants
+0x08142f74,frames_to_centiseconds,function,frames*100/60
+0x0816a93c,__udivsi3,function,libgcc unsigned divide

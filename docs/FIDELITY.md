@@ -28,10 +28,12 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 
 | # | Now | Game | Exact source |
 |---|---|---|---|
-| D1 | The racing line stops at the first waypoint that breaks the pattern | The real length or terminator is unknown | Code reading world `+0x44` |
 | D2 | Grid cars are placed on the sector's mean floor height | The game's ground height and suspension | Entity physics |
-| D3 | Route names and kinds are exact (name tables at `0x7E4A70`/`0x7E4AA0`/`0x7E4AD0`); **career events** (mode, route, environment choice) are not decoded | Events select route, mode and environment | Event/career tables; sector `+0x10` name keys |
+| D3 | Career events, race setup (route number → environment and route via `0x7F2588`), unlocks and the save are exact and checked against RAM (`nfsgba_formats::career`). **Open:** where career races set the opponent count, and how the event's AI skill value is used | — | `career_event_to_globals`, the AI code |
 | D4 | No gameplay yet (handling, AI, cops) | — | Roadmap step 4, traced against the reference build |
+| D5 | Transcribed from code, not yet trace-checked: career payout and style-rating reward, race progress, lap crossing and elimination, hunter life per frame and hits, the unlock rebuild with events completed | — | `career_race_payout`, `style_rating`, `race_progress`, `lap_crossing`, `hunter_life_tick`, `hunter_hit`, `rebuild_unlocks` |
+| D6 | Not located: the code that arms a lap (driver `+0x4D8` bit 1), and what happens when hunter life reaches zero | — | Race rule code (`docs/formats/career.md`) |
+| D7 | No save encoder (the decoder is exact) | `save_encode` (`FUN_081492c0`) | `docs/formats/career.md` |
 
 ## Closed
 
@@ -39,6 +41,7 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 - **R2, light tint:** exact in formats and viewer. `sector_light` + `tint_palette` every frame at the observer (the player's car in race mode); the palette is kept when there is no light. Checked: route 23 gives sector 760 (as `0x03005614`) and the tinted palette equals palette RAM 178/178 (test `light_tint_reproduces_the_race_palette`).
 - **R4, car trim:** slots 193–207 are the city palette's own colours; nothing car-specific writes them. 192 and 208 are the glass shades (R3).
 - **Environment palette and sky selection:** exact (`race_load_palettes`: palette `+0x00 + (+0x5A)·2`, sky from `+0x5E`/`+0x60`). Checked: the race's base palette equals city palette 13 (environment 11, the reference race; byte-identical to palette 3) in every non-runtime slot.
+- **D1, racing line length:** exact. Section 0 of the route `+0x04` table is the lap (its last waypoint repeats the first); sections 1.. are branches, joined by waypoint links (`routes()`; route 23: 36 waypoints, 108,219 units, one branch from 19 to 27).
 - **Wall textures and wall UVs:** exact (column maps, `u >> 7`, v 16,384 = one texture), from `raster_wall_columns` and `setup_wall_spans`.
 - **World scale and axes:** exact (one unit for cars and city; the chase-camera view matches the game's screenshot).
 - **Vehicle UVs:** exact (1.15 fixed point, overlaid on the atlas).

@@ -175,13 +175,17 @@ pub fn paint_palettes(rom: &[u8]) -> Vec<Vec<[u8; 4]>> {
 }
 
 /// A race route from the route table at `0x7F2798` (0x14-byte records, read by `FUN_08139454`):
-/// `+0x00` four template entities (0xA4 bytes each; `+0x0C/+0x10/+0x14` = 8.8 position) and `+0x08` the
-/// racing line: 24-byte waypoints `(x, z, ?, -1, cumulative distance, sector)`.
+/// `+0x00` four template entities (0xA4 bytes each; `+0x0C/+0x10/+0x14` = 8.8 position), `+0x04` the racing-line
+/// sections ([`career::route_sections`]) and `+0x08` the racing line: 24-byte waypoints
+/// `(x, z, ?, u16 link section, u16 link index, cumulative distance, sector)`.
 #[derive(Debug, Clone)]
 pub struct Route {
     /// Start grid, city units: the player first, then three opponents.
     pub grid: Vec<[i32; 3]>,
+    /// Section 0, the lap: its last waypoint repeats the first, and its distance is the lap length.
     pub waypoints: Vec<Waypoint>,
+    /// Sections 1.., shortcut branches; their end waypoints link back to the lap.
+    pub branches: Vec<Vec<Waypoint>>,
     /// English track name and kind, from the name tables at `0x7E4A70` (circuits, forward),
     /// `0x7E4AA0` (circuits, reverse) and `0x7E4AD0` (sprints): `(u16 text key, u16 route)` pairs.
     pub name: Option<String>,
@@ -220,6 +224,8 @@ fn route_names(rom: &[u8], routes: usize) -> Vec<(usize, usize, RouteKind)> {
 pub struct Waypoint {
     pub x: i32,
     pub z: i32,
+    /// `+0x0C`/`+0x0E`: the same point in another section, `(section, index)` (a fork or a branch end).
+    pub link: Option<(usize, usize)>,
     /// Distance along the route from the first waypoint.
     pub distance: i32,
     pub sector: usize,
@@ -227,10 +233,10 @@ pub struct Waypoint {
 
 pub fn routes(rom: &[u8]) -> Vec<Route> {
     const TABLE: usize = 0x7F_2798;
-    let sectors = city(rom).len();
     // Records end where `+0x10` stops being zero (the level descriptors follow).
     let count = (0..).take_while(|&i| u32_at(rom, TABLE + 0x14 * i + 0x10) == 0).count();
     let names = route_names(rom, count);
+    let sections = career::route_sections(rom);
     (0..count)
         .map(|i| (i, TABLE + 0x14 * i))
         .map(|(i, r)| {
@@ -239,26 +245,24 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
             let grid = (0..4)
                 .map(|e| [0, 4, 8].map(|k| u32_at(rom, entities + 0xA4 * e + 0x0C + k) as i32 >> 8))
                 .collect();
-            let mut waypoints: Vec<Waypoint> = Vec::new();
-            if u32_at(rom, r + 8) != 0 {
-                let line = ptr(rom, r + 8);
-                for w in (0..0x1800 / 24).map(|k| line + 24 * k) {
-                    let wp = Waypoint {
+            let mut lines = sections[i].iter().map(|s| {
+                let line = ptr(rom, r + 8) + 24 * s.first as usize;
+                (0..s.count as usize)
+                    .map(|k| line + 24 * k)
+                    .map(|w| Waypoint {
                         x: u32_at(rom, w) as i32,
                         z: u32_at(rom, w + 4) as i32,
+                        link: (u16_at(rom, w + 12) != 0xFFFF)
+                            .then(|| (u16_at(rom, w + 12) as usize, u16_at(rom, w + 14) as usize)),
                         distance: u32_at(rom, w + 16) as i32,
                         sector: u32_at(rom, w + 20) as usize,
-                    };
-                    let ordered = waypoints.last().is_none_or(|p| wp.distance >= p.distance);
-                    if u32_at(rom, w + 12) != u32::MAX || !ordered || wp.sector >= sectors {
-                        break;
-                    }
-                    waypoints.push(wp);
-                }
-            }
+                    })
+                    .collect::<Vec<_>>()
+            });
             Route {
                 grid,
-                waypoints,
+                waypoints: lines.next().unwrap_or_default(),
+                branches: lines.collect(),
                 name: named.map(|n| text(rom, n.1, Some(0))),
                 kind: named.map(|n| n.2),
             }
@@ -767,10 +771,19 @@ mod tests {
                 r.waypoints[0].sector,
                 r.waypoints.last().unwrap().distance
             ),
-            (19, 760, 58_231)
+            (36, 760, 108_219) // section 0; the last waypoint repeats the first
         );
+        assert_eq!(
+            (r.waypoints[19].link, r.branches.len(), r.branches[0].len()),
+            (Some((1, 0)), 1, 8)
+        );
+        assert_eq!(r.branches[0][0].link, Some((0, 19))); // the branch leaves the lap at waypoint 19
         let sectors = city(&rom).len();
-        assert!(routes.iter().flat_map(|r| &r.waypoints).all(|w| w.sector < sectors));
+        let all = routes
+            .iter()
+            .flat_map(|r| r.waypoints.iter().chain(r.branches.iter().flatten()));
+        assert!(all.clone().all(|w| w.sector < sectors));
+        assert!(all.filter_map(|w| w.link).all(|(s, _)| s <= 2));
     }
 
     /// The exact light tint must reproduce the reference race's palette RAM (mGBA dump), entry for entry.
