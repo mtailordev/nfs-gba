@@ -12,7 +12,6 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 ## Code
 
 10. **What are the tables at `0x794000–0x799B88`** (referenced 49 times from game code) **and the ~41 KiB at `0x7F5CC8–0x800000`?**
-11. **What does the 65-entry Thumb function table at `0x7F38B8` dispatch?** Hypothesis: game states or menus.
 
 18. **Menu materials 6, 16–152 and most overlays:** what are they, and which palette does each screen use (FIDELITY U4)?
 19. **HUD details:** material kind bit 4 (materials 5–33), element bytes `+0x0F`/`+0x10`, and which race mode HUD screen 3 serves.
@@ -33,6 +32,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Answered
 
+- ~~The 65-entry function table at `0x7F38B8`~~ **Answered:** the entity handler table (`update_entities`; world `+0x78` by entity `+0x4E`) ([engine/physics.md](engine/physics.md)).
 - ~~96 KiB of ARM code at `0x350000–0x368000`~~ **Not code:** 4bpp HUD sprite texels inside `0x347B74–0x36C55C` (runs of `0xEEEEEEEE`).
 - ~~Runtime palette~~ **Answered:** the city palette is picked by the environment (`race_load_palettes`) and tinted every frame by the wall light at the player (`apply_sector_light_to_palette`); car colours are ramps from `0x36C95C` (`load_car_palettes`, `shade_car_paint`). See [FIDELITY.md](FIDELITY.md), [formats/car-paint.md](formats/car-paint.md). The event's environment comes from `0x7F2588` ([formats/career.md](formats/career.md)).
 - ~~Route table fields~~ **Answered:** `+0x04` is the racing-line section table (lap plus branches). See [formats/race-routes.md](formats/race-routes.md), [formats/career.md](formats/career.md). Descriptor `+0x62`/`+0x64` are sky offsets ([engine/sky.md](engine/sky.md)).

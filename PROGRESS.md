@@ -16,7 +16,7 @@ Done and committed:
   - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
   - world scale: one unit for cars and city, about 48 per metre.
 - **Rust workspace:**
-  - `crates/nfsgba-formats` has 35 real-data tests (modules `atlas`, `career`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10;
+  - `crates/nfsgba-sim` has 4 tests (2 trace tests over 9 scenarios); `crates/nfsgba-formats` has 35 real-data tests (modules `atlas`, `career`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10;
   - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
   - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
   - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
@@ -37,7 +37,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **car-paint:** done and merged. Car palette slots 160–255 exact in `paint.rs`; R4 closed; the viewer part of R3 is open (`docs/formats/car-paint.md`).
 - **sky:** done and merged. Gradient and skyline exact in `sky.rs`; the viewer parts of R5/R6 are open (`docs/engine/sky.md`). It found that the reference race is **environment 11**, not 1.
 - **sector-renderer:** done and merged. `render.rs` reproduces the reference frame's world pixels exactly (visible list, walls, flats, projection); R7/R9 closed; found wall v units (R20, fixed in `Wall::uv`) and flat heights (R19). The entity draw is decoded but not reimplemented (R12).
-- **vehicle-physics:** car simulation plus trace harness. Owns `crates/nfsgba-sim`, `docs/engine/physics.md`, `tools/trace_*`.
+- **vehicle-physics:** done and merged. `crates/nfsgba-sim` reproduces the player car's per-frame update exactly (1,149 traced steps, 9 scenarios, with RAM writes and sounds); its `tools/trace_oracle.py` replays ROM code in unicorn. Unported paths: D9–D13; AI and traffic: D4.
 - **audio:** done and merged. `crates/nfsgba-audio` reproduces LS_Play bit for bit (13,800 traced frames); `nfsgba-audio-render` writes WAVs to `data/out/audio` (`docs/formats/audio.md`). Hook: `Engine::vblank` once per frame, gameplay calls the `carbon_*` functions.
 - **ui-2d:** done and merged. Five menu screens byte-exact from ROM, HUD sprites bit-exact, the game's decompressor, fonts and Windows-1252 text (`ui.rs`, `docs/formats/ui.md`, `tools/ui_export.py` in `.venv`). HUD and menu logic not ported yet (U1–U4).
 - **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).

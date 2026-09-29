@@ -32,8 +32,12 @@ pub fn data_dir() -> PathBuf {
     if let Ok(v) = env::var("NFSGBA_DATA") {
         return v.into();
     }
-    fs::read_to_string(".env")
-        .ok()
+    // The nearest `.env` up from the current directory, so crate test runs and git worktrees (under
+    // `.claude/worktrees/`) find the checkout's one.
+    env::current_dir()
+        .unwrap_or_default()
+        .ancestors()
+        .find_map(|dir| fs::read_to_string(dir.join(".env")).ok())
         .and_then(|s| {
             s.lines().find_map(|l| {
                 l.strip_prefix("NFSGBA_DATA=")
