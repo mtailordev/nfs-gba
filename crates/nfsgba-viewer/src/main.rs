@@ -21,9 +21,11 @@ use bevy::{
 };
 use nfsgba_formats as rom;
 
-/// Raw units to metres: a two-lane street (1,920 units) comes out about 7.5 m wide.
-const SCALE: f32 = 1.0 / 256.0;
-// ponytail: guessed so a car is ~4 m long; take the real factor from the vehicle transform (FUN_03004018 callers).
+/// Raw city units to metres. All 15 car models measure ~48 model units per real-world metre on every axis;
+/// with the vehicle factor below that makes the city 192 units per metre (streets ~10 m, facades ~13 m).
+const SCALE: f32 = 1.0 / 192.0;
+// ponytail: ×4 (a 2-bit shift) is the most plausible engine factor for model units; confirm in the matrix
+// setup that fills world +0xFC (FUN_0814e8b4 and friends).
 const CAR_SCALE: f32 = 4.0;
 
 /// Raw space (x right, y down, z forward) to Bevy (y up, -z forward): a 180° turn about x, no mirroring.
@@ -60,6 +62,29 @@ impl Tris {
         m.compute_flat_normals();
         m
     }
+}
+
+/// Model polygons fan-triangulated, in metres, with atlas UVs when the model is textured.
+fn model_tris(m: &rom::Model, atlas: Option<&rom::Texture>, color: Color) -> Tris {
+    let mut t = Tris::default();
+    for p in &m.polys {
+        let pts: Vec<(Vec3, Vec2)> = p
+            .verts
+            .iter()
+            .zip(&p.uvs)
+            .map(|(&k, &uv)| {
+                let [x, y, z] = m.verts[k as usize];
+                // UVs are 1.15 fixed point, 32768 = the whole texture (checked by overlaying them on the atlas).
+                let uv = match atlas {
+                    Some(_) if m.flags & 1 != 0 => Vec2::from(m.uvs[uv as usize].map(|c| c as f32 / 32768.0)),
+                    _ => Vec2::ZERO,
+                };
+                (world(x, y, z) * CAR_SCALE, uv)
+            })
+            .collect();
+        t.fan(&pts, color);
+    }
+    t
 }
 
 /// 8bpp texture through the palette to RGBA, repeating and unfiltered like the original.
@@ -141,23 +166,39 @@ fn setup(
         commands.spawn((Mesh3d(meshes.add(tris.mesh())), MeshMaterial3d(material)));
     }
 
-    // Vehicle bank as a showroom grid in front of the city, 12 per row (untextured for now).
-    let flat = materials.add(StandardMaterial { double_sided: true, cull_mode: None, perceptual_roughness: 1.0, ..default() });
-    let showroom = Vec3::new(center.x - 44.0, 0.0, max.z + 30.0);
-    for (i, m) in rom::models(&data).iter().enumerate() {
-        let mut t = Tris::default();
-        let color = Color::hsl((i as f32 * 57.0) % 360.0, 0.6, 0.5);
-        for p in &m.polys {
-            let pts: Vec<(Vec3, Vec2)> = p
-                .verts
-                .iter()
-                .map(|&k| m.verts[k as usize])
-                .map(|[x, y, z]| (world(x, y, z) * CAR_SCALE, Vec2::ZERO))
-                .collect();
-            t.fan(&pts, color);
+    // Showroom in front of the city: one row per car, its paint variants side by side, textured with the
+    // car's atlas and a paint preset (the race generates the real paint ramp at runtime).
+    let models = rom::models(&data);
+    let vehicle_textures = rom::vehicle_textures(&data);
+    let paints = rom::paint_palettes(&data);
+    let on_ground = |t: &Tris| -t.pos.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+    let showroom = Vec3::new(center.x - 12.0, 0.0, max.z + 20.0);
+    let mut car_models = std::collections::HashSet::new();
+    for (c, car) in rom::cars(&data).iter().enumerate() {
+        car_models.extend(car.models);
+        for v in 0..car.paint_variants {
+            let atlas = &vehicle_textures[car.first_material + v];
+            let tris = model_tris(&models[car.models[0]], Some(atlas), Color::WHITE);
+            let at = showroom + Vec3::new(v as f32 * 6.0, on_ground(&tris), c as f32 * 7.0);
+            let material = materials.add(StandardMaterial {
+                base_color_texture: Some(images.add(image(atlas, &paints[(3 * c + v) % 19]))),
+                unlit: true,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            });
+            commands.spawn((Mesh3d(meshes.add(tris.mesh())), MeshMaterial3d(material), Transform::from_translation(at)));
         }
-        let at = showroom + Vec3::new((i % 12) as f32 * 8.0, 0.0, (i / 12) as f32 * 8.0);
-        commands.spawn((Mesh3d(meshes.add(t.mesh())), MeshMaterial3d(flat.clone()), Transform::from_translation(at)));
+        info!("showroom row {c}: {} ({} paint variants)", car.name, car.paint_variants);
+    }
+    info!("showroom at {showroom:.1} m (rows of cars along +z, paint variants along +x)");
+    // Everything else in the bank (lower-detail car models, spoilers, traffic, markers) untextured, 12 per row.
+    let flat = materials.add(StandardMaterial { double_sided: true, cull_mode: None, perceptual_roughness: 1.0, ..default() });
+    let others = showroom + Vec3::new(30.0, 0.0, 0.0);
+    for (n, (i, m)) in models.iter().enumerate().filter(|(i, _)| !car_models.contains(i)).enumerate() {
+        let tris = model_tris(m, None, Color::hsl((i as f32 * 57.0) % 360.0, 0.6, 0.5));
+        let at = others + Vec3::new((n % 12) as f32 * 6.0, on_ground(&tris), (n / 12) as f32 * 7.0);
+        commands.spawn((Mesh3d(meshes.add(tris.mesh())), MeshMaterial3d(flat.clone()), Transform::from_translation(at)));
     }
 
     commands.spawn((DirectionalLight { illuminance: 6000.0, ..default() }, Transform::default().looking_to(Vec3::new(-0.4, -1.0, -0.3), Vec3::Y)));

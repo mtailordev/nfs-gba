@@ -17,7 +17,7 @@
 | `+0x38` | `+0x80` | `0x461A5C` | **vertices**: 3,933 × `int16 x, y, z` (6 B) |
 | `+0x3C` | `+0x84` | `0x46768C` | **vertex indices**: `u16`, 4 slots reserved per polygon |
 | `+0x40` | `+0x88` | `0x46E4DC` | **UV indices**: `u16`, parallel to the vertex indices |
-| `+0x44`, `+0x48` | `+0x8C`, `+0x90` | `0x47532C` | **UVs**: 4,651 × `u16 u, u16 v`. **Hypothesis:** 8.8 fixed-point texels |
+| `+0x44`, `+0x48` | `+0x8C`, `+0x90` | `0x47532C` | **UVs**: 4,651 × `u16 u, u16 v`, 1.15 fixed point (32,768 = whole texture) |
 | `+0x4C`, `+0x54` | `+0x94`, `+0x9C` | `0x479BD8` | **polygon sizes**: 1 byte per polygon (3 or 4) |
 | `+0x50` | `+0x98` | `0x47A9A4` | unknown, 276 bytes, possibly shading data |
 
@@ -43,28 +43,54 @@
 - **Polygon loop** (`FUN_03004190`): for each polygon it reads its size byte n, then n vertex indices and n UV indices. It culls back faces with a 2D cross product on the first three projected vertices, then rasterises with `FUN_03003808` (texture = the per-object atlas). Indices advance by n, so triangles leave their 4th reserved slot unused, and those slots hold junk at the end of a model's range.
 - **Up direction:** `-y` is up (roofs sit at about `y = -23`).
 
-## Contents
+## Textures
 
-Checked by rendering all 102 models as wireframes:
-- **0–52:** player/opponent cars, mostly in LOD groups of three (e.g. 0/1/2 = 89/63/36 vertices), interleaved with their spoilers.
-- **53–82:** about 30 aftermarket spoiler variants.
-- **83–88:** traffic vehicles (a box truck/bus, a van, sedans).
-- **89–101:** small pieces: markers, arrows, flat quads (shadows or effects, unverified).
+- **Vehicle materials:** level record `+0x20` → world `+0x24` → `0x45F5C0`. There are 146 self-indexed records of 0x24 bytes, in the city material layout.
+- **Texel pointer:** world `+0x04` (record `+0x0C` = `0x370550`) + material `+0x08`. Most materials are **BIOS-LZ77 blobs** (size = w×h + 8), which the game unpacks to RAM (entity `+0x84`). The 36 materials of 128×100 are not LZ77 (format unknown).
+- **Material sizes:** 0 is 16×16; **1–45 are the car atlases (256×200)**; 46–60 are 40×40; the rest are odd sizes (decals? UI?).
+- **Atlas colours:** atlases use indices 0–31. The game loads pixel `i` into palette slot `192 + (i ^ 16)` (verified against the race RAM). So atlas 0–15 is the **body**: a paint ramp that the game **generates at runtime** from the chosen colour (the reference race's red ramp is in no ROM table). Atlas 16–31 holds glass, lights and trim.
+- **Paint presets:** `0x7E6EEC` holds 20 × 0x80-byte entries whose first 32 colours have the same layout (entries 16–31 paint, 0–15 trim). **Hypothesis:** paint-shop presets. The viewer uses them as stand-ins.
+- **UVs:** `u16 u, u16 v` in **1.15 fixed point, 32,768 = the whole texture**. **Verified:** the Cobalt's polygon UVs, drawn over its atlas, land on the top, front, rear and side views.
+- **Choosing a material:** `FUN_03001cf0` computes it per entity: `world[9] + (entity[+0x48] + optional LOD step + entity[+0x46] + entity[+0x44] >> 8) × 0x24`.
 
-## Textures (partly known)
+## Car table (verified)
 
-- **Vehicle materials:** level record `+0x20` → world `+0x24` → `0x45F5C0`. Records are 0x24 bytes, self-indexed, in the same layout as the city materials.
-- **Texel pointer:** world `+0x04` (record `+0x0C` = `0x370550`) + material `+0x08`. It points at **BIOS-LZ77 blobs**, which the game unpacks to RAM (entity `+0x84`).
-- **Materials 1–45:** the 45 car atlases, 256×200. They use palette indices 0–31 only, so each car has a 32-colour palette (the source isn't found yet).
-- **Materials 46 onwards:** 40×40 textures (small parts, maybe spoilers).
-- **Material `+0x04`** holds an RGB888-like grey (`0xB0B4B0`, `0x686C68`, …). **Hypothesis:** the default paint shade.
-- **Paint variants:** atlases with near-identical LZ77 headers come in runs of 2–4, i.e. about 15 car types × paint variants.
-- **Choosing a material:** `FUN_03001cf0` computes it per entity as `material = world[9] + (entity[+0x48] + optional LOD step + entity[+0x46] + entity[+0x44] >> 8) × 0x24`. The model does not store it.
-- **UVs:** `u16 u, u16 v`. **Hypothesis:** 8.8 fixed-point texels into the 256×200 atlas (e.g. `0x5780, 0x41FF` gives 87.5, 66.0).
+`0x7F0BD8` holds 15 × 0x58-byte records (read by the race init `FUN_081397d8` via `DAT_08139b64`). In the reference race, the player's Chevy Cobalt SS had entity `+0x48` = 8, its first material.
+
+| Offset | Meaning |
+|---|---|
+| `+0x00` | text key of the car name (`TEXT_CARNAME1…15`, keys 183–197) |
+| `+0x04` | car index |
+| `+0x0C` | u16 first atlas material. The paint variants follow; a car's run ends at the next car's first material |
+| `+0x10` | u16 low-detail model |
+| `+0x14` | u16 medium-detail model. The high-detail model is `+0x14 − 1` |
+| `+0x48…+0x57` | per-car values (performance tier? `+0x48` = 12–16), unverified |
+
+| # | Car | Models | Atlases |
+|---|---|---|---|
+| 0 | Mazda RX-7 | 0–2 | 1–3 |
+| 1 | VW Golf GTI | 5–7 | 4–7 |
+| 2 | Chevy Cobalt SS | 8–10 | 8–11 |
+| 3 | Mitsubishi Eclipse GT | 13–15 | 12–14 |
+| 4 | Audi TT 3.2 quattro | 16–18 | 15–17 |
+| 5 | Ford Mustang GT | 21–23 | 18–20 |
+| 6 | Mazda RX-8 | 26–28 | 21–23 |
+| 7 | Subaru Impreza WRX STi | 29–31 | 24–27 |
+| 8 | Mitsubishi Lancer EVOLUTION IX | 34–36 | 28–31 |
+| 9 | Toyota MR2 | 39–41 | 32–34 |
+| 10 | Porsche Carrera GT | 44–46 | 35–36 |
+| 11 | Toyota Supra | 47–49 | 37–39 |
+| 12 | Ford GT | 52–54 | 40–41 |
+| 13 | Mercedes-Benz SL65 AMG | 55–57 | 42–43 |
+| 14 | Aston Martin DB9 | 58–60 | 44–45 |
+
+Models between and after the car triplets (3–4, 11–12, 19–20, …, 61–82) are spoilers. 83–88 are traffic vehicles, and 89–101 are small markers and effects.
+
+## Scale
+
+All 15 high-detail models measure about 48 model units per real-world metre on all three axes (checked against manufacturer lengths, widths and heights). **Hypothesis:** the engine scales models by ×4, a 2-bit shift, which makes the city 192 units per metre. The matrix setup that fills world `+0xFC` (`FUN_0814e8b4` and others) would confirm it.
 
 ## Open
 
-- **Which model and atlas make up each car:** needs the car-definition table that fills entity `+0x44…+0x48`. Also where the 32-colour car palettes live (maybe the 128-byte palette table at `0x7E6EEC`).
-- The exact UV scale and what model `+0x98` does.
-- The flag bits other than bit 0.
-- **The city geometry is not in this bank.** It is drawn by other IWRAM routines (`FUN_030013ac` and `FUN_03000b44` are the candidates, both called from the scene routine `FUN_0300224c`).
+- The 36 non-LZ77 128×100 materials, and what the small odd-sized materials are for.
+- The runtime paint-ramp generator, and what model `+0x98` and the flag bits other than bit 0 do.

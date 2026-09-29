@@ -44,6 +44,122 @@ pub fn canonical_rom() -> io::Result<Vec<u8>> {
     fs::read(dir.join(rom))
 }
 
+/// GBA BIOS LZ77 (type 0x10) at `at`. The size field claims 8 bytes more than the stream encodes
+/// (`docs/formats/lz77-images.md`), so only `size - 8` bytes are decoded and returned.
+pub fn lz77(rom: &[u8], at: usize) -> Vec<u8> {
+    let size = (u32_at(rom, at) >> 8) as usize - 8;
+    let (mut out, mut i) = (Vec::with_capacity(size), at + 4);
+    while out.len() < size {
+        let flags = rom[i];
+        i += 1;
+        for bit in 0..8 {
+            if out.len() >= size {
+                break;
+            }
+            if flags & (0x80 >> bit) != 0 {
+                let (n, back) = ((rom[i] >> 4) as usize + 3, ((rom[i] as usize & 0xF) << 8 | rom[i + 1] as usize) + 1);
+                i += 2;
+                for _ in 0..n {
+                    out.push(out[out.len() - back]);
+                }
+            } else {
+                out.push(rom[i]);
+                i += 1;
+            }
+        }
+    }
+    out.truncate(size);
+    out
+}
+
+/// NUL-terminated string `key` in language `lang` (0 En, 1 Fr, 2 De, 3 It, 4 Es) from the text table at
+/// `0x7E86A0`; `lang = None` gives the key name itself (`docs/formats/text-table.md`).
+pub fn text(rom: &[u8], key: usize, lang: Option<usize>) -> String {
+    const TABLE: usize = 0x7E_86A0;
+    const KEYS: usize = 977;
+    let at = ptr(rom, TABLE + 4 * lang.map_or(key, |l| KEYS * (l + 1) + key));
+    let end = rom[at..].iter().position(|&b| b == 0).map_or(rom.len(), |n| at + n);
+    rom[at..end].iter().map(|&b| b as char).collect() // 8-bit, Latin-1 as far as seen
+}
+
+/// A car from the car table at `0x7F0BD8` (15 × 0x58 bytes).
+#[derive(Debug, Clone)]
+pub struct Car {
+    pub name: String,
+    /// First vehicle material (atlas); the car's paint variants follow it.
+    pub first_material: usize,
+    pub paint_variants: usize,
+    /// Model-bank indices for high, medium and low detail.
+    pub models: [usize; 3],
+}
+
+pub fn cars(rom: &[u8]) -> Vec<Car> {
+    const TABLE: usize = 0x7F_0BD8;
+    let rec = |i: usize| TABLE + 0x58 * i;
+    let n = (0..).take_while(|&i| u32_at(rom, rec(i) + 4) as usize == i).count();
+    let materials = ptr(rom, LEVEL_TABLE + 0x20);
+    let size = |m: usize| u32_at(rom, materials + 0x24 * m + 0x0C); // width and height together
+    (0..n)
+        .map(|i| {
+            let first = u16_at(rom, rec(i) + 0x0C) as usize;
+            let next = if i + 1 < n { u16_at(rom, rec(i + 1) + 0x0C) as usize } else { vehicle_material_count(rom) };
+            // The last car's variants end where the atlas size changes (small 40×40 textures follow).
+            let variants = (first..next).take_while(|&m| size(m) == size(first)).count();
+            let mid = u16_at(rom, rec(i) + 0x14) as usize;
+            Car {
+                name: text(rom, u32_at(rom, rec(i)) as usize, Some(0)),
+                first_material: first,
+                paint_variants: variants,
+                models: [mid - 1, mid, u16_at(rom, rec(i) + 0x10) as usize],
+            }
+        })
+        .collect()
+}
+
+fn vehicle_material_count(rom: &[u8]) -> usize {
+    let materials = ptr(rom, LEVEL_TABLE + 0x20);
+    (0..).take_while(|&i| u16_at(rom, materials + 0x24 * i) as usize == i).count()
+}
+
+/// Vehicle materials (level record `+0x20`, same layout as city materials). Texels are BIOS-LZ77 blobs at
+/// level record `+0x0C` + material `+0x08`, 5-bit indices into a car palette (`paint_palettes`).
+pub fn vehicle_textures(rom: &[u8]) -> Vec<Texture> {
+    let (materials, base) = (ptr(rom, LEVEL_TABLE + 0x20), ptr(rom, LEVEL_TABLE + 0x0C));
+    (0..vehicle_material_count(rom))
+        .map(|i| {
+            let m = materials + 0x24 * i;
+            let (width, height) = (u16_at(rom, m + 0x0C) as usize, u16_at(rom, m + 0x0E) as usize);
+            let at = base + u32_at(rom, m + 8) as usize;
+            // Most are LZ77 with size w*h + 8; the 36 128×100 materials are not (format unknown, read raw).
+            let mut pixels = if rom[at] == 0x10 && (u32_at(rom, at) >> 8) as usize == width * height + 8 {
+                lz77(rom, at)
+            } else {
+                rom[at..at + width * height].to_vec()
+            };
+            pixels.resize(width * height, 0);
+            Texture { width, height, pixels }
+        })
+        .collect()
+}
+
+/// The 20 paint presets at `0x7E6EEC` (0x80 apart), as 32-colour RGBA palettes indexed by atlas pixel value.
+/// The game loads a car's atlas pixel `i` as colour `i ^ 16`: 0..15 are the body (paint ramp, preset entries
+/// 16..31), 16..31 glass, lights and trim (entries 0..15). In a race the paint ramp is generated at runtime
+/// from the chosen colour, so these presets are only a stand-in (hypothesis: paint-shop presets).
+pub fn paint_palettes(rom: &[u8]) -> Vec<Vec<[u8; 4]>> {
+    (0..20)
+        .map(|k| {
+            (0..32)
+                .map(|i| {
+                    let c = u16_at(rom, 0x7E_6EEC + 0x80 * k + 2 * (i ^ 16));
+                    let channel = |shift: u16| (((c >> shift) & 31) * 255 / 31) as u8;
+                    [channel(0), channel(5), channel(10), 255]
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// One edge of a sector: from this wall's point to the next wall's point (the last wraps to the first).
 #[derive(Debug, Clone)]
 pub struct Wall {
@@ -225,6 +341,24 @@ mod tests {
             assert!(s.walls.iter().all(|w| (w.material as usize) < textures.len()));
         }
         assert_eq!(city_palette(&rom)[0][3], 0);
+    }
+
+    #[test]
+    fn car_table_names_models_and_atlases() {
+        let Some(rom) = rom() else { return };
+        let cars = cars(&rom);
+        assert_eq!(cars.len(), 15);
+        assert_eq!(cars[2].name, "Chevy Cobalt SS"); // the player's car in the reference race
+        assert_eq!((cars[2].first_material, cars[2].models), (8, [8, 9, 10]));
+        assert_eq!(cars.iter().map(|c| c.paint_variants).sum::<usize>(), 45);
+        let textures = vehicle_textures(&rom);
+        for c in &cars {
+            for m in c.first_material..c.first_material + c.paint_variants {
+                let t = &textures[m];
+                assert_eq!((t.width, t.height), (256, 200), "{}", c.name);
+                assert!(t.pixels.iter().all(|&p| p < 32), "{}: atlas uses more than 32 colours", c.name);
+            }
+        }
     }
 
     #[test]
