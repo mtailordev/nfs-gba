@@ -87,7 +87,7 @@ KIND_SCREENS = {  # kind name -> (index in KIND_HANDLERS, screens)
     "intro": (6, [21, 22, 23, 24, 25, 26, 37, 47, 48]), "kind38": (7, [38, 39, 40, 41, 42, 43]),
 }
 # Ported handlers: every exit (each is only `FUN_081372D8(world)`), the intro kind and those listed per kind.
-PORTED_KINDS = ["intro", "kind7"]
+PORTED_KINDS = ["intro", "kind7", "event"]
 PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
@@ -103,6 +103,7 @@ STUBS.update({
     0x081364C4: 1, 0x08141578: 6, 0x08136E60: 4, 0x08136D74: 4, 0x08141B40: 7, 0x0812BD60: 3,  # drawing primitives
     0x081372D8: 1,  # scene teardown (every exit handler)
     0x08143284: 0, 0x081435C4: 0,  # map screens: zone colours, map draw
+    0x08141C88: 7,  # text box (font, key or pointer, x, y, width, lines, colour)
 })
 STACK_TEXT = (0x0300_7000, 0x0300_7C00)  # stub pointer arguments in here are the game's stack strings
 MENU_FRAME, GAME_STATE_STEP, MAIN_FRAME, GOTO_SCREEN = 0x0812B5F0, 0x0812ACEC, 0x0812AE64, 0x0812BB5C
@@ -291,6 +292,24 @@ def kind_extra(rng, kind):
             (PROFILE_AT + 0x404, bytes([pick([0, 0, 1, 2, 3, 4])])),
             (PROFILE_AT + 0x1FB, bytes([rng.randrange(8)])),
         ]
+    if kind in ("event", "career"):
+        zone = rng.randrange(6)
+        cursors = bytes(rng.randrange(6 if z == 5 else 12) for z in range(6))
+        return [
+            (PROFILE_AT + 0x1FB, bytes([zone])),
+            (PROFILE_AT + 0x388, cursors),
+            (PROFILE_AT + 0x205, bytes(pick([0, 0x55, 0xAA, 0xFF, rng.randrange(256)]) for _ in range(18))),
+            (PROFILE_AT + 0x1F8, bytes([pick([0, 0, 1, 2, 3]), rng.randrange(0x19), rng.randrange(256)])),
+            (PROFILE_AT + 0x1FC, bytes([rng.randrange(256)])),
+            (PROFILE_AT + 0x450, bytes(rng.randrange(256) for _ in range(4))),
+            (PROFILE_AT + 0x12, struct.pack("<H", pick([0, 1]))),
+            (PROFILE_AT + 0x218, bytes(rng.randrange(256) for _ in range(48))),
+            (0x03000070, word(rng.randrange(1 << 32))),
+            (0x030056E0, word(pick([0, 1, 2, 3, 40]))),
+            (0x030053BC, word(rng.randrange(1 << 32))),
+            (0x03000060, word(rng.randrange(4))),
+            (0x030064C0, struct.pack("<H", pick([0, 1, 1, 1, 0x200, 0x10, 0x20, 0x40, 0x80, 0x30, 0xC0, 3]))),
+        ]
     return []
 
 
@@ -313,6 +332,10 @@ def kind_cases(rng, kind, n):
 
 def kind7(_gba, rng, n=1600):
     return kind_cases(rng, "kind7", n)
+
+
+def event(_gba, rng, n=1600):
+    return kind_cases(rng, "event", n)
 
 
 def main(which):

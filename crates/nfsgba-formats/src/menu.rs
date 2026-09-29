@@ -269,6 +269,9 @@ pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
         (Kind::Kind7, 0) => kind7_enter(g),
         (Kind::Kind7, 1) => kind7_update(g),
         (Kind::Kind7, 2) => kind7_draw(g, full),
+        (Kind::Event, 0) => event_enter(g),
+        (Kind::Event, 1) => event_update(g),
+        (Kind::Event, 2) => event_draw(g, full),
         // Every kind's exit handler (`0x08132780`, `0x0812E850`, …) is only this call: the menu scene's teardown.
         (_, 3) => g.unported(SCENE_EXIT, &[WORLD]),
         _ => g.unported(kind.handlers()[phase], args),
@@ -328,7 +331,7 @@ fn fill_bg_palette(g: &mut Gba, start: u32, colour: u16, count: u16) {
 fn scale_obj_palette(g: &mut Gba, src: u32, k: [u32; 3], first: u32, n: u32) {
     for i in first..first + n {
         let c = g.u16(src + 2 * i) as u32;
-        let [r, gr, b] = [0, 5, 10].map(|s| (((c >> s) & 0x1F) * k[s as usize / 5] >> 8).min(0x1F));
+        let [r, gr, b] = [0, 5, 10].map(|s| ((((c >> s) & 0x1F) * k[s as usize / 5]) >> 8).min(0x1F));
         g.set_u16(0x0500_0200 + 2 * i, (b << 10 | gr << 5 | r) as u16);
     }
 }
@@ -1136,6 +1139,419 @@ pub fn kind7_draw(g: &mut Gba, _full: u32) -> u32 {
     0
 }
 
+// Helpers the career screens share.
+
+const TEXT_BOX: u32 = 0x0814_1C88; // (font, text key or pointer, x, y, width, lines, colour)
+const INTRO_PAGE_SETUP: u32 = 0x0813_64C4; // (unpack buffer): clears the page
+const DIVIDEND_REMAINDER: u32 = 0x0300_6480;
+
+/// The IWRAM divide routine (`call_via_r3(n, d, 0x03006480, *0x03006494)`, see `hud::divmod`): the quotient,
+/// with the remainder stored at `0x03006480`.
+fn iwram_div(g: &mut Gba, n: i32, d: i32) -> i32 {
+    let (q, r) = crate::hud::divmod(n, d);
+    g.set_u32(DIVIDEND_REMAINDER, r as u32);
+    q
+}
+
+/// `FUN_081633CC` (buffer, n): `n` in decimal, a leading '-' when negative, digits from the millions down with
+/// leading zeros dropped (a quotient above 9 prints as the character after '9').
+fn number_text(g: &mut Gba, n: i32) -> Vec<u8> {
+    let mut s = Vec::new();
+    let mut n = n;
+    if n < 0 {
+        s.push(b'-');
+        n = n.wrapping_neg();
+    }
+    if n < 10 {
+        s.push(n as u8 + b'0');
+        return s;
+    }
+    let (mut d, mut leading) = (1_000_000, true);
+    for _ in 0..7 {
+        let q = iwram_div(g, n, d);
+        if q != 0 || !leading {
+            leading = false;
+            s.push((q as u8).wrapping_add(b'0'));
+        }
+        n = g.i32(DIVIDEND_REMAINDER);
+        d = crate::div(d, 10);
+    }
+    s
+}
+
+/// `FUN_0812D62C` (text, n): a thousands separator for `n` above 999 in French (a space) and German and Italian
+/// (a dot), inserted `digits − 3` from the left of the text `number_text` made.
+fn thousands(g: &Gba, s: &mut Vec<u8>, n: i32) {
+    let lang = g.u32(LANGUAGE);
+    if lang == 0 || lang == 4 || n <= 999 {
+        return;
+    }
+    let sep = if lang == 1 { b' ' } else { b'.' };
+    // NOT 1:1 (unreachable): above 999,999 the game uses a stale register as the position.
+    let pos = match n {
+        1_000..=9_999 => 1,
+        10_000..=99_999 => 2,
+        100_000..=999_999 => 3,
+        _ => return,
+    };
+    s.resize(s.len().max(pos + 5), 0);
+    let mut i = pos + 4;
+    while pos < i {
+        s[i] = s[i - 1];
+        i -= 1;
+    }
+    s[i] = sep;
+    s.truncate(s.iter().position(|&b| b == 0).unwrap_or(s.len()));
+}
+
+/// `FUN_0812FC00` (text, centiseconds): `FUN_08162FC0`'s "mm:ss:cc" (|t| capped at 0x57E3F), then the last colon
+/// becomes a dot in French, German and Spanish, a comma in Italian.
+fn time_text(g: &mut Gba, cs: i32) -> Vec<u8> {
+    let n = cs.unsigned_abs().min(0x57E3F) as i32;
+    let secs = iwram_div(g, n, 100);
+    let hundredths = g.i32(DIVIDEND_REMAINDER);
+    let mins = iwram_div(g, secs, 0x3C);
+    let secs = g.i32(DIVIDEND_REMAINDER);
+    let mut s = Vec::new();
+    for (i, v) in [mins, secs, hundredths].into_iter().enumerate() {
+        let tens = iwram_div(g, v, 10);
+        s.push((tens as u8).wrapping_add(b'0'));
+        s.push((g.i32(DIVIDEND_REMAINDER) as u8).wrapping_add(b'0'));
+        if i < 2 {
+            s.push(b':');
+        }
+    }
+    match g.u32(LANGUAGE) {
+        3 => s[5] = b',',
+        1 | 2 | 4 => s[5] = b'.',
+        _ => {}
+    }
+    s
+}
+
+/// `frames_to_centiseconds` (`0x08142F74`).
+fn frames_to_centiseconds(frames: i32) -> i32 {
+    crate::div(frames.wrapping_mul(100), 0x3C)
+}
+
+/// `event_status` (`0x08135D4C`): the 2-bit status of career event `n` (profile `+0x205`; 1 won, 2 second, 3 not
+/// done).
+fn event_status(g: &Gba, n: i32) -> u32 {
+    (g.u8(g.u32(PROFILE).wrapping_add(0x205).wrapping_add((n >> 2) as u32)) as u32 >> ((n & 3) * 2)) & 3
+}
+
+/// `zone_ladder_index` (`0x0812FC34`): zone·12 plus the zone's events with status 1 or 2 (6 events in zone 5).
+fn zone_ladder_index(g: &Gba, zone: i32) -> i32 {
+    let n = if zone == 5 { 6 } else { 12 };
+    zone * 12
+        + (0..n)
+            .filter(|&e| matches!(event_status(g, zone * 12 + e), 1 | 2))
+            .count() as i32
+}
+
+/// `style_rating` (`0x0812C30C`) of the career car (profile `+0x10`, its 17-byte record at `*0x0300539C`):
+/// [`crate::career::style_rating`].
+fn career_style_rating(g: &Gba) -> i32 {
+    let car = g.i8(g.u32(PROFILE) + 0x10) as i32;
+    let at = g.u32(0x0300_539C).wrapping_add((car * 0x11) as u32);
+    let record: [u8; 17] = std::array::from_fn(|i| g.u8(at + i as u32));
+    crate::career::style_rating(&g.rom[..], car as usize, &record)
+}
+
+const ZONE: u32 = 0x1FB; // profile: the career zone 0..=5
+const EVENT_CURSOR: u32 = 0x388; // profile + zone: the event cursor per zone
+
+/// `career_event_to_globals` (`0x0812DA08`): the selected event ([`crate::career::events`]) into the race
+/// globals, and its slot into profile `+0x1FC`.
+fn career_event_to_globals(g: &mut Gba) {
+    let profile = g.u32(PROFILE);
+    let zone = g.u8(profile + ZONE) as i32;
+    let slot = g.i8(profile + EVENT_CURSOR + zone as u32) as i32;
+    let e = crate::career::events(&g.rom[..])[(zone * 12 + slot) as usize];
+    g.set_u32(0x0300_00BC, e.skill as u32);
+    g.set_u32(0x0300_5608, e.difficulty() as u32);
+    g.set_u32(0x0300_56E4, e.laps as u32);
+    g.set_u32(0x0300_5604, e.traffic as u32);
+    g.set_u32(0x0300_56E0, e.mode as u32);
+    g.set_u32(REVERSE, e.reverse as u32);
+    g.set_u32(ROUTE, g.u16(0x087E_4A72 + 4 * e.track_slot() as u32) as u32);
+    g.set_u32(PLAYER_CAR, g.i8(profile + 0x10) as i32 as u32);
+    let at = 0x0300_538Cu32.wrapping_add(g.u32(0x0300_0060));
+    g.set_u8(at, g.u32(0x0300_53BC) as u8);
+    let p = g.u32(PROFILE);
+    g.set_u8(p + 0x1FC, g.u8(p + EVENT_CURSOR + g.u8(p + ZONE) as u32));
+}
+
+/// `FUN_0812CF48` (screen, event): 1 when a career hint is due before going to `screen` (the hint screen 0x28):
+/// the hints seen so far (profile `+0x1F8` + `+0x1F9`) pick the next one, per zone, by the screen it comes before
+/// and conditions on the event, the car record bits (`+0x450…+0x453`) and the race mode. Clears `+0x1FA`.
+fn hint_due(g: &mut Gba, screen: i32, event: i32) -> u32 {
+    let p = g.u32(PROFILE);
+    let n = g.u8(p + 0x1F8) as i32 + g.u8(p + 0x1F9) as i32;
+    g.set_u8(p + 0x1FA, 0);
+    if g.u32(CAREER) == 0 {
+        return 0;
+    }
+    let z = g.u8(p + ZONE);
+    let bit = |g: &Gba, off: u32, b: u32| (g.u8(p + off) as u32 >> b) & 1 != 0;
+    let boss = |g: &Gba, off: u32, k: u32| {
+        g.u8(p + 0x1FC) as u32 == (g.u16(0x087E_4714 + off) as i16 as i32 as u32).wrapping_sub(k)
+    };
+    let is = |k: i32, s: i32| n == k && screen == s;
+    let mode = g.u32(0x0300_56E0) & 0xFF;
+    let fine = (screen != 10 || g.u32(0x0300_0070).checked_shr(mode).unwrap_or(0) & 1 != 0)
+        && (z != 0
+            || !(is(0, 3)
+                || is(1, 0xD)
+                || is(2, 0xD)
+                || is(3, 6)
+                || (g.u16(p + 0x12) == 0 && screen == 0xD)
+                || (is(4, 6) && bit(g, 0x450, 5))))
+        && (z != 1
+            || !(is(5, 0x2D)
+                || is(6, 6)
+                || (is(7, 0x2D) && event_status(g, event) == 3)
+                || (is(8, 0x2D) && boss(g, 4, 0xC))
+                || (is(9, 6) && bit(g, 0x450, 1))))
+        && (z != 2 || !(is(10, 0xD) || (is(0xB, 0x2D) && boss(g, 10, 0x18)) || (is(0xC, 6) && bit(g, 0x450, 2))))
+        && (z != 3
+            || !(is(0xD, 0x2D)
+                || is(0xE, 6)
+                || is(0xF, 0x2D)
+                || (is(0x10, 0x2D) && boss(g, 0xC, 0x24))
+                || (is(0x11, 0x2D) && boss(g, 0xE, 0x24))
+                || (is(0x12, 6) && bit(g, 0x450, 3))))
+        && (z != 4
+            || !((is(0x13, 6) && bit(g, 0x451, 1))
+                || (is(0x14, 0x2D) && boss(g, 0x12, 0x30))
+                || (is(0x15, 6) && bit(g, 0x450, 4))))
+        && (z != 5 || !(is(0x16, 0xD) || (is(0x17, 6) && bit(g, 0x453, 4))));
+    (!fine) as u32
+}
+
+// The career event screen (Event: screen 13), page `0x7E5090`.
+const EVENT_PAGE: u32 = 0x087E_5090;
+
+/// `career_event_enter` (`0x0812E308`): the page's background (`+6`, palette `+8`); career mode on.
+pub fn event_enter(g: &mut Gba) -> u32 {
+    let page = if g.u32(SCREEN) == 0xD { EVENT_PAGE } else { 0 };
+    let (m, p) = (
+        g.u16(page + 6) as i16 as i32 as u32,
+        g.u16(page + 8) as i16 as i32 as u32,
+    );
+    menu_scene_setup(g, m, p, 0xFFFF);
+    g.set_u32(CAREER, 1);
+    0 // returns nothing (r0 is the last call's)
+}
+
+/// `career_event_update` (`0x0812DAFC`): the cursor over the zone's 12 events (6 in zone 5) in rows of 3;
+/// SELECT opens the district map (0xE, profile `+0x404` 1); A on an open event (boss races need their unlock,
+/// events past 0x3C their predecessor won) sets the race up, then shows a due hint (0x28) or goes on.
+pub fn event_update(g: &mut Gba) -> u32 {
+    let page = if g.u32(SCREEN) == 0xD { EVENT_PAGE } else { 0 };
+    let items = g.u32(page + 0x10);
+    let profile = g.u32(PROFILE);
+    let count: i32 = if g.u8(profile + ZONE) == 5 { 6 } else { 12 };
+    if g.u16(KEYS) & 0x200 != 0 {
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+        goto_screen(g, 0xE);
+        g.set_u8(g.u32(PROFILE) + 0x404, 1);
+        mark_screen_changed(g);
+    }
+    let cursor = |g: &Gba| g.u32(PROFILE) + EVENT_CURSOR + g.u8(g.u32(PROFILE) + ZONE) as u32;
+    let add = |g: &mut Gba, v: i32| {
+        let c = cursor(g);
+        g.set_u8(c, (g.i8(c) as i32 + v) as u8);
+    };
+    if g.u16(KEYS) & 0x20 != 0 {
+        let c = cursor(g);
+        if g.u8(c) == 0 {
+            g.set_u8(c, count as u8);
+        }
+        add(g, -1);
+    }
+    if g.u16(KEYS) & 0x10 != 0 {
+        add(g, 1);
+        let c = cursor(g);
+        if count <= g.i8(c) as i32 {
+            g.set_u8(c, 0);
+        }
+    }
+    if g.u16(KEYS) & 0x40 != 0 {
+        add(g, -3);
+        if g.i8(cursor(g)) < 0 {
+            add(g, count);
+        }
+    }
+    if g.u16(KEYS) & 0x80 != 0 {
+        add(g, 3);
+        if count - 1 < g.i8(cursor(g)) as i32 {
+            add(g, -count);
+        }
+    }
+    if g.u16(KEYS) & 0xF0 != 0 {
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+        mark_screen_changed(g);
+    }
+    if g.u16(KEYS) != 1 {
+        return 1;
+    }
+    let next = g.u16(items + 6) as i16 as i32;
+    if next != -1 {
+        let p = g.u32(PROFILE);
+        let zone = g.u8(p + ZONE) as u32;
+        let event = (zone * 12) as i32 + g.i8(p + EVENT_CURSOR + zone) as i32;
+        let locked = (g.u16(0x087E_4714 + zone * 4) as i16 as i32 == event
+            && unlock_is_locked(g, zone as i32 + 0x122) != 0)
+            || (g.u16(0x087E_4714 + (zone * 2 + 1) * 2) as i16 as i32 == event
+                && unlock_is_locked(g, g.u8(g.u32(PROFILE) + ZONE) as i32 + 0x11D) != 0)
+            || (0x3C < event && event_status(g, event - 1) != 1);
+        if locked {
+            g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
+            return 1;
+        }
+        for i in 0..4 {
+            g.set_u8(0x0300_565B - i, 0);
+        }
+        career_event_to_globals(g);
+        if hint_due(g, 0x2D, event) != 0 {
+            g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+            goto_screen(g, 0x28);
+            mark_screen_changed(g);
+            return 1;
+        }
+        goto_screen(g, next);
+        mark_screen_changed(g);
+    }
+    g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+    1
+}
+
+/// `career_event_screen` (`0x0812DD80`): the zone's event grid (4 rows of 3; 2 in zone 5) with the cursor, the
+/// boss races' lock state, the mode icons, won and second marks, then the selected event's track, mode, reward
+/// (the next win's, halved once won, times the car's style percentage) and record time.
+pub fn event_draw(g: &mut Gba, _full: u32) -> u32 {
+    let profile = g.u32(PROFILE);
+    let page = if g.u32(SCREEN) == 0xD { EVENT_PAGE } else { 0 };
+    let zone = g.u8(g.u32(PROFILE) + ZONE) as i32;
+    let cursor = g.u8(g.u32(PROFILE) + EVENT_CURSOR + zone as u32) as i32;
+    let event = zone * 12 + cursor;
+    let blit = |g: &mut Gba, m: u32, x: i32, y: i32| {
+        g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, x as u32, y as u32]);
+    };
+    g.unported(INTRO_PAGE_SETUP, &[g.u32(0x0300_57F0)]);
+    let neg1 = u32::MAX;
+    g.unported(TEXT_MENU, &[0xC, g.u16(page) as i16 as i32 as u32, 0xEC, 2, neg1, 0]);
+    let z = g.u8(g.u32(PROFILE) + ZONE) as u32;
+    g.unported(TEXT_MENU, &[0xC, z + 0x3C3, 2, 2, 0, 0]);
+    let (col, row);
+    if g.u8(g.u32(PROFILE) + ZONE) == 5 {
+        for r in 0..2 {
+            let y = r * 0x1C;
+            for c in 0..3 {
+                let (x9, x11, x7) = (8 + 0x28 * c, 0x10 + 0x28 * c, 7 + 0x28 * c);
+                let e = g.u8(g.u32(PROFILE) + ZONE) as i32 * 12 + r * 3 + c;
+                if cursor == r * 3 + c {
+                    blit(g, 0x90, x9, y + 0x36);
+                } else {
+                    blit(g, 0x8F, x9, y + 0x36);
+                    blit(g, 0x99, x7, y + 0x35);
+                }
+                if e != 0x3C && event_status(g, e - 1) != 1 {
+                    blit(g, 0xCD, x11, y + 0x38);
+                }
+                if event_status(g, e) == 1 {
+                    blit(g, 0xAB, x11, y + 0x39);
+                }
+            }
+        }
+        (col, row) = (cursor as u32 % 3, ((cursor as u32 / 3) & 0xFF) + 1);
+    } else {
+        for r in 0..4 {
+            let y = r * 0x1C;
+            for c in 0..3 {
+                let (x9, x11, x7) = (8 + 0x28 * c, 0x10 + 0x28 * c, 7 + 0x28 * c);
+                let zone = g.u8(g.u32(PROFILE) + ZONE) as u32;
+                let e = (zone * 12) as i32 + r * 3 + c;
+                let boss = [
+                    (g.u16(0x087E_4714 + zone * 4) as i16 as i32, 0x122),
+                    (g.u16(0x087E_4714 + (zone * 2 + 1) * 2) as i16 as i32, 0x11D),
+                ]
+                .into_iter()
+                .find(|&(b, _)| b == e);
+                if let Some((_, unlock)) = boss {
+                    if cursor == r * 3 + c {
+                        blit(g, 0x90, x9, y + 0x18);
+                    } else {
+                        blit(g, 0x8F, x9, y + 0x18);
+                        blit(g, 0x99, x7, y + 0x17);
+                    }
+                    let id = g.u8(g.u32(PROFILE) + ZONE) as i32 + unlock;
+                    if unlock_is_locked(g, id) == 0 {
+                        if event_status(g, e) == 1 {
+                            blit(g, 0xAB, x11, y + 0x1B);
+                        }
+                    } else {
+                        blit(g, 0xCD, x11, y + 0x1A);
+                    }
+                } else {
+                    let mode = g.i8(0x087E_4744 + 8 * e as u32 + 2) as i32;
+                    let icon = |g: &Gba, k: i32| g.u16(0x087E_5078_u32.wrapping_add((k * 2) as u32)) as u32;
+                    if cursor == r * 3 + c {
+                        blit(g, icon(g, mode + 4), x9, y + 0x18);
+                    } else {
+                        blit(g, icon(g, mode), x9, y + 0x18);
+                        blit(g, 0x99, x7, y + 0x17);
+                    }
+                    let st = event_status(g, e);
+                    if st == 1 {
+                        blit(g, 0xAB, x11, y + 0x1B);
+                    }
+                    if st == 2 {
+                        blit(g, 0xAC, x11, y + 0x1B);
+                    }
+                }
+            }
+        }
+        (col, row) = (cursor as u32 % 3, (cursor as u32 / 3) & 0xFF);
+    }
+    blit(g, 0x9B, ((col & 0xFF) * 0x28 + 3) as i32, (row * 0x1C + 0x12) as i32);
+    g.unported(TEXT_MENU, &[0xD, 0x2F1, 0xB4, 0x16, 1, 8]);
+    let rec = 0x087E_4744 + 8 * event as u32;
+    let track = g.i8(rec + 1) as i32;
+    let name = g.u16(0x087E_4A70_u32.wrapping_add((track * 4) as u32)) as u32;
+    g.unported(TEXT_BOX, &[0xD, name, 0xB4, 0x22, 0x70, 2, 0]);
+    g.unported(TEXT_MENU, &[0xD, 0x131, 0xB4, 0x3E, 1, 8]);
+    let mode = g.i8(rec + 2) as i32;
+    let mode_name = g.u16(0x087E_5070_u32.wrapping_add((mode * 2) as u32)) as u32;
+    g.unported(TEXT_MENU, &[0xD, mode_name, 0xB4, 0x4A, 1, 0]);
+    g.unported(TEXT_MENU, &[0xD, 0x196, 0xB4, 0x5A, 1, 8]);
+    let ladder = zone_ladder_index(g, g.u8(profile + ZONE) as i32);
+    let reward = if event_status(g, event) == 3 {
+        g.u16(0x087E_4744_u32.wrapping_add((ladder * 8 + 6) as u32)) as i16 as i32
+    } else {
+        (g.u16(0x087E_4744_u32.wrapping_add(((ladder - 1) * 8 + 6) as u32)) as i16 as i32) >> 1
+    };
+    let pct = crate::career::reward_percent(career_style_rating(g));
+    let cash = crate::div(pct * reward, 100);
+    let mut s = number_text(g, cash);
+    thousands(g, &mut s, cash);
+    let arg = g.text_arg(s);
+    g.unported(TEXT_MENU, &[0xE, arg, 0xB4, 0x66, 1, 0]);
+    g.unported(TEXT_MENU, &[0xD, 0x1B2, 0xB4, 0x76, 1, 8]);
+    let t = if track > 0xB { track - 0xC } else { track };
+    let record = g.u16(profile.wrapping_add((0x218 + t * 2) as u32)) as i32;
+    let s = time_text(g, frames_to_centiseconds(record));
+    let arg = g.text_arg(s);
+    g.unported(TEXT_MENU, &[0xE, arg, 0xB4, 0x82, 1, 0]);
+    let (l, r) = (
+        g.u16(page + 2) as i16 as i32 as u32,
+        g.u16(page + 4) as i16 as i32 as u32,
+    );
+    g.unported(MENU_BUTTON_PROMPTS, &[l, r, 0x1F5]);
+    0
+}
+
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
     let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
@@ -1576,6 +1992,12 @@ mod tests {
         replay("kind7");
     }
 
+    /// The career event screen (13): `tools/ui_menu_oracle.py event`.
+    #[test]
+    fn career_event_screen_matches_the_game() {
+        replay("event");
+    }
+
     const KINDS: [Kind; 8] = [
         Kind::List,
         Kind::Kind7,
@@ -1634,7 +2056,7 @@ mod tests {
                         .find_map(|&k| k.handlers().iter().position(|&h| h == a).map(|p| (k, p)))
                         .unwrap_or_else(|| panic!("{f}"));
                     let r = run_handler(&mut g, kind, phase, &[c["arg"].as_u64().unwrap() as u32]);
-                    (phase < 2).then_some(r)
+                    (phase == 1).then_some(r) // only the update's result is used (`menu_frame`)
                 }
             };
             let want: std::collections::BTreeMap<u32, u8> = c["writes"]
@@ -1651,6 +2073,7 @@ mod tests {
                 .collect();
             // Stub arguments: words, or ["s", hex] for a string the game built on its stack, which the port passes
             // as `STACK_TEXT + i` (`Gba::texts[i]`); compared by content.
+            let mut next_text = 0; // the port's strings, in the order the game passed them
             let calls: Vec<(u32, Vec<u32>)> = c["calls"]
                 .as_array()
                 .unwrap()
@@ -1659,14 +2082,15 @@ mod tests {
                     let args = k[1].as_array().unwrap().iter().map(|v| match v.as_u64() {
                         Some(w) => w as u32,
                         None => {
-                            let s = bytes(&v[1]);
-                            g.texts
-                                .iter()
-                                .position(|t| *t == s)
-                                .map_or(u32::MAX, |i| STACK_TEXT + i as u32)
+                            let i = next_text;
+                            next_text += 1;
+                            match g.texts.get(i) {
+                                Some(t) if *t == bytes(&v[1]) => STACK_TEXT + i as u32,
+                                _ => u32::MAX,
+                            }
                         }
                     });
-                    (k[0].as_u64().unwrap() as u32, args.collect())
+                    (k[0].as_u64().unwrap() as u32, args.collect::<Vec<_>>())
                 })
                 .collect();
             let got = changed(&pre, &g);
