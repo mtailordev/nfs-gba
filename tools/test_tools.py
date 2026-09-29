@@ -71,6 +71,12 @@ class DecoderTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             first_look.lz77(bytes.fromhex("10090000 80 3002"), 0, 9)  # back-reference before start
 
+    def test_lz77_blobs_allow_8_byte_overread(self):
+        lits = bytes(range(0x41, 0x49))  # 8 literals
+        a = bytes.fromhex("10130000") + (b"\0" + lits) * 2 + b"\0x"  # claims 19 bytes: decode reads 2 bytes of b
+        b = bytes.fromhex("10100000") + (b"\0" + lits) * 2
+        self.assertEqual(first_look.lz77_blobs(a + b + bytes(8)), [(0, 19, 26), (24, 16, 22)])
+
     def test_rle(self):
         blob = bytes.fromhex("30070000 82 41 01 4243")  # 5 x "A", then "BC"
         self.assertEqual(first_look.rle(blob, 0, 7), len(blob))

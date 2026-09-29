@@ -29,25 +29,55 @@ IDENT = re.compile(r"^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$")
 CREDIT = re.compile(r"pocketeers|logik|electronic arts|licen[cs]e|trademark|copyright|\(c\)", re.I)
 LEGEND = ("`.` constant fill, `A` ARM code (>35% of words have the AL condition), `T` Thumb code "
           "(>=1.5 returns and >=1.5 `push {..lr}` per KiB), `t` weak Thumb signs (>=0.5 returns per KiB), "
-          "`Z` entropy >=7.5 bits/byte (compressed or packed), `d` other data")
-CODE, THUMB = set("TtA"), set("Tt")
+          "`L` at least half covered by LZ77 blobs, `S` smooth bytes centred on 0 (signed PCM audio), "
+          "`i` many equal neighbouring bytes (pixel data), `Z` entropy >=7.5 bits/byte, `d` other data")
+CODE, THUMB, DATA = set("TtA"), set("Tt"), set("LSiZd")
+
+
+def entropy(counts: collections.Counter) -> float:
+    n = sum(counts.values())
+    return -sum(c / n * math.log2(c / n) for c in counts.values())
+
+
+def signal_class(b: bytes, ent: float) -> str:
+    """Data block: S if smooth and centred on 0 (neighbour differences more predictable than the bytes),
+    i if many neighbours are equal, else Z/d by entropy. Samples every third byte pair."""
+    diffs = collections.Counter((y - x) & 0xFF for x, y in zip(b[::3], b[1::3]))
+    near0 = sum(1 for x in b[::3] if x < 32 or x >= 224) / len(b[::3])
+    if near0 > 0.55 and entropy(diffs) < ent - 0.3:
+        return "S"
+    if diffs[0] / sum(diffs.values()) > 0.25:
+        return "i"
+    return "Z" if ent >= 7.5 else "d"
 
 
 def blocks(rom: bytes) -> list[tuple[float, str]]:
-    """Entropy and rough class (see LEGEND) of every 16 KiB block."""
+    """Entropy and rough class (see LEGEND, minus `L`) of every 16 KiB block."""
     out = []
     for off in range(0, len(rom), BLOCK):
         b = rom[off:off + BLOCK]
         counts = collections.Counter(b)
-        ent = -sum(c / len(b) * math.log2(c / len(b)) for c in counts.values())
+        ent = entropy(counts)
         hw, w, kib = memoryview(b).cast("H"), memoryview(b).cast("I"), len(b) / 1024
         rets = sum(1 for x in hw if x in RETURNS) / kib
         push = sum(1 for x in hw if x >> 8 == 0xB5) / kib
         arm = sum(1 for x in w if x >> 28 == 0xE) / len(w)
         cls = ("." if len(counts) == 1 else "A" if arm > 0.35 else "T" if rets >= 1.5 and push >= 1.5
-               else "t" if rets >= 0.5 else "Z" if ent >= 7.5 else "d")
+               else "t" if rets >= 0.5 else signal_class(b, ent))
         out.append((ent, cls))
     return out
+
+
+def mark_lz77(cls: str, blobs: list) -> str:
+    """Relabel data blocks at least half covered by LZ77 blobs as `L`."""
+    cover = collections.Counter()
+    for o, _, packed in blobs:
+        s, e = o, o + packed
+        while s < e:
+            nxt = min(e, (s // BLOCK + 1) * BLOCK)
+            cover[s // BLOCK] += nxt - s
+            s = nxt
+    return "".join("L" if c in DATA and cover[i] >= BLOCK // 2 else c for i, c in enumerate(cls))
 
 
 def map_rows(chars: str, per: int = 64) -> list[str]:
@@ -153,10 +183,35 @@ def bios_candidates(rom: bytes, targets: set) -> list[dict]:
     return found
 
 
+def lz77_blobs(rom: bytes) -> list[tuple[int, int, int]]:
+    """Every 4-aligned LZ77 header (16 B-256 KiB) that decodes cleanly: (offset, unpacked, packed).
+    Random bytes almost never survive a full decode, so hits are real. Carbon's size fields claim 8 bytes
+    more than the stream encodes, so a decode overreads into the next blob: overlaps up to 8 bytes are allowed."""
+    found, end = [], -1
+    for o in range(0, len(rom) - 8, 4):
+        if rom[o] != 0x10 or o < end - 8:
+            continue
+        size = int.from_bytes(rom[o + 1:o + 4], "little")
+        if not 16 <= size <= 0x40000:
+            continue
+        try:
+            packed = lz77(rom, o, size)
+        except (IndexError, ValueError):
+            continue
+        found.append((o, size, packed))
+        end = o + packed
+    return found
+
+
+def lz77_summary(blobs: list) -> dict:
+    return {"blobs": len(blobs), "unpacked": sum(s for _, s, _ in blobs), "packed": sum(p for _, _, p in blobs),
+            "top_sizes": collections.Counter(s for _, s, _ in blobs).most_common(8)}
+
+
 def audio(rom: bytes) -> dict:
     return {
         "logik_state": sorted({m.group().decode() for m in re.finditer(rb"\w+ \(C\) Logik State \d{4}", rom)}),
-        "agbamod_tags": rom.count(b"AGBAMOD"),
+        "gbamod_modules": rom.count(b"GBAMOD"),
         "mp2k_selectsong": rom.count(MP2K_SELECTSONG),
         "sound_area_literals": rom.count(SOUND_AREA),
     }
@@ -194,9 +249,10 @@ def fingerprints(rom: bytes, cls: str, which: set, step: int) -> set:
 
 def analyse(rom: bytes, full: bool) -> dict:
     blk = blocks(rom)
-    cls = "".join(c for _, c in blk)
-    r = {"class_map": cls, "audio": audio(rom),
-         "kib": {k: cls.count(k) * BLOCK // 1024 for k in ".ATtZd"}}
+    blobs = lz77_blobs(rom)
+    cls = mark_lz77("".join(c for _, c in blk), blobs)
+    r = {"class_map": cls, "audio": audio(rom), "lz77": lz77_summary(blobs), "lz77_blobs": blobs,
+         "kib": {k: cls.count(k) * BLOCK // 1024 for k in "TtALSiZd."}}
     if full:
         r["entropy_map"] = "".join(str(min(int(e), 7)) if c != "." else "." for e, c in blk)
         strings = [(m.start(), m.group().decode()) for m in STRING.finditer(rom)]
@@ -227,7 +283,7 @@ def run(data: Path, docs: Path) -> dict:
         a.update(code=m["header"]["game_code"], sha1=m["sha1"], game=m["game"],
                  fp_thumb=fingerprints(norm, a["class_map"], THUMB, 2),
                  fp_arm=fingerprints(norm, a["class_map"], {"A"}, 4),
-                 fp_data=fingerprints(rom, a["class_map"], {"d", "Z"}, 4))
+                 fp_data=fingerprints(rom, a["class_map"], DATA, 4))
         games.append(a)
 
     def contain(key):  # [a][b]: share of a's sampled windows also found in b
@@ -241,9 +297,10 @@ def run(data: Path, docs: Path) -> dict:
         f"{o:07x} n={n} targets={' '.join(f'{t:07x}' for t in ts)}\n" for o, n, ts in canon["runs"]))
     write_if_changed(sub / "compression.txt", "".join(
         f"{c['offset']:07x} {c['kind']} size={c['size']} packed={c['packed']}\n" for c in canon["compression"]))
+    write_if_changed(sub / "lz77.txt", "".join(f"{o:07x} unpacked={s} packed={p}\n" for o, s, p in canon["lz77_blobs"]))
     report = {
         "provenance": provenance(__file__),
-        "roms": [{k: g[k] for k in ("code", "sha1", "game", "class_map", "kib", "audio")} for g in games],
+        "roms": [{k: g[k] for k in ("code", "sha1", "game", "class_map", "kib", "audio", "lz77")} for g in games],
         "similarity_thumb": contain("fp_thumb"), "similarity_arm": contain("fp_arm"),
         "similarity_data": contain("fp_data"),
         "canonical": {"entropy_map": canon["entropy_map"], "strings": len(canon["strings"]),
@@ -267,9 +324,10 @@ def data_md(rep: dict, canon: dict) -> str:
          "### Entropy (bits per byte, floored; `.` constant fill)", "", "```", *map_rows(c["entropy_map"]), "```", ""]
     k = rep["roms"][0]["kib"]
     total = sum(k.values())
-    L += ["### Rough code vs data split", "", "| Class | KiB | Share |", "|---|---|---|"]
-    names = {"T": "Thumb code", "t": "weak Thumb signs", "A": "ARM code", "Z": "high entropy", "d": "other data", ".": "fill"}
-    L += [f"| {names[x]} (`{x}`) | {k[x]:,} | {100 * k[x] / total:.1f}% |" for x in "TtAZd."]
+    L += ["### Rough split by class", "", "| Class | KiB | Share |", "|---|---|---|"]
+    names = {"T": "Thumb code", "t": "weak Thumb signs", "A": "ARM code", "L": "LZ77 blobs", "S": "PCM-like audio",
+             "i": "pixel-like", "Z": "high entropy", "d": "other data", ".": "fill"}
+    L += [f"| {names[x]} (`{x}`) | {k[x]:,} | {100 * k[x] / total:.1f}% |" for x in "TtALSiZd."]
     strings = canon["strings"]
     idents = [s for _, s in strings if IDENT.match(s)]
     credits = [(o, s) for o, s in strings if CREDIT.search(s)]
@@ -285,9 +343,29 @@ def data_md(rep: dict, canon: dict) -> str:
           "| Offset | Entries | Targets span |", "|---|---|---|"]
     for o, n, ts in sorted(canon["runs"], key=lambda r: -r[1])[:15]:
         L.append(f"| `{o:07x}` | {n} | `{min(ts):07x}`–`{max(ts):07x}` |")
+    lz = rep["roms"][0]["lz77"]
+    blobs = canon["lz77_blobs"]
+    runs, cur = [], [blobs[0]] if blobs else []
+    for b in blobs[1:]:
+        if b[0] - (cur[-1][0] + cur[-1][2]) <= 8:
+            cur.append(b)
+        else:
+            runs.append(cur)
+            cur = [b]
+    runs += [cur] if cur else []
+    L += ["", "### LZ77 blobs (brute-force scan)", "",
+          f"Every 4-aligned LZ77 header that decodes cleanly, 8-byte overlap allowed (see `lz77_blobs()`): "
+          f"**{lz['blobs']} blobs, {lz['unpacked'] / 1024:,.0f} KiB unpacked from {lz['packed'] / 1024:,.0f} KiB**. "
+          f"Full list in `$NFSGBA_DATA/out/first-look/{canon['sha1'][:8]}/lz77.txt`.", "",
+          "| Unpacked size | Count |", "|---|---|"]
+    L += [f"| {s:,} | {n} |" for s, n in lz["top_sizes"]]
+    L += ["", "Contiguous banks (4+ blobs):", "", "| Range | Blobs | Sizes |", "|---|---|---|"]
+    L += [f"| `{r[0][0]:07x}`–`{r[-1][0] + r[-1][2]:07x}` | {len(r)} | {', '.join(f'{s:,}' for s in sorted({x[1] for x in r})[:6])} |"
+          for r in runs if len(r) >= 4]
     comp = c["compression"]
-    L += ["", "### BIOS-compression candidates", "",
-          "Pointer targets that are 4-aligned, start with a BIOS header byte and declare 16 B–256 KiB, then test-decompressed.", "",
+    L += ["", "### BIOS-compression headers at pointer targets", "",
+          "Pointer targets that are 4-aligned, start with a BIOS header byte and declare 16 B–256 KiB, then test-decompressed. "
+          "Most data is addressed by offsets, not absolute pointers, so this misses most blobs (see above).", "",
           "| Kind | Candidates | Decoded OK | Unpacked KiB (OK) | Packed KiB (OK) |", "|---|---|---|---|---|"]
     for kind in ("lz77", "huff4", "huff8", "rle"):
         cs = [x for x in comp if x["kind"] == kind]
@@ -302,10 +380,15 @@ def data_md(rep: dict, canon: dict) -> str:
     for g in rep["roms"]:
         L += [f"`{g['code']}` {g['game']}", "", "```", *map_rows(g["class_map"]), "```", ""]
     L += ["### Audio engine signatures", "",
-          "| ROM | Logik State tag | `AGBAMOD` tags | MP2K SelectSong | 0x03007FF0 literals |", "|---|---|---|---|---|"]
+          "| ROM | Logik State tag | `GBAMOD` modules | MP2K SelectSong | 0x03007FF0 literals |", "|---|---|---|---|---|"]
     for g in rep["roms"]:
         a = g["audio"]
-        L.append(f"| `{g['code']}` | {', '.join(a['logik_state']) or 'none'} | {a['agbamod_tags']} | {a['mp2k_selectsong']} | {a['sound_area_literals']} |")
+        L.append(f"| `{g['code']}` | {', '.join(a['logik_state']) or 'none'} | {a['gbamod_modules']} | {a['mp2k_selectsong']} | {a['sound_area_literals']} |")
+    L += ["", "### LZ77 use", "", "| ROM | Blobs | Unpacked KiB | Packed KiB | Most common unpacked sizes |", "|---|---|---|---|---|"]
+    for g in rep["roms"]:
+        z = g["lz77"]
+        L.append(f"| `{g['code']}` | {z['blobs']} | {z['unpacked'] / 1024:,.0f} | {z['packed'] / 1024:,.0f} | "
+                 + ", ".join(f"{s:,}×{n}" for s, n in z["top_sizes"][:5]) + " |")
     for key, title in (("similarity_thumb", "Thumb code"), ("similarity_arm", "ARM code"), ("similarity_data", "Data")):
         m = rep[key]
         codes = list(m)
@@ -321,6 +404,4 @@ if __name__ == "__main__":
     rep = run(data_dir(), ROOT / "docs")
     print(json.dumps({k: rep[k] for k in ("similarity_thumb", "similarity_arm", "similarity_data")}, indent=1))
     for g in rep["roms"]:
-        print(g["code"], g["kib"], g["audio"])
-    comp = rep["canonical"]["compression"]
-    print("compression candidates:", len(comp), "decoded:", sum(1 for x in comp if x["packed"]))
+        print(g["code"], g["kib"], g["audio"], {k: v for k, v in g["lz77"].items() if k != "top_sizes"})
