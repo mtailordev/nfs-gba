@@ -29,3 +29,5 @@ address,name,kind,comment
 0x03004190,draw_model_polygons,function,per polygon: size byte, indices, backface cull, raster_polygon
 0x03004e24,collect_sector_entities,function,gathers entities of a sector for drawing
 0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)
+0x0816a708,__divsi3,function,libgcc signed divide (truncating; x/0 = 0)
+0x0816a7e4,__modsi3,function,libgcc signed remainder

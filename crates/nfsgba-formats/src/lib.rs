@@ -345,8 +345,113 @@ pub fn light_factor(light: [u8; 3]) -> [f32; 3] {
     light.map(|b| ((b as f32 * 512.0 / 3.0 + 1024.0) / 4096.0).min(4095.0 / 4096.0))
 }
 
-fn bgr555(c: u16) -> [u8; 4] {
-    let channel = |shift: u16| (((c >> shift) & 31) * 255 / 31) as u8;
+/// libgcc `__divsi3` as the game calls it (`FUN_0816a708`): truncates toward zero, and x / 0 = 0.
+fn div(a: i32, b: i32) -> i32 {
+    if b == 0 { 0 } else { a.wrapping_div(b) }
+}
+
+/// The reciprocal table at `0x7C45F0`: entry k = 2^24 / (k + 1), 32,767 entries.
+fn recip(rom: &[u8], k: i32) -> i32 {
+    u32_at(rom, 0x7C_45F0 + 4 * k as usize) as i32
+}
+
+/// Palette multipliers (4.12 fixed point: red, green, blue) for an observer at (`px`, `pz`) city units in
+/// `sector`, exactly as `apply_sector_light_to_palette` (`FUN_0813a514`) computes them. `None` when fewer
+/// than two walls straddle `pz`; the game then leaves the palette as it was.
+pub fn sector_light(rom: &[u8], sector: &Sector, px: i32, pz: i32) -> Option<[i32; 3]> {
+    let w = &sector.walls;
+    let n = w.len() as i32;
+    // The game keeps the hits in a 4-int array whose slots 2 and 3 hold px and pz; a third or fourth hit
+    // overwrites them (and the scan keeps comparing against the current slot 3). Reproduced as is.
+    let mut slots = [0, 0, px, pz];
+    let mut hits = 0;
+    for i in 0..w.len() {
+        let (z1, z2) = (w[i].z, w[(i + 1) % w.len()].z);
+        let (lo, hi) = (z1.min(z2), z1.max(z2));
+        if lo <= slots[3] && slots[3] <= hi && lo != hi {
+            if hits < 4 {
+                slots[hits] = i as i32;
+            }
+            hits += 1;
+        }
+    }
+    if hits < 2 {
+        return None;
+    }
+    let [a, b, px, pz] = slots;
+    let (a2, b2) = ((a + 1) % n, (b + 1) % n); // __modsi3 (FUN_0816a7e4)
+    let (wa, wa2, wb, wb2) = (&w[a as usize], &w[a2 as usize], &w[b as usize], &w[b2 as usize]);
+    let dz_a = match wa2.z.wrapping_sub(wa.z) {
+        0 => 1,
+        d => d,
+    };
+    let dz_b = match wb2.z.wrapping_sub(wb.z) {
+        0 => 1,
+        d => d,
+    };
+    let (ta, tb) = (pz.wrapping_sub(wa.z), pz.wrapping_sub(wb.z));
+    // Light of each channel where the two straddling walls cross pz (×256), and those crossings' x.
+    let along = |c: usize| {
+        let at_a = (wa.light[c] as i32 * 256).wrapping_add(div(
+            ((wa2.light[c] as i32 - wa.light[c] as i32) * 256).wrapping_mul(ta),
+            dz_a,
+        ));
+        let at_b = (wb.light[c] as i32 * 256).wrapping_add(div(
+            tb.wrapping_mul((wb2.light[c] as i32 - wb.light[c] as i32) * 256),
+            dz_b,
+        ));
+        (at_a, at_b)
+    };
+    let xa = wa.x.wrapping_add(div(wa2.x.wrapping_sub(wa.x).wrapping_mul(ta), dz_a));
+    let xb = wb.x.wrapping_add(div(wb2.x.wrapping_sub(wb.x).wrapping_mul(tb), dz_b));
+    let span = match xa.wrapping_sub(xb) {
+        0 => 1,
+        s => s,
+    };
+    let dx = px.wrapping_sub(xb);
+    let inv = if span < 0 {
+        -(recip(rom, -span) >> 8)
+    } else {
+        recip(rom, span) >> 8
+    };
+    Some([0, 1, 2].map(|c| {
+        let (at_a, at_b) = along(c);
+        let lerp = at_b.wrapping_add(inv.wrapping_mul(at_a.wrapping_sub(at_b).wrapping_mul(dx) >> 8) >> 8);
+        (div(lerp.wrapping_mul(2), 3) + 0x400).min(0xFFF)
+    }))
+}
+
+/// Tint a BGR555 palette by per-channel multipliers (4.12) exactly as the game does: entries 1..=143 and
+/// 149..=255, each channel `min(31, c * m >> 12)` in unsigned 32-bit arithmetic; the rest is copied.
+pub fn tint_palette(palette: &[u16], m: [i32; 3]) -> Vec<u16> {
+    palette
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            if (1..=143).contains(&i) || (149..=255).contains(&i) {
+                let ch = |shift: u16, k: usize| {
+                    ((m[k] as u32).wrapping_mul(((c >> shift) & 31) as u32) >> 12).min(31) as u16
+                };
+                ch(0, 0) | ch(5, 1) << 5 | ch(10, 2) << 10
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// City palette `index` as raw BGR555 (see `city_palette`).
+pub fn city_palette_raw(rom: &[u8], index: usize) -> Vec<u16> {
+    let at = ptr(rom, LEVEL_TABLE) + 0x200 * index;
+    (0..256).map(|i| u16_at(rom, at + 2 * i)).collect()
+}
+
+/// BGR555 to RGBA8 with the hardware-style expansion `c << 3 | c >> 2` (as mGBA outputs it).
+pub fn bgr555(c: u16) -> [u8; 4] {
+    let channel = |shift: u16| {
+        let v = ((c >> shift) & 31) as u8;
+        v << 3 | v >> 2
+    };
     [channel(0), channel(5), channel(10), 255]
 }
 
@@ -361,10 +466,16 @@ pub struct Texture {
 /// City palette `index` of the 14 at level record `+0x00` (0x200 bytes apart) as RGBA8; index 0 (magenta
 /// `0x7C1F`) is transparent. Environments pick one (`Environment::palette`).
 pub fn city_palette(rom: &[u8], index: usize) -> Vec<[u8; 4]> {
-    let at = ptr(rom, LEVEL_TABLE) + 0x200 * index;
-    (0..256)
-        .map(|i| {
-            let [r, g, b, _] = bgr555(u16_at(rom, at + 2 * i));
+    palette_rgba(&city_palette_raw(rom, index))
+}
+
+/// BGR555 palette to RGBA8; colour 0 is transparent.
+pub fn palette_rgba(palette: &[u16]) -> Vec<[u8; 4]> {
+    palette
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            let [r, g, b, _] = bgr555(c);
             [r, g, b, if i == 0 { 0 } else { 255 }]
         })
         .collect()
@@ -608,6 +719,39 @@ mod tests {
         );
         let sectors = city(&rom).len();
         assert!(routes.iter().flat_map(|r| &r.waypoints).all(|w| w.sector < sectors));
+    }
+
+    /// The exact light tint must reproduce the reference race's palette RAM (mGBA dump), entry for entry.
+    #[test]
+    fn light_tint_reproduces_the_race_palette() {
+        let Some(rom) = rom() else { return };
+        let dir = data_dir().join("work/e5298b24/mgba");
+        let dump = |name: &str| fs::read(dir.join(format!("race.{name}.bin")));
+        let (Ok(iwram), Ok(wram), Ok(pal)) = (dump("iwram"), dump("wram"), dump("palette")) else {
+            eprintln!("skipping: no reference race dump");
+            return;
+        };
+        let word = |mem: &[u8], o: usize| u32::from_le_bytes(mem[o..o + 4].try_into().unwrap());
+        // Address map: world struct 0x030000C0 (+0x3C entity array), player entity index 0x03000060,
+        // current sector 0x03005614; entity position +0x0C / +0x14 in 8.8.
+        let entities = word(&iwram, 0xC0 + 0x3C) as usize - 0x0200_0000;
+        let player = entities + 0xA4 * word(&iwram, 0x60) as usize;
+        let sector = word(&iwram, 0x5614) as usize;
+        let (px, pz) = (
+            word(&wram, player + 0x0C) as i32 >> 8,
+            word(&wram, player + 0x14) as i32 >> 8,
+        );
+        let m = sector_light(&rom, &city(&rom)[sector], px, pz).expect("two walls straddle the player");
+        let tinted = tint_palette(&city_palette_raw(&rom, environments(&rom)[1].palette), m);
+        let ram: Vec<u16> = pal
+            .chunks(2)
+            .take(256)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        // Slots the race rewrites at runtime (cars 160..=223, HUD 248..=255) are left out.
+        for i in (1..=143).chain(149..=159).chain(224..=247) {
+            assert_eq!(tinted[i], ram[i], "palette entry {i} (multipliers {m:?})");
+        }
     }
 
     #[test]

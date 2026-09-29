@@ -5,17 +5,20 @@
     python tools/mgba_ctl.py stop
 
 Commands are listed in mgba_remote.lua. Screenshots, dumps, savestates, save games and log.txt all go to
-$NFSGBA_DATA/work/<sha1-8>/mgba/, never next to the vault ROM.
+$NFSGBA_DATA/work/<sha1-8>/<session>/, never next to the vault ROM. Several emulators can run at once with
+different sessions: NFSGBA_MGBA_SESSION (default "mgba"). NFSGBA_MGBA overrides the mGBA executable (default
+ext/mgba-dev/mGBA.exe in this checkout; git worktrees have no ext/, so point it at the main checkout's).
 """
 import json
 import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from common import ROOT, data_dir
 
-MGBA = ROOT / "ext" / "mgba-dev" / "mGBA.exe"
+MGBA = Path(os.environ.get("NFSGBA_MGBA") or ROOT / "ext" / "mgba-dev" / "mGBA.exe")
 
 
 def canonical():
@@ -26,7 +29,7 @@ def canonical():
 
 def main(args: list[str]) -> None:
     rom, sha8 = canonical()
-    work = data_dir() / "work" / sha8 / "mgba"
+    work = data_dir() / "work" / sha8 / (os.environ.get("NFSGBA_MGBA_SESSION") or "mgba")
     work.mkdir(parents=True, exist_ok=True)
     if args == ["start"]:
         cmd = [str(MGBA), "--script", str(ROOT / "tools" / "mgba_remote.lua")]
