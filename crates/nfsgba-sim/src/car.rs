@@ -3,12 +3,11 @@
 //! of the sub-steps.
 //!
 //! The step runs on a [`CarWorld`] (`carworld.rs`); `ram.rs` loads it from the RAM image and stores it back. The
-//! one thing it cannot do itself is spawn traffic (the spawner is still RAM-image code): [`handler`] then returns
-//! [`Flow::Spawn`], the adapter spawns and calls it again with `resume`, which continues where it stopped.
+//! traffic spawn (`traffic.rs`) runs inside it.
 //! The physics struct is described in `docs/engine/physics.md`.
 
 use crate::body;
-use crate::carworld::{CarWorld, NONE, Pending};
+use crate::carworld::{CarWorld, NONE};
 use crate::contact;
 use crate::math::{add, atan2, div, dot, mat_mul, mul12, mul64, normalize, recip, scale, shr64, sub};
 use crate::route;
@@ -23,14 +22,6 @@ const BRAKE: u32 = 1;
 const HANDBRAKE: u32 = 6;
 const NITRO: u32 = 7;
 const WINGMAN: u32 = 8;
-
-/// Where a step stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flow {
-    Done,
-    /// The step wants a traffic car spawned now (the adapter does it and resumes the step).
-    Spawn,
-}
 
 impl CarWorld<'_> {
     /// `FUN_08144f38`: whether control action `action` is active for the held and newly pressed keys.
@@ -51,16 +42,14 @@ macro_rules! ent {
     };
 }
 
-/// `FUN_0814bd4c`: the car handler (entity handler table entries 0..3). `resume`: continue after a traffic spawn.
-pub fn handler(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
+/// `FUN_0814bd4c`: the car handler (entity handler table entries 0..3).
+pub fn handler(w: &mut CarWorld, i: usize) {
     let index = ent!(w, i).index as u32;
     match ent!(w, i).race_state {
         2 => {
             // Finished: keep driving; the first finisher sets the race-over flag and starts the palette fade,
             // and once the fade is done the race ends (phase 3) with this car's index.
-            if racing_step(w, i, resume) == Flow::Spawn {
-                return Flow::Spawn;
-            }
+            racing_step(w, i);
             let g = &mut w.g;
             if g.race_over == 0 {
                 g.race_over = 1;
@@ -72,30 +61,25 @@ pub fn handler(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
             }
         }
         0 => crate::init::car_init(w, i),
-        0x100 => return racing_step(w, i, resume),
+        0x100 => racing_step(w, i),
         _ => {}
     }
-    Flow::Done
 }
 
 /// `FUN_0814b168`: nitro drain, dynamics, visibility flags, and (unless `g.settled` is set) the suspension step
 /// `FUN_0814de40` with the body height from the four wheels.
-fn racing_step(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
+fn racing_step(w: &mut CarWorld, i: usize) {
     let (dt, phase) = (w.g.dt, w.g.phase);
     if phase == 0 {
-        return Flow::Done;
+        return;
     }
     let index = ent!(w, i).index as u32;
     if phase != 1 && phase != 4 {
         // Rendering, done by `nfsgba-game` (`slots.rs`), not here: for the player, seen from the side, the game
         // redraws the decal onto the car's texture atlas here (`draw_decal_on_atlas`, `FUN_0813bd90`).
-        if !resume {
-            nitro(&mut car!(w, i), &mut w.g, dt);
-        }
+        nitro(&mut car!(w, i), &mut w.g, dt);
         let input = w.g.input[index as usize] as u32;
-        if dynamics(w, i, input, dt, resume) == Flow::Spawn {
-            return Flow::Spawn;
-        }
+        dynamics(w, i, input, dt);
     }
     let g = &w.g;
     let e = &mut ent!(w, i);
@@ -111,7 +95,7 @@ fn racing_step(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
         e.state |= 4;
     }
     if g.settled != 0 {
-        return Flow::Done;
+        return;
     }
     // Unreachable in Carbon: `race_init` and every dynamics step set `settled` to 1 (no trace step has it 0).
     // Four points around the car; their y is uninitialised stack in the game, but always overwritten with the
@@ -123,7 +107,6 @@ fn racing_step(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
     let front = c.point_height[0].wrapping_add(c.point_height[1]) >> 1;
     let rear = c.point_height[2].wrapping_add(c.point_height[3]) >> 1;
     ent!(w, i).pos[1] = front.wrapping_add(rear) >> 1;
-    Flow::Done
 }
 
 /// `FUN_08148 ...` `iwram_divmod`: the quotient, and the remainder into the globals' scratch word.
@@ -211,22 +194,16 @@ pub(crate) fn auto_shift(w: &mut CarWorld, i: usize) {
     car!(w, i).gearbox_pause = 5;
 }
 
-/// `FUN_0813d1f0`: one step of the car: controls, engine and drivetrain, tyres, collisions, integration. It
-/// stops at the traffic spawn ([`Flow::Spawn`]) and continues when called again with `resume`.
-pub fn dynamics(w: &mut CarWorld, i: usize, input: u32, frame_time: i32, resume: bool) -> Flow {
+/// `FUN_0813d1f0`: one step of the car: controls, engine and drivetrain, tyres, collisions, integration.
+pub fn dynamics(w: &mut CarWorld, i: usize, input: u32, frame_time: i32) {
     let (data, rom) = (w.data, w.rom);
     let handling = &data.car.handling[ent!(w, i).car as usize];
     let index = ent!(w, i).index as u32;
     let player = index == w.g.player;
     let held = input & 0xFFFF;
-    let (old_sector, pressed);
-    if resume {
-        // The countdown's tail; the rest of the step follows.
-        let made = w.spawned.take().unwrap_or(false);
-        route::traffic_spawned(w, made);
-        let p = w.pending.take().expect("a resumed step has its pending state");
-        (old_sector, pressed) = (p.old_sector, p.pressed);
-    } else {
+    let old_sector;
+    let pressed;
+    {
         old_sector = ent!(w, i).sector;
 
         // Off-route warning: far from the racing line while going fast.
@@ -266,8 +243,10 @@ pub fn dynamics(w: &mut CarWorld, i: usize, input: u32, frame_time: i32, resume:
         }
         route::track_segment(w, i);
         if w.camera_player == i as u32 && route::traffic_wants_spawn(w) {
-            w.pending = Some(Pending { old_sector, pressed });
-            return Flow::Spawn;
+            // `FUN_08143b2c`'s spawn: near the entity the camera follows.
+            let near = w.g.focus as usize;
+            let made = crate::traffic::spawn(w, near, 1).is_some();
+            route::traffic_spawned(w, made);
         }
     }
     car!(w, i).gearbox_pause -= 1;
@@ -699,7 +678,6 @@ pub fn dynamics(w: &mut CarWorld, i: usize, input: u32, frame_time: i32, resume:
         career::hunter_life_tick(&w.race(), &mut r);
         w.slots[i].set_racer(&r);
     }
-    Flow::Done
 }
 
 /// `FUN_0814efa8`: put car `i` back on the road at waypoint `wp`: the entity on the floor there with the

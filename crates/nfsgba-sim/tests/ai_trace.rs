@@ -8,7 +8,7 @@
 //! follow `nfsgba_testkit`'s rule (`NFSGBA_REQUIRE_DATA`).
 
 use nfsgba_sim::sound::Command;
-use nfsgba_sim::{Mem, Sim, ai, traffic_ai};
+use nfsgba_sim::{Mem, Sim, ram};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -155,9 +155,9 @@ fn sounds(sim: &Sim) -> Vec<String> {
 /// Runs the port for one call; `None` when the handler is not one of the port's.
 fn run(sim: &mut Sim, handler: u32, e: u32) -> Option<Result<Vec<String>, String>> {
     let effects = match handler {
-        0x29 => ai::handler(sim, e)
+        0x29 => ram::ai_handler(sim, e)
             .map(|fx| fx.map(|f| format!("effects({},{},{},{})", f.entity, f.heading, f.view, f.size))),
-        0x36 => traffic_ai::handler(sim, e).map(|()| None),
+        0x36 => ram::traffic_handler(sim, e).map(|()| None),
         _ => return None,
     };
     Some(match effects {

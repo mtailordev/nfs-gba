@@ -24,7 +24,7 @@ use nfsgba_formats::{
     city, hud, paint, render, sector_light, sky, tint_palette,
     ui::{self, SpriteBank},
 };
-use nfsgba_sim::{Mem, Sim, Unported, ai, data::GameData, layout::Field, sound::Command, state::Camera, traffic_ai};
+use nfsgba_sim::{Mem, Sim, Unported, data::GameData, layout::Field, sound::Command, state::Camera};
 
 use view::WORLD;
 
@@ -533,7 +533,7 @@ impl Game {
                     // The lane-change timer reads the race time the IRQs have counted by then.
                     let d = m.u32(e + 0x8C);
                     let at = t.lanes.iter().find(|(driver, _)| *driver == d).map(|&(_, n)| n);
-                    let effects = self.lend(at, |sim| ai::handler(sim, e))?;
+                    let effects = self.lend(at, |sim| view::ai::opponent(sim, e))?;
                     self.play_commands(t, &mut sounds)?;
                     if let Some(f) = effects {
                         let (rom, data, m) = (&self.rom, &self.data, &mut self.sim.mem);
@@ -550,7 +550,7 @@ impl Game {
                 }
                 0x34 => view::slots::effect_handler(&self.rom, &self.data, &mut self.sim.mem, i as usize),
                 0x36 => {
-                    traffic_ai::handler(&mut self.sim, e)?;
+                    view::ai::traffic(&mut self.sim, e)?;
                     self.play_commands(t, &mut sounds)?;
                 }
                 _ => return Err(Unported("an entity handler other than 0..3, 0x29, 0x34 and 0x36")),

@@ -2,6 +2,7 @@
 //! runtime tables, entities and root portal; the sky's camera; the camera's frame. The matrix slots, the HUD and
 //! the race's setup have their own adapters (`slots`, `hud`, `race`).
 
+pub mod ai;
 pub mod car;
 pub mod hud;
 pub mod race;

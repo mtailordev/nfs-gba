@@ -128,7 +128,8 @@ layout! {
         /// Torque curve (18 words from handling `+0x6C`; 10 used).
         0x464 torque_curve: [i32; 18],
         0x4AE prev_control: u16,
-        0x4B0 u_4b0: i32,
+        /// AI: steps without progress (0x32 resyncs the segment, 0x96 puts the car back).
+        0x4B0 stuck: i32,
         /// Bit 0: hard wall hit.
         0x4B4 hard_hit: u32,
         0x4B8 u_4b8: i32,
@@ -143,24 +144,25 @@ layout! {
         0x4D0 u_4d0: u8,
         0x4D1 nitro_on: u8,
         0x4D2 u_4d2: u16,
-        0x4D4 u_4d4: u16,
+        /// AI: lane-change timer.
+        0x4D4 lane_timer: u16,
+        /// AI: preferred lane; set to 2 when the car changes section.
         0x4D6 u_4d6: u16,
         /// 1 before the start line, 2 after waypoints 1..9, 8 out of the ranking, 0x10 no yaw damping.
         0x4D8 route_flags: u16,
-        0x4DA u_4da: u16,
-        0x4DC u_4dc: i16,
-        0x4DE u_4de: i16,
-        0x4E0 u_4e0: i16,
-        0x4E2 u_4e2: u16,
+        /// AI: lanes 0..4 blocked ahead (traffic in lanes 1 and 3, racers close ahead).
+        0x4DA blocked: [u16; 5],
         0x4E4 tipped: i16,
         0x4E6 airborne: i16,
         0x4E8 hunter_life: i32,
         0x4EC wrong_way: i16,
         0x4EE stationary: i16,
         0x4F0 u_4f0: u16,
-        0x4F2 u_4f2: u16,
-        0x4F4 u_4f4: u32,
-        0x4F8 u_4f8: u16,
+        0x4F2 hunter_countdown: u16,
+        /// AI: the entity followed while `u_4f0` runs.
+        0x4F4 follow: Ptr<Entity>,
+        /// AI: boost timer.
+        0x4F8 boost_timer: i16,
     }
 
     /// A racing-line section (world `+0x40`, 8 bytes): `nfsgba_formats::career::Section`.
@@ -184,6 +186,12 @@ layout! {
 
     /// The profile's stats the car step keeps (`Profile` holds the rest).
     pub struct CarProfile: 0x498 {
+        /// The AI's drive-force curve (`ai::speed_curve`): count, x range, pointer to the values, the values.
+        0x26C curve_count: i32,
+        0x270 curve_x0: i32,
+        0x274 curve_x1: i32,
+        0x278 curve_ys: u32,
+        0x27C curve: [i32; 21],
         /// Distance driven (speed >> 12 per step), skids counted, top speed.
         0x2D0 distance: i32,
         0x2D8 skids: i32,
@@ -209,6 +217,8 @@ layout! {
         0x0300_0030 u_0030: i32,
         /// 0 not started, 1 and 4 frozen, 3 race over, 9 replay.
         0x0300_0048 phase: i32,
+        /// Catch-up on: the AI eases off ahead of the player and presses on behind.
+        0x0300_0050 catch_up: i32,
         /// Entity index of the local player.
         0x0300_0060 player: u32,
         0x0300_006C level: i32,
@@ -220,6 +230,17 @@ layout! {
         0x0300_5388 u_5388: u32,
         /// Sound effect volume option.
         0x0300_53A4 volume: u32,
+        /// Race frames since the start (the AI waits 0x78 / 0xB4; picks the traffic model).
+        0x0300_5628 race_frames: u32,
+        /// Counts race steps (the AI takes wider lanes in the first 0x32).
+        0x0300_56F0 steps: u32,
+        /// Frame-time tick the wingman's and the knocked-away timers count down by.
+        0x0300_5934 frame_ticks: i32,
+        /// Camera matrix yaw (`-look & 0x3FFF`).
+        0x0300_5F9C matrix_yaw: i32,
+        0x0300_6048 u_6048: u32,
+        /// Wheel-spin scale added to the grid value.
+        0x0300_6110 spin_bias: i32,
         0x0300_5604 u_5604: u32,
         0x0300_5608 difficulty: u32,
         0x0300_5610 u_5610: i32,
@@ -289,6 +310,7 @@ layout! {
         0x0300_6170 u_6170: i32,
         0x0300_6174 u_6174: i32,
         0x0300_6178 wingman_target: Ptr<Entity>,
+        0x0300_6180 u_6180: i32,
         0x0300_6188 u_6188: u32,
         0x0300_618C u_618c: u32,
         0x0300_6190 u_6190: i32,
@@ -296,17 +318,29 @@ layout! {
         0x0300_619C wingman_car: Ptr<Entity>,
         /// Someone finished.
         0x0300_61A4 finished: i32,
+        /// Hunter races: the life a hit costs, per impulse.
+        0x0300_61A0 hunter_damage: i32,
+        0x0300_61D4 u_61d4: u32,
         0x0300_61D8 wingman_cooldown: i32,
         0x0300_61DC wingman_commands: i32,
         0x0300_61E4 u_61e4: u32,
         0x0300_61E8 wingman_running: u32,
+        0x0300_61EC u_61ec: i32,
         0x0300_61F0 u_61f0: i32,
         0x0300_61F8 wingman_attacker: i32,
         0x0300_61FC u_61fc: u32,
+        0x0300_6200 u_6200: i32,
         0x0300_6240 traffic_count: u8,
+        /// Traffic: steps between speed-ups, the number of models.
+        0x0300_624C speed_up_steps: u32,
         0x0300_6250 u_6250: u8,
+        0x0300_625C traffic_models: u32,
         0x0300_6260 traffic_period: u32,
         0x0300_6264 traffic_timer: u8,
+        /// The live traffic cars (entities, null = free), their speed limit and their stop factor.
+        0x0300_6270 live: [Ptr<Entity>; 8],
+        0x0300_6290 traffic_max_speed: u32,
+        0x0300_6294 traffic_stop: i32,
         0x0300_6298 traffic_on: u8,
         /// Control binding set: 0 when the gearbox is automatic.
         0x0300_629C binding_set: u8,

@@ -1,17 +1,19 @@
-//! The car step's adapters between the GBA RAM image and the typed [`CarWorld`]: load the racers' entities and
-//! cars, the globals, the wall pieces and the racing line; run a typed function; store it all back. Also the
-//! RAM-image twins of the typed functions that the unmigrated opponents' AI, the traffic and the game loop still
-//! call (`route`, `car`, `init`, `contact`, `walls`, `body`): each loads what it needs, runs the typed function
-//! and stores. They go when those callers are typed (`docs/engine/typed-state.md`).
+//! The adapters between the GBA RAM image and the typed [`CarWorld`]: load every entity with its driver (a car's
+//! physics struct or a traffic car's block), the globals, the wall pieces and the racing line; run a typed
+//! function (the car step, the opponents' AI, the traffic); store it all back. The heap blocks and the sector
+//! lists stay the RAM image's: the typed step records them and the adapter replays them (`HeapOp`, `ListOp`).
+//! A few RAM-image twins of typed functions remain for the tests and the game loop (`route`, `contact`).
 
 use nfsgba_formats::career::{LinePoint, RacingLine, Section};
 
-use crate::carworld::{CarWorld, NONE, Pending, PointExtra, Route, Slot};
+use crate::carworld::{CarWorld, HeapOp, ListOp, PointExtra, Route, Slot};
 use crate::data::GameData;
 use crate::layout::{Field, Ptr};
 use crate::mem::Mem;
 use crate::sound::Command;
-use crate::state::{Car, CarGlobals, CarProfile, Entity, Query, SectionRec, WORLD, WaypointRec, WorldHeader};
+use crate::state::{
+    Car, CarGlobals, CarProfile, Entity, Query, SectionRec, TrafficBlock, WORLD, WaypointRec, WorldHeader,
+};
 use crate::world;
 use crate::{Result, Sim, heap};
 
@@ -36,17 +38,31 @@ pub fn load<'a>(m: &Mem, rom: &'a [u8], data: &'a GameData, who: usize) -> CarWo
     let g = CarGlobals::load(m, 0);
     let hdr = WorldHeader::load(m, WORLD);
     let total = hdr.first_entity as usize + hdr.entity_count as usize;
-    let n = ((g.player + g.opponents + 1).max(g.racers + 1).max(g.opponents + 2) as usize)
-        .max(who + 1)
-        .min(total);
-    let slots = (0..n as u32)
+    let slots = (0..total as u32)
         .map(|k| {
             let e = Entity::load(m, hdr.entities.at(k).addr);
-            let has_car = in_ewram(e.driver.addr, Car::SIZE);
+            let has_car = matches!(e.handler, 0..=3 | 0x29) && in_ewram(e.driver.addr, Car::SIZE);
             let c = if has_car { e.driver.read(m) } else { Car::default() };
-            Slot { e, c, has_car }
+            let block = (e.handler == 0x36 && in_ewram(e.driver.addr, TrafficBlock::SIZE))
+                .then(|| TrafficBlock::load(m, e.driver.addr));
+            Slot { e, c, has_car, block }
         })
         .collect::<Vec<_>>();
+    let grid = if hdr.templates.is_null() {
+        Vec::new()
+    } else {
+        (0..(g.opponents + 2).min(total as u32))
+            .map(|k| {
+                // (The templates are in the ROM, which the adapter has taken out of `m`.)
+                let at = hdr.templates.addr + 0xA4 * k;
+                let word = |a: u32| match a >> 24 {
+                    8 => i32::from_le_bytes(rom[(a & 0xFF_FFFF) as usize..][..4].try_into().unwrap()),
+                    _ => m.i32(a),
+                };
+                [word(at + 0xC), word(at + 0x14)]
+            })
+            .collect()
+    };
     let profile_at = m.u32(PROFILE);
     let pieces = if hdr.pieces.is_null() {
         Vec::new()
@@ -81,9 +97,12 @@ pub fn load<'a>(m: &Mem, rom: &'a [u8], data: &'a GameData, who: usize) -> CarWo
         entities: hdr.entities,
         camera_player: Ptr::<Entity>::new(m.u32(PLAYER_ENTITY)).index_from(hdr.entities),
         save,
-        spawned: None,
-        pending: None,
+        profile_addr: profile_at,
+        grid,
+        extra: hdr.first_entity as usize..total,
         sounds: Vec::new(),
+        heap_ops: Vec::new(),
+        list_ops: Vec::new(),
         g,
     }
 }
@@ -155,6 +174,9 @@ pub fn store(m: &mut Mem, w: &CarWorld) {
         if s.has_car {
             s.e.driver.write(m, &s.c);
         }
+        if let Some(b) = &s.block {
+            b.store(m, s.e.driver.addr);
+        }
     }
     let mut g = w.g.clone();
     g.scales[..w.route.line.scales.len()].copy_from_slice(&w.route.line.scales);
@@ -180,14 +202,45 @@ pub fn store(m: &mut Mem, w: &CarWorld) {
     }
 }
 
-/// Loads the world for car `who`, runs `f`, stores the world back; returns `f`'s result and the sound commands
-/// it issued.
+/// `rand_table` (`FUN_0815fcfc`): the next entry of the 256-entry table at 0x087C03F0.
+pub fn rand(m: &mut Mem) -> u32 {
+    let mut k = m.u32(0x0300_64C8);
+    let r = nfsgba_fixed::rand_table(&m.rom, &mut k);
+    m.set_u32(0x0300_64C8, k);
+    r
+}
+
+/// Loads the world for car `who`, runs `f`, replays what it recorded for the heap (the traffic cars' blocks),
+/// stores the world back and replays the sector-list changes; returns `f`'s result and the sound commands it
+/// issued.
 pub fn with_world<R>(m: &mut Mem, who: usize, f: impl FnOnce(&mut CarWorld) -> R) -> (R, Vec<Command>) {
     let data = m.data().clone();
     let rom = std::mem::take(&mut m.rom);
     let mut w = load(m, &rom, &data, who);
     let r = f(&mut w);
+    for op in std::mem::take(&mut w.heap_ops) {
+        match op {
+            HeapOp::Alloc(k) => w.slots[k].e.driver = Ptr::new(heap::alloc_zeroed(m, TrafficBlock::SIZE)),
+            HeapOp::Free(k) => {
+                heap::free(m, w.slots[k].e.driver.addr);
+                w.slots[k].e.driver = Ptr::NULL;
+            }
+        }
+    }
     store(m, &w);
+    for op in std::mem::take(&mut w.list_ops) {
+        match op {
+            ListOp::Unlink(k, sector) => {
+                // The entity's sector is the one it left.
+                let e = world::entity(m, k as u32);
+                let now = m.u16(e + 0x78);
+                m.set_u16(e + 0x78, sector);
+                world::unlink_entity(m, k as u32);
+                m.set_u16(e + 0x78, now);
+            }
+            ListOp::Link(k) => world::link_entity(m, k as u32),
+        }
+    }
     let sounds = std::mem::take(&mut w.sounds);
     drop(w);
     m.rom = rom;
@@ -200,16 +253,9 @@ fn with_car<R>(m: &mut Mem, e: u32, f: impl FnOnce(&mut CarWorld, usize) -> R) -
     with_world(m, i, |w| f(w, i))
 }
 
-/// Runs `f` on the world for the entity at `e` without storing it (for the functions that only read).
-fn read_car<R>(m: &Mem, e: u32, f: impl FnOnce(&CarWorld, usize) -> R) -> R {
-    let i = m.u16(e) as usize;
-    let data = m.data().clone();
-    f(&load(m, &m.rom, &data, i), i)
-}
-
 /// `FUN_0814bd4c`: the car handler for the entity at `e`, on the RAM image. The sector list bookkeeping and the
-/// physics struct's allocation (the game's heap), the traffic spawner and the player's decal are RAM-image code
-/// that this adapter runs around the typed step.
+/// physics struct's allocation (the game's heap) and the player's decal are RAM-image code that this adapter runs
+/// around the typed step.
 pub fn car_handler(sim: &mut Sim, e: u32) -> Result<()> {
     let m = &mut sim.mem;
     let i = m.u16(e) as usize;
@@ -219,27 +265,8 @@ pub fn car_handler(sim: &mut Sim, e: u32) -> Result<()> {
         let p = heap::alloc_zeroed(m, 0x4FC);
         m.set_u32(e + 0x8C, p);
     }
-    let (mut resume, mut pending, mut spawned) = (false, None::<Pending>, None);
-    loop {
-        let (flow, sounds) = with_world(&mut sim.mem, i, |w| {
-            w.pending = pending.take();
-            w.spawned = spawned.take();
-            let flow = crate::car::handler(w, i, resume);
-            pending = w.pending.take();
-            flow
-        });
-        sim.sounds.extend(sounds);
-        match flow {
-            crate::car::Flow::Done => break,
-            crate::car::Flow::Spawn => {
-                // `FUN_08143b2c`'s spawn: near the entity the camera follows.
-                let m = &mut sim.mem;
-                let near = world::entity(m, m.u32(0x0300_57F8));
-                spawned = Some(crate::traffic::spawn(m, near, 1)? != NONE);
-                resume = true;
-            }
-        }
-    }
+    let ((), sounds) = with_world(m, i, |w| crate::car::handler(w, i));
+    sim.sounds.extend(sounds);
     let m = &mut sim.mem;
     if state == 0 && i as u32 == m.u32(0x0300_0060) {
         crate::decal::unpack_decal(m, e);
@@ -248,71 +275,53 @@ pub fn car_handler(sim: &mut Sim, e: u32) -> Result<()> {
     Ok(())
 }
 
+/// `FUN_0814a2a0`: the opponent handler (0x29) for the entity at `e`: the sector list and the physics struct's
+/// allocation around the typed AI.
+pub fn ai_handler(sim: &mut Sim, e: u32) -> Result<Option<crate::ai::Effects>> {
+    let m = &mut sim.mem;
+    let i = m.u16(e) as usize;
+    let state = m.u16(e + 0x4A);
+    let driving = state.wrapping_sub(1) < 2;
+    if driving {
+        world::unlink_entity(m, i as u32);
+    } else if state == 0 {
+        let p = heap::alloc_zeroed(m, 0x4FC);
+        m.set_u32(e + 0x8C, p);
+    }
+    let (r, sounds) = with_world(m, i, |w| crate::ai::handler(w, i));
+    sim.sounds.extend(sounds);
+    if driving {
+        world::link_entity(&mut sim.mem, i as u32);
+    }
+    r
+}
+
+/// `FUN_081443fc`: the traffic handler (0x36) for the entity at `e`.
+pub fn traffic_handler(sim: &mut Sim, e: u32) -> Result<()> {
+    let i = sim.mem.u16(e) as usize;
+    let (r, sounds) = with_world(&mut sim.mem, 0, |w| crate::traffic_ai::handler(w, i));
+    sim.sounds.extend(sounds);
+    r
+}
+
+/// `FUN_08143d48`: spawn a traffic car of `kind` near the entity at `near`; its entity index, or 0xFFFF.
+pub fn traffic_spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
+    let near = m.u16(near) as usize;
+    let (slot, _) = with_world(m, 0, |w| crate::traffic::spawn(w, near, kind));
+    Ok(slot.map_or(0xFFFF, |k| k as u32))
+}
+
 /// The RAM-image twins of `route`.
 pub mod route {
     use super::*;
 
-    /// Non-zero for a circuit (waypoint indices wrap around section 0).
-    pub const CIRCUIT: u32 = 0x0300_608C;
+    /// The race time (frames), which the game loop lends the AI.
     pub const RACE_TIME: u32 = 0x0300_5800;
-    pub const OPPONENTS: u32 = 0x0300_5784;
-
-    fn line(m: &Mem) -> (Route, bool) {
-        let hdr = WorldHeader::load(m, WORLD);
-        let g = CarGlobals::load(m, 0);
-        (load_route(m, &hdr, &g), g.circuit != 0)
-    }
-
-    /// The address of waypoint `index` of section `seg` (`FUN_0814007c`).
-    pub fn waypoint(m: &Mem, seg: u32, index: i32) -> u32 {
-        let first = m.i32(m.u32(world::W_SEGMENTS) + seg * 8 + 4);
-        m.u32(world::W_WAYPOINTS)
-            .wrapping_add((first.wrapping_add(index) as u32).wrapping_mul(0x18))
-    }
-
-    /// `FUN_0813e860`: the index and section of waypoint `index` of section `seg`.
-    pub fn advance(m: &Mem, seg: u32, index: i32) -> (i32, u32) {
-        let (r, lapped) = line(m);
-        let (s, i) = r.line.step(lapped, &r.back, seg as usize, index);
-        (i, s as u32)
-    }
-
-    /// `FUN_0814009c`: address of the normalised waypoint.
-    pub fn waypoint_at(m: &Mem, seg: u32, index: i32) -> u32 {
-        let (i, s) = advance(m, seg, index);
-        waypoint(m, s, i)
-    }
 
     /// `FUN_0813f098`.
     pub fn lap(m: &mut Mem, e: u32) -> Result<()> {
         with_car(m, e, crate::route::lap);
         Ok(())
-    }
-
-    /// `FUN_0814032c`.
-    pub fn progress(m: &Mem, e: u32, _p: u32) -> i32 {
-        read_car(m, e, crate::route::progress)
-    }
-
-    /// `FUN_081402bc`.
-    pub fn lateral(m: &Mem, e: u32) -> i32 {
-        read_car(m, e, crate::route::lateral)
-    }
-
-    /// `FUN_08140274`.
-    pub fn nearest_lane(m: &Mem, x: i32, lanes: i32) -> u32 {
-        let lane_offsets = m.data().car.lanes;
-        let (mut best, mut lane) = (i32::MAX, 0);
-        for k in 0..4u32 {
-            if (lanes >> k) & 1 != 0 {
-                let d = (lane_offsets[k as usize] - x).wrapping_abs();
-                if d < best {
-                    best = d;
-                    lane = k;
-                }
-            }
-        }
-        lane
     }
 
     /// `FUN_0814078c`.
@@ -322,125 +331,12 @@ pub mod route {
     }
 }
 
-/// The RAM-image twins of `car`.
-pub mod car {
-    use super::*;
-
-    /// Handling records (0x158 bytes), one per car.
-    pub const HANDLING: u32 = 0x087F_1100;
-
-    pub fn auto_shift(m: &mut Mem, e: u32) {
-        with_car(m, e, crate::car::auto_shift);
-    }
-
-    pub fn nitro(m: &mut Mem, e: u32) {
-        let p = m.u32(e + 0x8C);
-        let mut c = Car::load(m, p);
-        let mut g = CarGlobals::load(m, 0);
-        let dt = g.dt;
-        crate::car::nitro(&mut c, &mut g, dt);
-        c.store(m, p);
-        g.store(m, 0);
-    }
-
-    pub fn torque(m: &Mem, p: u32, rpm: i32) -> i32 {
-        crate::car::torque(&Car::load(m, p), rpm)
-    }
-
-    /// A piecewise-linear curve at `table` (count, x of the first and last point, pointer to the y words).
-    pub fn curve(m: &Mem, table: u32, x: i32) -> i32 {
-        let ys = m.u32(table + 0xC);
-        let curve = crate::data::Curve {
-            x0: m.i32(table + 4),
-            x1: m.i32(table + 8),
-            ys: (0..=m.i32(table) as u32).map(|k| m.i32(ys + 4 * k)).collect(),
-        };
-        curve.eval(x)
-    }
-
-    /// `FUN_0814efa8`: put car `e` back on the road at the waypoint at address `wp`.
-    pub fn put_back_on_road(m: &mut Mem, e: u32, wp: u32) {
-        let index = ((wp - m.u32(world::W_WAYPOINTS)) / 0x18) as usize;
-        with_car(m, e, |w, i| crate::car::put_back_on_road(w, i, index));
-    }
-}
-
-/// The RAM-image twins of `init`.
-pub mod init {
-    use super::*;
-
-    pub fn nitro_setup(m: &mut Mem, e: u32, _p: u32) {
-        with_car(m, e, crate::init::nitro_setup);
-    }
-
-    /// `FUN_0814b2a8` with the handling record at `h` (address in ROM).
-    pub fn setup_handling(m: &mut Mem, e: u32, _h: u32) {
-        let (car, data) = (m.u8(e + 0x89) as usize, m.data().clone());
-        with_car(m, e, |w, i| crate::init::setup_handling(w, i, &data.car.handling[car]));
-    }
-
-    pub fn race_start_setup(sim: &mut Sim, e: u32) -> Result<()> {
-        let (_, sounds) = with_car(&mut sim.mem, e, crate::init::race_start_setup);
-        sim.sounds.extend(sounds);
-        Ok(())
-    }
-}
-
 /// The RAM-image twins of `contact`.
 pub mod contact {
     use super::*;
 
-    pub const WHEELS: u32 = 0x18C;
-    pub const WHEEL_SIZE: u32 = 0x94;
-
-    pub fn tipped(sim: &mut Sim, e: u32, dt: i32) {
-        let (_, sounds) = with_car(&mut sim.mem, e, |w, i| crate::contact::tipped(w, i, dt));
-        sim.sounds.extend(sounds);
-    }
-
     pub fn suspension(m: &mut Mem, e: u32, pts: &mut [[i32; 3]], sectors: &mut [u16], dt: i32) -> i32 {
         with_car(m, e, |w, i| crate::contact::suspension(w, i, pts, sectors, dt)).0
-    }
-}
-
-/// The RAM-image twins of `walls`.
-pub mod walls {
-    use super::*;
-
-    /// `FUN_081459b8`: the largest impulse applied.
-    pub fn walls(sim: &mut Sim, e: u32, x: i32, z: i32, _y: i32, sector: u32, recurse: bool) -> Result<i32> {
-        let (hit, sounds) = with_car(&mut sim.mem, e, |w, i| crate::walls::walls(w, i, x, z, sector, recurse));
-        sim.sounds.extend(sounds);
-        Ok(hit)
-    }
-
-    pub fn racers(sim: &mut Sim, e: u32, dt: i32) -> Result<()> {
-        let (_, sounds) = with_car(&mut sim.mem, e, |w, i| crate::walls::racers(w, i, dt));
-        sim.sounds.extend(sounds);
-        Ok(())
-    }
-}
-
-/// The RAM-image twins of `body` (offsets in the physics struct's rigid body).
-pub mod body {
-    use super::*;
-    use crate::state::RigidBody;
-
-    pub const POS: u32 = 0x08;
-    pub const MOMENTUM: u32 = 0x30;
-    pub const ANG_MOMENTUM: u32 = 0x48;
-    pub const VEL: u32 = 0x54;
-
-    pub fn update_velocities(m: &mut Mem, b: u32) {
-        let mut body = RigidBody::load(m, b);
-        crate::body::update_velocities(&mut body);
-        body.store(m, b);
-    }
-
-    pub fn integrate(m: &mut Mem, b: u32, dt: i32) {
-        let mut body = RigidBody::load(m, b);
-        crate::body::integrate(&m.rom, &mut body, dt);
-        body.store(m, b);
     }
 }
 
@@ -473,6 +369,7 @@ pub fn racer(m: &Mem, e: u32) -> nfsgba_formats::career::Racer {
         c: ent.driver.read(m),
         e: ent,
         has_car: true,
+        block: None,
     }
     .racer()
 }
@@ -484,6 +381,7 @@ pub fn store_racer(m: &mut Mem, e: u32, r: &nfsgba_formats::career::Racer) {
         c: ent.driver.read(m),
         e: ent,
         has_car: true,
+        block: None,
     };
     s.set_racer(r);
     s.e.store(m, e);

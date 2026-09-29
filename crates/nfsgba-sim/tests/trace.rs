@@ -332,7 +332,7 @@ fn perturbed_steps_match_the_oracle() {
         let result = if index == 0 || c["car"].as_bool() == Some(true) {
             nfsgba_sim::ram::car_handler(&mut sim, e).map(|()| None)
         } else {
-            nfsgba_sim::ai::handler(&mut sim, e)
+            nfsgba_sim::ram::ai_handler(&mut sim, e)
                 .map(|fx| fx.map(|f| format!("effects({},{},{},{})", f.entity, f.heading, f.view, f.size)))
         };
         let fx = match result {
@@ -412,7 +412,7 @@ fn calls_match_the_oracle() {
         let result = match fun {
             "spawn" => {
                 let near = mem.u32(W_ENTITIES) + 0xA4 * c["near"].as_u64().unwrap() as u32;
-                nfsgba_sim::traffic::spawn(&mut mem, near, c["kind"].as_u64().unwrap() as u32).map(Some)
+                nfsgba_sim::ram::traffic_spawn(&mut mem, near, c["kind"].as_u64().unwrap() as u32).map(Some)
             }
             "wingman" => nfsgba_sim::ram::route::wingman_command(&mut mem).map(|()| None),
             "lap" => {

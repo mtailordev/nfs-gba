@@ -1,51 +1,30 @@
-//! Traffic spawning (`FUN_08143d48`), run from the player's step by the traffic countdown (`FUN_08143b2c`).
+//! Traffic spawning (`FUN_08143d48`) on typed state, run from the car step by the traffic countdown
+//! (`FUN_08143b2c`).
 //!
-//! A traffic car takes a free entity (handler 0x36) and a 0x28-byte block on the heap, and appears on the
+//! A traffic car takes a free entity (handler 0x36) and a 0x28-byte block ([`TrafficBlock`]), and appears on the
 //! main route a little ahead of or behind the player, in a random lane, unless it would land near a racer or
-//! another traffic car (the 8 slots at 0x03006270).
+//! another traffic car (the 8 live slots, `CarGlobals::live`). The block's heap allocation and the sector list
+//! are the RAM image's: the spawn records them (`CarWorld::heap_ops`, `list_ops`) for the adapter.
 
-use crate::Result;
-use crate::heap;
+use crate::carworld::{CarWorld, HeapOp, ListOp};
+
 use crate::math::{div, isqrt};
-use crate::mem::Mem;
-use crate::ram::route::CIRCUIT;
-use crate::world::{self, NONE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
+/// `rand_table` on the RAM image, for the callers that still keep their state there (`slots.rs`).
+pub use crate::ram::rand;
+use crate::state::{Entity, TrafficBlock};
 
-/// The live traffic cars (entity addresses, 0 = free).
-const SLOTS: u32 = 0x0300_6270;
-const RACERS: u32 = 0x0300_57EC;
-/// Lane offsets (4 words) and traffic models (u16 model, u16 paint per type).
-const LANE_OFFSETS: u32 = 0x087F_5488;
-const TRAFFIC_TYPES: u32 = 0x087F_546C;
 /// Spawn distance from the player: past sqrt(0x18FFFFF), about 1,280 city units; clearance sqrt(0x8FFFF).
 const SPAWN_DISTANCE2: i32 = 0x18F_FFFF;
 const CLEARANCE2: i32 = 0x8_FFFF;
 
-/// `rand_table` (`FUN_0815fcfc`): the next entry of the 256-entry table at 0x087C03F0.
-pub fn rand(m: &mut Mem) -> u32 {
-    let mut k = m.u32(0x0300_64C8);
-    let r = nfsgba_fixed::rand_table(&m.rom, &mut k);
-    m.set_u32(0x0300_64C8, k);
-    r
+/// `FUN_08137534`: the first entity of the traffic range whose state bit 0 is clear.
+fn free_entity(w: &CarWorld) -> Option<usize> {
+    w.extra.clone().find(|&k| w.slots[k].e.state & 1 == 0)
 }
 
-/// `atan2_fast` (IWRAM 0x03004470) on the ROM in `m`.
-pub fn atan2_fast(m: &Mem, x: i32, z: i32) -> i32 {
-    nfsgba_fixed::atan2_fast(&m.rom, x, z)
-}
-
-/// `FUN_08137534`: the first entity at world `+0xF8` and after (world `+0xFA` of them) whose flag bit 0 is clear.
-fn free_entity(m: &Mem) -> u32 {
-    let (first, count) = (m.u16(WORLD + 0xF8) as u32, m.u16(WORLD + 0xFA) as u32);
-    (0..count)
-        .map(|k| world::entity(m, first + k))
-        .find(|&e| m.u16(e + 8) & 1 == 0)
-        .map_or(NONE, |e| m.u16(e) as u32)
-}
-
-fn clamp_waypoint(m: &Mem, i: i32, count: i32) -> i32 {
+fn clamp_waypoint(w: &CarWorld, i: i32, count: i32) -> i32 {
     let mut i = i;
-    if m.i32(CIRCUIT) == 0 {
+    if w.g.circuit == 0 {
         if count - 1 <= i {
             i = count - 1;
         }
@@ -67,217 +46,226 @@ fn dist2(dx: i32, dz: i32) -> i32 {
     dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz))
 }
 
-/// `FUN_08143d48` for `kind` 1 (ahead of or behind `near`, the player): the new entity's index, or 0xFFFF.
-pub fn spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
-    let slot = free_entity(m);
-    if slot == NONE || m.u8(0x0300_6298) == 0 {
-        return Ok(NONE);
+/// `FUN_08143d48`: a traffic car for spawn kind `kind` (1: ahead of or behind the entity `near`, the player) in
+/// the first free entity; its index, or `None` when there is none or no place.
+pub fn spawn(w: &mut CarWorld, near: usize, kind: u32) -> Option<usize> {
+    let t = free_entity(w)?;
+    if w.g.traffic_on == 0 {
+        return None;
     }
-    let t = world::entity(m, slot);
-    m.set_u16(t + 0x9E, kind as u16);
-    let block = heap::alloc_zeroed(m, 0x28);
-    m.set_u32(t + 0x8C, block);
-    let give_up = |m: &mut Mem| {
-        if m.u32(t + 0x8C) != 0 {
-            heap::free(m, block);
-            m.set_u32(t + 0x8C, 0);
-        }
-        Ok(NONE)
+    w.slots[t].e.traffic_mode = kind as i16;
+    w.slots[t].block = Some(TrafficBlock::default());
+    w.heap_ops.push(HeapOp::Alloc(t));
+    let placed = if kind != 1 {
+        (kind != 0 && kind != 2) || at_section_start(w, near, t, kind)
+    } else {
+        ahead_or_behind(w, near, t)
     };
-    if kind != 1 {
-        if (kind == 0 || kind == 2) && !at_section_start(m, near, t, block, kind) {
-            return give_up(m);
-        }
-        return Ok(finish(m, t, slot, block));
+    if !placed {
+        w.slots[t].block = None;
+        w.heap_ops.push(HeapOp::Free(t));
+        return None;
     }
-    let seg = m.u16(near + 0x72) as u32;
-    let segs = m.u32(W_SEGMENTS);
-    if segs.wrapping_add(seg * 8) == 0 || seg != 0 {
-        return give_up(m);
+    finish(w, t);
+    Some(t)
+}
+
+/// Kind 1: ahead of or behind `near` on the main route. `false` gives the car up.
+fn ahead_or_behind(w: &mut CarWorld, near: usize, t: usize) -> bool {
+    let n = w.slots[near].e.clone();
+    let seg = n.segment as u32;
+    if w.route.line.sections.is_empty() || seg != 0 {
+        return false;
     }
-    let count = m.u16(segs) as i32;
-    let wp = |m: &Mem, i: i32| m.u32(W_WAYPOINTS).wrapping_add((m.i32(segs + 4) + i) as u32 * 0x18);
-    let mut i = m.i16(near + 0x90) as i32;
-    let mut back = wp(m, i);
-    i = clamp_waypoint(m, i + 1, count);
-    let mut ahead = wp(m, i);
+    let (count, first) = {
+        let s = &w.route.line.sections[0];
+        (s.count as i32, s.first as i32)
+    };
+    let wp = |i: i32| (first + i) as usize;
+    let pt = |w: &CarWorld, k: usize| {
+        let p = &w.route.line.points[k];
+        (p.x, p.z)
+    };
+    let mut i = n.waypoint as i32;
+    let mut back = wp(i);
+    i = clamp_waypoint(w, i + 1, count);
+    let mut ahead = wp(i);
     let mut step = 1;
-    let p = m.u32(near + 0x8C);
-    let along = m
-        .i32(p + 0x140)
-        .wrapping_mul(m.i32(ahead) - m.i32(back))
-        .wrapping_add((m.i32(ahead + 4) - m.i32(back + 4)).wrapping_mul(m.i32(p + 0x148)));
+    let c = &w.slots[near].c;
+    let (a, b) = (pt(w, ahead), pt(w, back));
+    let along = c.body.rot[6]
+        .wrapping_mul(a.0 - b.0)
+        .wrapping_add((a.1 - b.1).wrapping_mul(c.body.rot[8]));
     if along < 1 {
         // Driving against the route: spawn behind.
         step = -1;
-        i = m.i16(near + 0x90) as i32;
+        i = n.waypoint as i32;
         (back, ahead) = (ahead, back);
     }
-    let lane = if rand(m) & 1 == 0 {
-        m.set_u16(t + 0x9A, 0xFFFF);
+    let lane = if w.rand() & 1 == 0 {
+        w.slots[t].e.direction = -1;
         2
     } else {
-        m.set_u16(t + 0x9A, 1);
+        w.slots[t].e.direction = 1;
         0
     };
-    let (ex, ez) = (m.i32(near + 0xC) >> 8, m.i32(near + 0x14) >> 8);
-    let (mut dx, mut dz) = (m.i32(ahead) - ex, m.i32(ahead + 4) - ez);
+    let (ex, ez) = (n.pos[0] >> 8, n.pos[2] >> 8);
+    let a = pt(w, ahead);
+    let (mut dx, mut dz) = (a.0 - ex, a.1 - ez);
     let mut tries = 0x14;
     while dist2(dx, dz) <= SPAWN_DISTANCE2 {
         back = ahead;
-        i = clamp_waypoint(m, i + step, count);
-        ahead = wp(m, i);
-        (dx, dz) = (m.i32(ahead) - ex, m.i32(ahead + 4) - ez);
+        i = clamp_waypoint(w, i + step, count);
+        ahead = wp(i);
+        let a = pt(w, ahead);
+        (dx, dz) = (a.0 - ex, a.1 - ez);
         tries -= 1;
         if tries == 0 {
-            return give_up(m);
+            return false;
         }
     }
     // Too close to a racer? (Compared with the free entity's stale position, as the game does.)
     let mut blocked = 0;
-    let racers = m.u32(RACERS);
+    let racers = w.g.racers as usize;
     if racers != 0 {
-        let entities = m.u32(W_ENTITIES);
-        let d = |m: &Mem, o: u32| {
-            dist2(
-                (m.i32(o + 0xC) - m.i32(t + 0xC)) >> 8,
-                (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 8,
-            )
+        let stale = w.slots[t].e.pos;
+        let d = |w: &CarWorld, o: usize| {
+            let p = &w.slots[o].e.pos;
+            dist2((p[0] - stale[0]) >> 8, (p[2] - stale[2]) >> 8)
         };
         let mut k = 0;
-        let mut o = entities;
-        let mut clear = CLEARANCE2 < d(m, o);
+        let mut clear = CLEARANCE2 < d(w, k);
         while clear {
             k += 1;
             if racers <= k {
                 break;
             }
-            o += 0xA4;
-            clear = CLEARANCE2 < d(m, o);
+            clear = CLEARANCE2 < d(w, k);
         }
         if !clear {
             blocked = 1;
         }
     }
-    m.set_i32(t + 0xC, (dx << 8).wrapping_add(m.i32(near + 0xC)));
-    m.set_i32(t + 0x14, (dz << 8).wrapping_add(m.i32(near + 0x14)));
+    let e = &mut w.slots[t].e;
+    e.pos[0] = (dx << 8).wrapping_add(n.pos[0]);
+    e.pos[2] = (dz << 8).wrapping_add(n.pos[2]);
+    let pos = e.pos;
     for k in 0..8 {
-        let o = m.u32(SLOTS + 4 * k);
-        if o != 0
-            && dist2(
-                (m.i32(o + 0xC) - m.i32(t + 0xC)) >> 8,
-                (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 8,
-            ) <= CLEARANCE2
-        {
+        let live = w.g.live[k];
+        if live.is_null() {
+            continue;
+        }
+        let o = &w.slots[w.entity_of(live)].e.pos;
+        if dist2((o[0] - pos[0]) >> 8, (o[2] - pos[2]) >> 8) <= CLEARANCE2 {
             blocked += 1;
             break;
         }
     }
     if blocked != 0 {
-        return give_up(m);
+        return false;
     }
-    m.set_u16(t + 0x78, m.u32(ahead + 0x14) as u16);
+    let sector = w.route.extra[ahead].sector as u16;
     let mut to = ahead;
-    if m.i16(t + 0x9A) as i32 != step {
+    if w.slots[t].e.direction as i32 != step {
         i -= step;
         to = back;
         back = ahead;
-        i = clamp_waypoint(m, i, count);
+        i = clamp_waypoint(w, i, count);
     }
-    m.set_u16(t + 0x9C, i as u16);
-    m.set_u16(t + 4, 0xFFFF);
-    m.set_u16(t + 8, 7);
-    m.set_u16(t + 0xA, 2);
-    m.set_u16(t + 0x46, 0);
-    m.set_u16(t + 2, 0xFFFF);
-    m.set_u16(t + 0x44, 0);
-    m.set_i32(t + 0x10, m.i32(near + 0x10));
-    m.set_u16(t + 0x4A, 0);
-    m.set_u32(t + 0x1C, 0);
-    m.set_u32(t + 0x24, 1);
-    m.set_u16(t + 0x52, 0);
-    m.set_u16(t + 0x4E, 0x36);
-    let (dx, dz) = (m.i32(to) - m.i32(back), m.i32(to + 4) - m.i32(back + 4));
+    let (tp, bp) = (pt(w, to), pt(w, back));
+    let (dx, dz) = (tp.0 - bp.0, tp.1 - bp.1);
     let len = isqrt(dist2(dx, dz) as u32);
-    m.set_u16(t + 0x32, atan2_fast(m, dx, dz) as u16);
-    m.set_i32(t + 0x2C, m.i16(t + 0x32) as i32);
+    let heading = w.atan2_fast(dx, dz) as u16 as i16;
     let (ux, uz) = (div(dx << 12, len), div(dz << 12, len));
-    m.set_i32(t + 0x18, ux);
-    m.set_i32(t + 0x20, uz);
-    let offset = m.i32(LANE_OFFSETS + lane * 4);
+    let offset = w.data.ai.traffic.lanes[lane as usize];
     let (ox, oz) = (offset.wrapping_mul(ux), offset.wrapping_mul(uz));
-    m.set_i32(t + 0xC, m.i32(t + 0xC).wrapping_add(oz));
-    m.set_i32(t + 0x14, m.i32(t + 0x14).wrapping_sub(ox));
-    m.set_i32(block, m.i32(to) + (oz >> 8));
-    m.set_i32(block + 4, m.i32(to + 4) - (ox >> 8));
-    m.set_u32(block + 0x24, lane);
-    m.set_u16(t + 0x72, m.u16(near + 0x72));
-    Ok(finish(m, t, slot, block))
+    let e = &mut w.slots[t].e;
+    e.sector = sector;
+    e.traffic_waypoint = i as i16;
+    init_entity(e);
+    e.pos[1] = n.pos[1];
+    e.angles[1] = heading;
+    e.heading = heading as i32;
+    e.dir_x = ux;
+    e.dir_z = uz;
+    e.pos[0] = e.pos[0].wrapping_add(oz);
+    e.pos[2] = e.pos[2].wrapping_sub(ox);
+    e.segment = n.segment;
+    let block = w.slots[t].block.as_mut().expect("the spawn allocated the block");
+    block.target = [tp.0 + (oz >> 8), tp.1 - (ox >> 8)];
+    block.lane = lane;
+    true
+}
+
+/// What every traffic car starts with: not drawn yet, active, speed 1, handler 0x36.
+fn init_entity(e: &mut Entity) {
+    e.draw_next = 0xFFFF;
+    e.state = 7;
+    e.flags = 2;
+    e.material_offset = 0;
+    e.next = 0xFFFF;
+    e.material_step = 0;
+    e.race_state = 0;
+    e.u_1c = 0;
+    e.speed = 1;
+    e.speed_up = 0;
+    e.handler = 0x36;
 }
 
 /// Kinds 0 and 2 (the spawner handlers `FUN_08143ba8` and `FUN_08143c78`, table entries 0x2D/0x2E and 0x2A): the
 /// car starts at the first waypoint of `near`'s racing-line section, heading for the second, at full (kind 2) or
 /// half (kind 0) unit speed. `false` when the section has no record (the car is given up).
-fn at_section_start(m: &mut Mem, near: u32, t: u32, block: u32, kind: u32) -> bool {
-    m.set_u16(t + 0x9C, 1);
-    let rec = m.u32(W_SEGMENTS).wrapping_add(m.u16(near + 0x72) as u32 * 8);
-    if rec == 0 {
+fn at_section_start(w: &mut CarWorld, near: usize, t: usize, kind: u32) -> bool {
+    let n = w.slots[near].e.clone();
+    w.slots[t].e.traffic_waypoint = 1;
+    let Some(section) = w.route.line.sections.get(n.segment as usize) else {
         return false;
-    }
-    let w = m.u32(W_WAYPOINTS).wrapping_add(m.i32(rec + 4) as u32 * 0x18);
-    m.set_u16(t + 4, 0xFFFF);
-    m.set_u16(t + 8, 7);
-    m.set_u16(t + 0xA, 2);
-    m.set_u16(t + 0x46, 0);
-    m.set_u16(t + 2, 0xFFFF);
-    m.set_u16(t + 0x44, 0);
-    m.set_u16(t + 0x78, m.i32(w + 0x14) as u16);
-    m.set_u16(t + 0x4A, 0);
-    m.set_u32(t + 0x1C, 0);
-    m.set_u16(t + 0x30, 0);
-    m.set_u32(t + 0x24, 1);
-    m.set_u16(t + 0x52, 0);
-    m.set_u16(t + 0x4E, 0x36);
-    // (The game first sets +0x32/+0x2C from the next waypoint's +0x0A; both are overwritten below.)
-    let (x, z) = (m.i32(w), m.i32(w + 4));
-    let (dx, dz) = (m.i32(w + 0x18) - x, m.i32(w + 0x1C) - z);
+    };
+    let first = section.first as usize;
+    let (p, q) = (w.route.line.points[first], w.route.line.points[first + 1]);
+    let sector = w.route.extra[first].sector as u16;
+    let (dx, dz) = (q.x - p.x, q.z - p.z);
     let len = isqrt(dist2(dx, dz) as u32);
-    m.set_u16(t + 0x32, atan2_fast(m, dx, dz) as u16);
+    let heading = w.atan2_fast(dx, dz) as u16 as i16;
     let unit = if kind == 2 { 0x1000 } else { 0x800 };
-    m.set_i32(t + 0x18, div(dx.wrapping_mul(unit), len));
-    m.set_i32(t + 0x20, div(dz.wrapping_mul(unit), len));
-    m.set_i32(t + 0x2C, m.i16(t + 0x32) as i32);
-    m.set_i32(block, m.i32(w + 0x18));
-    m.set_i32(block + 4, m.i32(w + 0x1C));
-    m.set_i32(t + 0xC, x << 8);
-    m.set_i32(t + 0x10, m.i32(near + 0x10));
-    m.set_i32(t + 0x14, z << 8);
-    m.set_u16(t + 0x72, m.u16(near + 0x72));
-    m.set_u32(block + 0x18, 0);
+    let e = &mut w.slots[t].e;
+    init_entity(e);
+    e.sector = sector;
+    e.angles = [0, heading];
+    e.dir_x = div(dx.wrapping_mul(unit), len);
+    e.dir_z = div(dz.wrapping_mul(unit), len);
+    e.heading = heading as i32;
+    e.pos = [p.x << 8, n.pos[1], p.z << 8];
+    e.segment = n.segment;
+    let block = w.slots[t].block.as_mut().expect("the spawn allocated the block");
+    block.target = [q.x, q.z];
+    block.turn_t = 0;
     true
 }
 
 /// The part of `FUN_08143d48` all kinds share: the traffic type, the sector list, a live-traffic slot, and the
-/// car's block (`+0x10/+0x14` the unit direction).
-fn finish(m: &mut Mem, t: u32, slot: u32, block: u32) -> u32 {
+/// car's block (`turn_by` the unit direction).
+fn finish(w: &mut CarWorld, t: usize) {
     // Traffic type from the race's frame counter.
-    let types = m.u32(0x0300_625C);
-    let mut r = crate::math::umod(m.u32(0x0300_5628), types);
-    if r == types {
+    let models = w.g.traffic_models;
+    let mut r = crate::math::umod(w.g.race_frames, models);
+    if r == models {
         r -= 1;
     }
-    m.set_u16(t + 0x48, m.u16(TRAFFIC_TYPES + r * 4));
-    m.set_u16(t + 0x36, m.u16(TRAFFIC_TYPES + r * 4 + 2));
-    m.set_u16(t + 0x7C, r as u16);
-    m.set_u16(t + 0x70, 0x200);
-    world::link_entity(m, slot);
-    if let Some(k) = (0..8).find(|&k| m.u32(SLOTS + 4 * k) == 0) {
-        m.set_u32(SLOTS + 4 * k, t);
+    let (material, model) = w.data.ai.traffic.models[r as usize];
+    let e = &mut w.slots[t].e;
+    e.material = material;
+    e.model = model as i16;
+    e.traffic_type = r as u16;
+    e.u_70 = 0x200;
+    let (dir_x, dir_z) = (e.dir_x, e.dir_z);
+    w.list_ops.push(ListOp::Link(t));
+    if let Some(k) = (0..8).find(|&k| w.g.live[k].is_null()) {
+        w.g.live[k] = w.entities.at(t as u32);
     }
-    for off in [8, 0xC, 0x20, 0x1C] {
-        m.set_u32(block + off, 0);
-    }
-    m.set_i32(block + 0x10, m.i32(t + 0x18));
-    m.set_i32(block + 0x14, m.i32(t + 0x20));
-    slot
+    let block = w.slots[t].block.as_mut().expect("the spawn allocated the block");
+    block.turn_from = [0, 0];
+    block.flags = 0;
+    block.turn_steps = 0;
+    block.turn_by = [dir_x, dir_z];
 }

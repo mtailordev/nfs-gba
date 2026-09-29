@@ -11,6 +11,7 @@
 #![allow(clippy::precedence)]
 
 pub mod ai;
+pub mod ai_tables;
 pub mod body;
 pub mod car;
 pub mod carworld;

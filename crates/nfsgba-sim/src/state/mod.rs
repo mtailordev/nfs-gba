@@ -3,7 +3,9 @@
 //! `docs/engine/address-map.md`; an offset the ported code touches without a known meaning is `u_<offset>`.
 //! Bytes no field declares are ones no ported code reads or writes.
 
+pub mod ai;
 pub mod car;
+pub use ai::*;
 pub use car::*;
 pub mod hud;
 pub mod slots;
@@ -32,6 +34,8 @@ layout! {
         0x1C sector_offsets: Ptr<SectorOffset>,
         /// The city's material table (0x24 bytes each; in the ROM, so not part of the RAM image the tests compare).
         0x24 material_info: Ptr<MaterialInfo>,
+        /// The racers' start entities (the opponents' setup copies their position).
+        0x38 templates: Ptr<Entity>,
         0x3C entities: Ptr<Entity>,
         /// Racing-line section table and racing line.
         0x40 sections: u32,
@@ -295,6 +299,7 @@ mod tests {
         assert_disjoint::<HudMessages>("HudMessages");
         assert_disjoint::<ShadowOam>("ShadowOam");
         assert_disjoint::<nfsgba_formats::ui::Object>("Object");
+        assert_disjoint::<TrafficBlock>("TrafficBlock");
         assert!(<Camera as crate::layout::Layout>::FIELDS.contains(&("matrix", CAMERA_MATRIX, 48)));
     }
 }

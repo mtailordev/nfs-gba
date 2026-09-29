@@ -1,66 +1,55 @@
-//! Traffic cars: entity handler 0x36 (`FUN_081443fc`). A traffic car (spawned by `traffic::spawn`) drives its
-//! lane of the main route at a fixed crawl, turning towards the next waypoint over 0x20 steps, until it is far
-//! from the entity the camera follows; it is not a rigid body. A racer running into it knocks it away (state 3).
+//! Traffic cars on typed state: entity handler 0x36 (`FUN_081443fc`). A traffic car (spawned by `traffic::spawn`)
+//! drives its lane of the main route at a fixed crawl, turning towards the next waypoint over 0x20 steps, until it
+//! is far from the entity the camera follows; it is not a rigid body. A racer running into it knocks it away
+//! (state 3).
 //!
-//! Entity fields: `+0x18/+0x20` direction (1.0 = 0x1000), `+0x24` speed, `+0x2C`/`+0x32` heading, `+0x30`
-//! pitch, `+0x38` heading wobble, `+0x4A` state (0 new, 1 driving, 2 remove, 3 knocked away), `+0x52` speed-up
-//! counter, `+0x56` knocked-away timer, `+0x72` route segment, `+0x7C` traffic type, `+0x9A` driving direction
-//! along the route (±1), `+0x9C` waypoint, `+0x9E` mode (1 lane driving, 2 follow the waypoints, else stop at
-//! the waypoint). The 0x28-byte block at `+0x8C`: `+0x00/+0x04` target point, `+0x08..+0x1C` the turn (start
-//! direction, change, progress, steps left), `+0x20` flags (bit 0: pitch set), `+0x24` lane.
+//! Entity fields (`state::Entity`): `dir_x`/`dir_z` direction (1.0 = 0x1000), `speed`, `heading` and
+//! `angles[1]` (shown heading), `angles[0]` pitch, `wobble`, `race_state` (0 new, 1 driving, 2 remove, 3 knocked
+//! away), `speed_up`, `knocked` (timer), `segment`, `traffic_type`, `direction` (along the route, ±1),
+//! `traffic_waypoint`, `traffic_mode` (1 lane driving, 2 follow the waypoints, else stop at the waypoint). The
+//! [`TrafficBlock`](crate::state::TrafficBlock): the target point, the turn, flags, lane.
+//!
+//! The block's heap allocation and the sector list are the RAM image's (`CarWorld::heap_ops`, `list_ops`).
 
-use crate::math::{cos, div, isqrt, sin};
-use crate::mem::Mem;
-use crate::ram::route::CIRCUIT;
-use crate::sound::Command;
-use crate::traffic::atan2_fast;
-use crate::world::{self, NONE, W_ENTITIES, W_QUERY, W_QUERY_SECTOR, W_SECTORS, W_SEGMENTS, W_WALLS, W_WAYPOINTS};
-use crate::{Result, Sim, Unported};
+use crate::carworld::{CarWorld, HeapOp, ListOp, NONE};
+use crate::math::{cos, cross, div, isqrt, sin, sub};
+use crate::{Result, Unported};
 
-/// The live traffic cars (entity addresses, 0 = free) and how many there are (byte).
-const SLOTS: u32 = 0x0300_6270;
-const COUNT: u32 = 0x0300_6240;
-const LANE_OFFSETS: u32 = 0x087F_5488;
-/// Per traffic type: collision points (count, then two offsets along the car) and the hit radius.
-const POINT_COUNT: u32 = 0x087F_5704;
-const POINTS: u32 = 0x087F_5804;
-const HIT_RADIUS: u32 = 0x087F_5784;
-const AXLE_OFFSETS: u32 = 0x087F_55FC;
-
-/// `FUN_081443fc`: entity handler 0x36.
-pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
-    let m = &mut sim.mem;
-    let camera = m.u32(W_ENTITIES) + m.u32(0x0300_57F8) * 0xA4;
-    let state = m.u16(e + 0x4A);
-    let old_sector = m.u16(e + 0x78);
-    let blk = m.u32(e + 0x8C);
-    if m.u8(0x0300_6298) == 0 {
+/// `FUN_081443fc`: entity handler 0x36 for entity `i`.
+pub fn handler(w: &mut CarWorld, i: usize) -> Result<()> {
+    let camera = w.g.focus as usize;
+    let e = &w.slots[i].e;
+    let (state, old_sector) = (e.race_state, e.sector);
+    if w.g.traffic_on == 0 {
         return Ok(());
     }
     match state {
-        1 => drive(sim, e, camera, old_sector, blk),
+        1 => drive(w, i, camera, old_sector),
         0 => {
             // `FUN_0814f874`: on the floor, no matrix slot.
-            let floor = world::floor_height(m, m.u16(e + 0x78) as u32, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
-            m.set_i32(e + 0x10, floor);
-            m.set_u8(e + 0x88, 0xFF);
-            m.set_u16(e + 0x64, 0);
-            m.set_u16(e + 0x4A, 1);
-            m.set_u16(e + 0xA0, 0);
+            let (sector, x, z) = (e.sector as u32, e.pos[0] >> 8, e.pos[2] >> 8);
+            let floor = w.floor_height(sector, x, z);
+            let e = &mut w.slots[i].e;
+            e.pos[1] = floor;
+            e.slot = 0xFF;
+            e.extra_model = 0;
+            e.race_state = 1;
+            e.u_a0 = 0;
             Ok(())
         }
-        3 => knocked_away(sim, e, camera),
+        3 => knocked_away(w, i, camera),
         2 => {
-            if blk != 0 {
-                crate::heap::free(m, blk);
-                m.set_u32(e + 0x8C, 0);
+            if w.slots[i].block.take().is_some() {
+                w.heap_ops.push(HeapOp::Free(i));
             }
-            m.set_u16(e + 8, m.u16(e + 8) & 0xFFFE);
-            m.set_u8(e + 0x88, 0xFF);
-            world::unlink_entity(m, m.u16(e) as u32);
-            m.set_u8(COUNT, m.u8(COUNT).wrapping_sub(1));
-            if let Some(k) = (0..8).find(|&k| m.u32(SLOTS + 4 * k) == e) {
-                m.set_u32(SLOTS + 4 * k, 0);
+            let e = &mut w.slots[i].e;
+            e.state &= 0xFFFE;
+            e.slot = 0xFF;
+            w.list_ops.push(ListOp::Unlink(i, e.sector));
+            w.g.traffic_count = w.g.traffic_count.wrapping_sub(1);
+            let this = w.entities.at(i as u32);
+            if let Some(k) = (0..8).find(|&k| w.g.live[k] == this) {
+                w.g.live[k] = crate::layout::Ptr::NULL;
             }
             Ok(())
         }
@@ -69,112 +58,109 @@ pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
 }
 
 /// Distance measure used for "far from the camera's car": squared 1/256-scaled city units, absolute value.
-fn far(m: &Mem, a: u32, e: u32) -> i32 {
-    let dx = ((m.i32(a + 0xC) >> 8) - (m.i32(e + 0xC) >> 8)) >> 8;
-    let dz = ((m.i32(a + 0x14) >> 8) - (m.i32(e + 0x14) >> 8)) >> 8;
+fn far(w: &CarWorld, a: usize, e: usize) -> i32 {
+    let (a, e) = (&w.slots[a].e, &w.slots[e].e);
+    let dx = ((a.pos[0] >> 8) - (e.pos[0] >> 8)) >> 8;
+    let dz = ((a.pos[2] >> 8) - (e.pos[2] >> 8)) >> 8;
     dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)).wrapping_abs()
 }
 
 /// State 1: drive along the lane.
-fn drive(sim: &mut Sim, e: u32, camera: u32, old_sector: u16, blk: u32) -> Result<()> {
-    let m = &mut sim.mem;
-    m.set_u32(e + 0x24, 3);
-    let c = m.u16(e + 0x52).wrapping_add(1);
-    m.set_u16(e + 0x52, c);
-    if m.u32(0x0300_624C) <= c as u32 {
-        if m.u32(e + 0x24) < m.u32(0x0300_6290) {
-            m.set_u32(e + 0x24, m.u32(e + 0x24) + 1);
+fn drive(w: &mut CarWorld, i: usize, camera: usize, old_sector: u16) -> Result<()> {
+    let e = &mut w.slots[i].e;
+    e.speed = 3;
+    e.speed_up = e.speed_up.wrapping_add(1);
+    if w.g.speed_up_steps <= e.speed_up as u32 {
+        if (e.speed as u32) < w.g.traffic_max_speed {
+            e.speed += 1;
         }
-        m.set_u16(e + 0x52, 0);
+        e.speed_up = 0;
     }
-    let speed = m.i32(e + 0x24);
-    if far(m, camera, e) > 0x2000 {
-        m.set_u16(e + 0x4A, 2);
+    let speed = e.speed;
+    if far(w, camera, i) > 0x2000 {
+        w.slots[i].e.race_state = 2;
         return Ok(());
     }
-    if m.u32(W_SEGMENTS) == 0 {
+    if w.route.line.sections.is_empty() {
         // The game would read its target waypoint through a null segment table (BIOS memory).
         return Err(Unported("traffic car without a route (world +0x40 is null)"));
     }
-    let seg = m.u32(W_SEGMENTS) + m.u16(e + 0x72) as u32 * 8;
-    let wp = |m: &Mem, i: i32| {
-        m.u32(W_WAYPOINTS)
-            .wrapping_add(m.u32(seg + 4).wrapping_mul(0x18))
-            .wrapping_add((i as u32).wrapping_mul(0x18))
+    let rom = w.rom;
+    let seg = w.slots[i].e.segment as usize;
+    let (count, first) = {
+        let s = &w.route.line.sections[seg];
+        (s.count as i32, s.first as i32)
     };
-    let target = wp(m, m.i16(e + 0x9C) as i32);
+    let wp = |i: i32| (first.wrapping_add(i)) as usize;
+    let point = |w: &CarWorld, k: usize| {
+        let p = &w.route.line.points[k];
+        [p.x, p.z]
+    };
+    let target = wp(w.slots[i].e.traffic_waypoint as i32);
     // The turn in progress: the direction moves by 1/0x20 of the change per step.
-    if m.i32(blk + 0x1C) != 0 {
-        let t = m.i32(blk + 0x18) + 0x80;
-        m.set_i32(blk + 0x18, t);
-        m.set_i32(blk + 0x1C, m.i32(blk + 0x1C) - 1);
-        m.set_i32(e + 0x18, m.i32(blk + 8) + (t.wrapping_mul(m.i32(blk + 0x10)) >> 12));
-        m.set_i32(
-            e + 0x20,
-            m.i32(blk + 0xC) + (m.i32(blk + 0x18).wrapping_mul(m.i32(blk + 0x14)) >> 12),
-        );
-        let h = atan2_fast(m, m.i32(e + 0x18), m.i32(e + 0x20));
-        m.set_u16(e + 0x32, h as u16);
-        m.set_i32(e + 0x2C, m.i16(e + 0x32) as i32);
-        if m.i32(blk + 0x1C) == 0 {
-            let dx = m.i32(blk) - (m.i32(e + 0xC) >> 8);
-            let dz = m.i32(blk + 4) - (m.i32(e + 0x14) >> 8);
+    let s = &mut w.slots[i];
+    let b = s.block.as_mut().expect("a driving traffic car has its block");
+    if b.turn_steps != 0 {
+        b.turn_t += 0x80;
+        b.turn_steps -= 1;
+        s.e.dir_x = b.turn_from[0] + (b.turn_t.wrapping_mul(b.turn_by[0]) >> 12);
+        s.e.dir_z = b.turn_from[1] + (b.turn_t.wrapping_mul(b.turn_by[1]) >> 12);
+        let h = nfsgba_fixed::atan2_fast(rom, s.e.dir_x, s.e.dir_z);
+        s.e.angles[1] = h as i16;
+        s.e.heading = s.e.angles[1] as i32;
+        if b.turn_steps == 0 {
+            let dx = b.target[0] - (s.e.pos[0] >> 8);
+            let dz = b.target[1] - (s.e.pos[2] >> 8);
             let len = isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32);
-            m.set_i32(e + 0x18, div(dx.wrapping_mul(0x1000), len));
-            m.set_i32(e + 0x20, div(dz.wrapping_mul(0x1000), len));
+            s.e.dir_x = div(dx.wrapping_mul(0x1000), len);
+            s.e.dir_z = div(dz.wrapping_mul(0x1000), len);
         }
     }
-    m.set_i32(
-        e + 0xC,
-        m.i32(e + 0xC).wrapping_add(speed.wrapping_mul(m.i32(e + 0x18))),
-    );
-    m.set_i32(
-        e + 0x14,
-        m.i32(e + 0x14).wrapping_add(speed.wrapping_mul(m.i32(e + 0x20))),
-    );
-    let wobble = m.i32(e + 0x38);
+    let e = &mut w.slots[i].e;
+    e.pos[0] = e.pos[0].wrapping_add(speed.wrapping_mul(e.dir_x));
+    e.pos[2] = e.pos[2].wrapping_add(speed.wrapping_mul(e.dir_z));
+    let wobble = e.wobble;
     if wobble == 0 {
         // Ease the displayed heading towards the travel heading by halves.
-        let cur = m.i32(e + 0x2C);
-        let shown = m.i16(e + 0x32) as i32;
+        let cur = e.heading;
+        let shown = e.angles[1] as i32;
         if shown != cur {
             let d = shown - cur;
             let half = (d >> 1) as i16;
-            m.set_i16(
-                e + 0x32,
-                if d < 0 {
-                    (shown as i16).wrapping_add(half)
-                } else {
-                    (shown as i16).wrapping_sub(half)
-                },
-            );
+            e.angles[1] = if d < 0 {
+                (shown as i16).wrapping_add(half)
+            } else {
+                (shown as i16).wrapping_sub(half)
+            };
         }
     } else {
-        m.set_i16(e + 0x32, m.i16(e + 0x32).wrapping_add(wobble as i16));
-        m.set_i32(e + 0x38, wobble >> 1);
+        e.angles[1] = e.angles[1].wrapping_add(wobble as i16);
+        e.wobble = wobble >> 1;
         if wobble >> 1 == 0 {
-            m.set_u32(e + 0x24, 1);
-            m.set_u16(e + 0x52, 0);
+            e.speed = 1;
+            e.speed_up = 0;
         }
     }
-    if seg == 0 {
-        return Ok(());
-    }
-    let count = m.u16(seg) as i32;
-    let d2 = |m: &Mem, x: i32, z: i32| {
-        let dx = x.wrapping_mul(0x100).wrapping_sub(m.i32(e + 0xC)) >> 8;
-        let dz = z.wrapping_mul(0x100).wrapping_sub(m.i32(e + 0x14)) >> 8;
+    let d2 = |w: &CarWorld, x: i32, z: i32| {
+        let e = &w.slots[i].e;
+        let dx = x.wrapping_mul(0x100).wrapping_sub(e.pos[0]) >> 8;
+        let dz = z.wrapping_mul(0x100).wrapping_sub(e.pos[2]) >> 8;
         dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) >> 8
     };
-    match m.i16(e + 0x9E) {
+    let block_target = |w: &CarWorld| w.slots[i].block.as_ref().unwrap().target;
+    let circuit = w.g.circuit != 0;
+    let tp = point(w, target);
+    match w.slots[i].e.traffic_mode {
         1 => {
-            if d2(m, m.i32(blk), m.i32(blk + 4)) < speed.wrapping_mul(0x41A) {
-                let mut n = m.i16(e + 0x9C) as i32 + m.i16(e + 0x9A) as i32;
-                if m.i32(CIRCUIT) == 0 && (count - 1 <= n || n < 1) {
-                    m.set_u16(e + 0x4A, 3);
-                    m.set_u16(e + 0x56, 600);
+            let bt = block_target(w);
+            if d2(w, bt[0], bt[1]) < speed.wrapping_mul(0x41A) {
+                let e = &mut w.slots[i].e;
+                let mut n = e.traffic_waypoint as i32 + e.direction as i32;
+                if !circuit && (count - 1 <= n || n < 1) {
+                    e.race_state = 3;
+                    e.knocked = 600;
                 }
-                if m.i32(CIRCUIT) == 0 {
+                if !circuit {
                     n = n.min(count - 1).max(0);
                 } else {
                     if count - 1 <= n {
@@ -184,154 +170,155 @@ fn drive(sim: &mut Sim, e: u32, camera: u32, old_sector: u16, blk: u32) -> Resul
                         n += count - 1;
                     }
                 }
-                let next = wp(m, n);
-                m.set_i16(e + 0x9C, n as i16);
-                let dx = m.i32(next) - m.i32(target);
-                let dz = m.i32(next + 4) - m.i32(target + 4);
+                let next = point(w, wp(n));
+                w.slots[i].e.traffic_waypoint = n as i16;
+                let dx = next[0] - tp[0];
+                let dz = next[1] - tp[1];
                 let len = isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32);
                 let (ux, uz) = (div(dx.wrapping_mul(0x1000), len), div(dz.wrapping_mul(0x1000), len));
-                let lane = m.i32(LANE_OFFSETS.wrapping_add(m.u32(blk + 0x24).wrapping_mul(4)));
-                let px = m.i32(next) + (lane.wrapping_mul(uz) >> 8);
-                let pz = m.i32(next + 4) - (ux.wrapping_mul(lane) >> 8);
-                m.set_i32(blk, px);
-                m.set_i32(blk + 4, pz);
-                let nx = div((px - m.i32(target)).wrapping_mul(0x1000), len);
-                let nz = div((pz - m.i32(target + 4)).wrapping_mul(0x1000), len);
-                start_turn(m, e, blk, nx, nz, 0x20);
+                let b = w.slots[i].block.as_mut().unwrap();
+                let lane = w.data.ai.traffic.lanes[b.lane as usize];
+                let px = next[0] + (lane.wrapping_mul(uz) >> 8);
+                let pz = next[1] - (ux.wrapping_mul(lane) >> 8);
+                b.target = [px, pz];
+                let nx = div((px - tp[0]).wrapping_mul(0x1000), len);
+                let nz = div((pz - tp[1]).wrapping_mul(0x1000), len);
+                start_turn(w, i, nx, nz, 0x20);
             }
         }
         2 => {
-            if (d2(m, m.i32(target), m.i32(target + 4)) as u32) < (speed.wrapping_mul(m.i32(0x0300_6294))) as u32 {
-                let n = m.i16(e + 0x9C) as i32 + 1;
+            if (d2(w, tp[0], tp[1]) as u32) < (speed.wrapping_mul(w.g.traffic_stop)) as u32 {
+                let n = w.slots[i].e.traffic_waypoint as i32 + 1;
                 if n < count {
-                    let next = wp(m, n);
-                    m.set_i16(e + 0x9C, n as i16);
-                    let dx = m.i32(next) - m.i32(target);
-                    let dz = m.i32(next + 4) - m.i32(target + 4);
+                    let next = point(w, wp(n));
+                    w.slots[i].e.traffic_waypoint = n as i16;
+                    let dx = next[0] - tp[0];
+                    let dz = next[1] - tp[1];
                     let len = isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32);
                     let (nx, nz) = (div(dx.wrapping_mul(0x1000), len), div(dz.wrapping_mul(0x1000), len));
-                    start_turn(m, e, blk, nx, nz, 0x10);
-                    m.set_i32(blk, m.i32(next));
-                    m.set_i32(blk + 4, m.i32(next + 4));
+                    start_turn(w, i, nx, nz, 0x10);
+                    w.slots[i].block.as_mut().unwrap().target = next;
                 } else {
-                    m.set_u16(e + 0x4A, 2);
+                    w.slots[i].e.race_state = 2;
                 }
             }
         }
         _ => {
-            if (d2(m, m.i32(target), m.i32(target + 4)) as u32) < (speed.wrapping_mul(m.i32(0x0300_6294))) as u32 {
-                m.set_u16(e + 0x4A, 2);
+            if (d2(w, tp[0], tp[1]) as u32) < (speed.wrapping_mul(w.g.traffic_stop)) as u32 {
+                w.slots[i].e.race_state = 2;
             }
         }
     }
-    world::unlink_entity(m, m.u16(e) as u32);
-    m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
-    m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
-    m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    let s = traffic_find_sector(m);
-    m.set_u16(e + 0x78, if s == NONE { old_sector } else { s as u16 });
-    let sector = m.u16(e + 0x78) as u32;
-    let floor = world::floor_height(m, sector, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
-    m.set_i32(e + 0x10, floor);
-    if sector as u16 != old_sector || m.u32(blk + 0x20) & 1 == 0 {
-        m.set_u32(blk + 0x20, m.u32(blk + 0x20) | 1);
-        if m.i16(e + 0x9E) == 1 {
-            // Pitch from the floor one turn-step ahead.
-            let ahead = world::floor_height(
-                m,
-                sector,
-                m.i32(e + 0xC)
-                    .wrapping_add(m.i32(blk + 8))
-                    .wrapping_add(m.i32(blk + 0x10))
-                    >> 8,
-                m.i32(e + 0x14)
-                    .wrapping_add(m.i32(blk + 0xC))
-                    .wrapping_add(m.i32(blk + 0x14))
-                    >> 8,
-            );
-            let pitch = atan2_fast(m, ahead - m.i32(e + 0x10), 0xC00);
-            m.set_i16(e + 0x30, (pitch as i16).wrapping_neg());
+    w.list_ops.push(ListOp::Unlink(i, w.slots[i].e.sector));
+    let e = &w.slots[i].e;
+    w.query.pos[0] = e.pos[0] >> 8;
+    w.query.pos[2] = e.pos[2] >> 8;
+    w.query.sector = e.sector;
+    let s = find_sector(w);
+    w.slots[i].e.sector = if s == NONE { old_sector } else { s as u16 };
+    let e = &w.slots[i].e;
+    let sector = e.sector as u32;
+    let floor = w.floor_height(sector, e.pos[0] >> 8, e.pos[2] >> 8);
+    w.slots[i].e.pos[1] = floor;
+    let b = w.slots[i].block.as_ref().unwrap();
+    if sector as u16 != old_sector || b.flags & 1 == 0 {
+        let e = &w.slots[i].e;
+        let mode = e.traffic_mode;
+        // Pitch from the floor one turn-step ahead.
+        let ahead = w.floor_height(
+            sector,
+            e.pos[0].wrapping_add(b.turn_from[0]).wrapping_add(b.turn_by[0]) >> 8,
+            e.pos[2].wrapping_add(b.turn_from[1]).wrapping_add(b.turn_by[1]) >> 8,
+        );
+        let s = &mut w.slots[i];
+        s.block.as_mut().unwrap().flags |= 1;
+        if mode == 1 {
+            let pitch = nfsgba_fixed::atan2_fast(rom, ahead - s.e.pos[1], 0xC00);
+            s.e.angles[0] = (pitch as i16).wrapping_neg();
         }
     }
-    world::link_entity(m, m.u16(e) as u32);
-    let hit = contact(sim, e)?;
+    w.list_ops.push(ListOp::Link(i));
+    let hit = collide_racers(w, i, rom);
     if hit & 2 == 0 {
-        sim.mem.set_u8(e + 0x88, 0xFF);
+        w.slots[i].e.slot = 0xFF;
     }
     Ok(())
 }
 
 /// State 3: knocked away (or run off its route): slide with friction (1/32 per step), bounce off solid walls
-/// and spin down the wobble, until the timer (`+0x56`, up by 600 / (`*0x03005934` / 0x1C) per step) passes
+/// and spin down the wobble, until the timer (`knocked`, up by 600 / (`frame_ticks` / 0x1C) per step) passes
 /// 0x1F4 while unseen, or the car is far from the camera's car; then it is removed.
-fn knocked_away(sim: &mut Sim, e: u32, camera: u32) -> Result<()> {
-    let m = &mut sim.mem;
-    let step = div(600, div(m.i32(0x0300_5934), 0x1C));
-    let t = (m.u16(e + 0x56) as i32).wrapping_add(step);
-    m.set_u16(e + 0x56, t as u16);
-    if t.wrapping_mul(0x1_0000) >= 0x1F4_0001 && m.u16(e + 0xA) & 4 == 0 {
-        m.set_u16(e + 0x4A, 2);
+fn knocked_away(w: &mut CarWorld, i: usize, camera: usize) -> Result<()> {
+    let rom = w.rom;
+    let step = div(600, div(w.g.frame_ticks, 0x1C));
+    let e = &mut w.slots[i].e;
+    let t = (e.knocked as i32).wrapping_add(step);
+    e.knocked = t as u16;
+    if t.wrapping_mul(0x1_0000) >= 0x1F4_0001 && e.flags & 4 == 0 {
+        e.race_state = 2;
         return Ok(());
     }
-    if far(m, camera, e) > 1000 {
-        m.set_u16(e + 0x4A, 2);
+    if far(w, camera, i) > 1000 {
+        w.slots[i].e.race_state = 2;
         return Ok(());
     }
-    if m.i32(e + 0x18).wrapping_abs() >= 2 || m.i32(e + 0x20).wrapping_abs() > 1 {
-        m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-        bounce_off_walls(m, e);
+    let e = &w.slots[i].e;
+    if e.dir_x.wrapping_abs() >= 2 || e.dir_z.wrapping_abs() > 1 {
+        w.query.sector = e.sector;
+        bounce_off_walls(w, i);
     }
-    let (vx, vz) = (m.i32(e + 0x18), m.i32(e + 0x20));
-    m.set_i32(e + 0xC, m.i32(e + 0xC).wrapping_add(vx));
-    m.set_i32(e + 0x14, m.i32(e + 0x14).wrapping_add(vz));
+    let e = &mut w.slots[i].e;
+    let (vx, vz) = (e.dir_x, e.dir_z);
+    e.pos[0] = e.pos[0].wrapping_add(vx);
+    e.pos[2] = e.pos[2].wrapping_add(vz);
     let slow = |v: i32| match v - (v >> 5) {
         -1 => 0,
         v => v,
     };
-    m.set_i32(e + 0x18, slow(vx));
-    m.set_i32(e + 0x20, slow(vz));
-    m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
-    m.set_i32(W_QUERY + 4, m.i32(e + 0x10) >> 8);
-    m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
-    m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    let wobble = m.i32(e + 0x38);
+    e.dir_x = slow(vx);
+    e.dir_z = slow(vz);
+    w.query.pos = [e.pos[0] >> 8, e.pos[1] >> 8, e.pos[2] >> 8];
+    w.query.sector = e.sector;
+    let wobble = e.wobble;
     if wobble != 0 {
-        m.set_i16(e + 0x32, m.i16(e + 0x32).wrapping_add(wobble as i16));
-        let w = wobble - (wobble >> 4);
-        m.set_i32(e + 0x38, if w.wrapping_abs() < 0x10 { 0 } else { w });
+        e.angles[1] = e.angles[1].wrapping_add(wobble as i16);
+        let v = wobble - (wobble >> 4);
+        e.wobble = if v.wrapping_abs() < 0x10 { 0 } else { v };
     }
-    let old = m.u16(e + 0x78);
-    world::unlink_entity(m, m.u16(e) as u32);
-    m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
-    m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
-    m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    let s = traffic_find_sector(m);
-    m.set_u16(e + 0x78, if s == NONE { old } else { s as u16 });
-    world::link_entity(m, m.u16(e) as u32);
-    let floor = world::floor_height(m, m.u16(e + 0x78) as u32, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
-    m.set_i32(e + 0x10, floor);
-    contact(sim, e)?;
-    sim.mem.set_u8(e + 0x88, 0xFF);
+    let old = e.sector;
+    w.list_ops.push(ListOp::Unlink(i, old));
+    w.query.pos[0] = e.pos[0] >> 8;
+    w.query.pos[2] = e.pos[2] >> 8;
+    w.query.sector = e.sector;
+    let s = find_sector(w);
+    w.slots[i].e.sector = if s == NONE { old } else { s as u16 };
+    w.list_ops.push(ListOp::Link(i));
+    let e = &w.slots[i].e;
+    let floor = w.floor_height(e.sector as u32, e.pos[0] >> 8, e.pos[2] >> 8);
+    w.slots[i].e.pos[1] = floor;
+    collide_racers(w, i, rom);
+    w.slots[i].e.slot = 0xFF;
     Ok(())
 }
 
-/// `FUN_0814658c`: bounce the knocked-away car's velocity (`+0x18/+0x20`) off the solid walls of its sector
+/// `FUN_0814658c`: bounce the knocked-away car's velocity (`dir_x`/`dir_z`) off the solid walls of its sector
 /// within 100 units (the same end tests as the car's walls, `walls::walls`): restitution 0x13/0x400 along the
 /// wall normal when moving into it. Returns whether any wall was near.
-fn bounce_off_walls(m: &mut Mem, e: u32) -> bool {
-    let s = m.u32(W_SECTORS) + m.u16(e + 0x78) as u32 * 0x30;
-    let first = m.u32(W_WALLS) + m.u16(s) as u32 * 0x44;
-    let count = m.u16(s + 2) as u32;
-    let (x, z) = (m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
+fn bounce_off_walls(w: &mut CarWorld, i: usize) -> bool {
+    let data = w.data;
+    let e = &mut w.slots[i].e;
+    let walls = &data.city[e.sector as usize].walls;
+    let n = walls.len();
+    let (x, z) = (e.pos[0] >> 8, e.pos[2] >> 8);
     let mut near = false;
-    let (mut w, mut next) = (first + count.wrapping_sub(1).wrapping_mul(0x44), first);
-    for _ in 0..count {
-        if m.u16(w + 0x2A) as u32 == NONE && m.u16(w + 0x2E) & 0x1000 != 0 {
-            let (wx, wz) = (m.i32(w), m.i32(w + 4));
+    for k in 0..n {
+        let (wall, next) = (&walls[(k + n - 1) % n], &walls[k]);
+        if wall.piece as u32 == NONE && wall.flags & 0x1000 != 0 {
+            let (wx, wz) = (wall.x, wall.z);
             let (dx, dz) = (x.wrapping_sub(wx), z.wrapping_sub(wz));
-            let (nx, nz) = (m.i16(w + 0x34) as i32, m.i16(w + 0x36) as i32);
+            let (nx, nz) = (wall.normal[0] as i32, wall.normal[1] as i32);
             if dx.wrapping_mul(nx).wrapping_add(dz.wrapping_mul(nz)) >> 12 <= 100 {
-                let (cx, cz) = (m.i32(next), m.i32(next + 4));
+                let (cx, cz) = (next.x, next.z);
                 let d2 = |a: i32, b: i32| a.wrapping_mul(a).wrapping_add(b.wrapping_mul(b));
                 let past = if (cx - wx).wrapping_mul(dx).wrapping_add(dz.wrapping_mul(cz - wz)) < 0 {
                     d2(dx, dz) > 0x270F
@@ -341,178 +328,170 @@ fn bounce_off_walls(m: &mut Mem, e: u32) -> bool {
                 };
                 if !past {
                     near = true;
-                    let vn = (m.i32(e + 0x18).wrapping_mul(nx) >> 6) + (m.i32(e + 0x20).wrapping_mul(nz) >> 6);
+                    let vn = (e.dir_x.wrapping_mul(nx) >> 6) + (e.dir_z.wrapping_mul(nz) >> 6);
                     if vn < 0 {
                         let j = vn.wrapping_mul(-0x13) >> 10;
-                        m.set_i32(e + 0x18, m.i32(e + 0x18) + (nx.wrapping_mul(j) >> 12));
-                        m.set_i32(e + 0x20, m.i32(e + 0x20) + (j.wrapping_mul(nz) >> 12));
+                        e.dir_x += nx.wrapping_mul(j) >> 12;
+                        e.dir_z += j.wrapping_mul(nz) >> 12;
                     }
                 }
             }
         }
-        w = next;
-        next += 0x44;
     }
     near
 }
 
 /// The turn towards direction (`nx`, `nz`) over `steps` steps, from the current direction.
-fn start_turn(m: &mut Mem, e: u32, blk: u32, nx: i32, nz: i32, steps: i32) {
-    m.set_i32(blk + 8, m.i32(e + 0x18));
-    m.set_i32(blk + 0xC, m.i32(e + 0x20));
-    m.set_i32(blk + 0x10, nx - m.i32(e + 0x18));
-    m.set_i32(blk + 0x14, nz - m.i32(e + 0x20));
-    m.set_i32(blk + 0x18, 0);
-    m.set_i32(blk + 0x1C, steps);
+fn start_turn(w: &mut CarWorld, i: usize, nx: i32, nz: i32, steps: i32) {
+    let s = &mut w.slots[i];
+    let (dx, dz) = (s.e.dir_x, s.e.dir_z);
+    let b = s.block.as_mut().unwrap();
+    b.turn_from = [dx, dz];
+    b.turn_by = [nx - dx, nz - dz];
+    b.turn_t = 0;
+    b.turn_steps = steps;
 }
 
-/// `FUN_08144b7c` ([`world::Geometry::traffic_find_sector`]) on the query point (world `+0xC0/+0xC8`) from the
-/// query sector.
-fn traffic_find_sector(m: &Mem) -> u32 {
-    let (x, z, start) = (m.i32(W_QUERY), m.i32(W_QUERY + 8), m.u16(W_QUERY_SECTOR) as u32);
-    world::geometry(m, |g| g.traffic_find_sector(start, x, z))
+/// `FUN_08144b7c` ([`crate::world::Geometry::traffic_find_sector`]) on the query point from the query sector.
+fn find_sector(w: &CarWorld) -> u32 {
+    let (x, z, start) = (w.query.pos[0], w.query.pos[2], w.query.sector as u32);
+    w.geometry().traffic_find_sector(start, x, z)
 }
 
-/// `FUN_08146094`: test the traffic car against the racers; bit 0 = a racer is near, bit 2 = it was hit (the
-/// response `FUN_08145dac` knocks it away; not ported).
-fn contact(sim: &mut Sim, e: u32) -> Result<u32> {
-    let m = &sim.mem;
-    let racers = m.u32(0x0300_57EC);
-    let dt = crate::math::recip(m, m.i32(world::DT) << 8).min(0xC00);
-    let (vx, vz) = if m.u16(e + 0x4A) == 3 {
-        (m.i32(e + 0x18), m.i32(e + 0x20))
+/// `FUN_08146094`: test the traffic car against the racers; bit 0 = a racer is near, bit 1 = it was hit (the
+/// response `FUN_08145dac` knocks it away).
+fn collide_racers(w: &mut CarWorld, e: usize, rom: &[u8]) -> u32 {
+    let racers = w.g.racers;
+    let dt = crate::math::recip(rom, w.g.dt << 8).min(0xC00);
+    let t = &w.slots[e].e;
+    let (vx, vz) = if t.race_state == 3 {
+        (t.dir_x, t.dir_z)
     } else {
-        (
-            m.i32(e + 0x24).wrapping_mul(m.i32(e + 0x18)),
-            m.i32(e + 0x24).wrapping_mul(m.i32(e + 0x20)),
-        )
+        (t.speed.wrapping_mul(t.dir_x), t.speed.wrapping_mul(t.dir_z))
     };
     let (vx, vz) = (vx >> 4, vz >> 4);
     let mut result = 0;
     // Once set, the hit flag stays set for the rest of the loop (the game's `local_90`).
     let mut hit = false;
-    let mut o = sim.mem.u32(W_ENTITIES);
-    for _ in 0..racers.wrapping_add(1) {
-        let m = &sim.mem;
-        let dx = m.i32(e + 0xC).wrapping_sub(m.i32(o + 0xC)) >> 12;
-        let dz = m.i32(e + 0x14).wrapping_sub(m.i32(o + 0x14)) >> 12;
+    for o in 0..racers.wrapping_add(1) as usize {
+        let (t, r) = (&w.slots[e].e, &w.slots[o].e);
+        let dx = t.pos[0].wrapping_sub(r.pos[0]) >> 12;
+        let dz = t.pos[2].wrapping_sub(r.pos[2]) >> 12;
         let d2 = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz));
         if d2 <= 0x1_D4C0 {
             result |= 1;
-            let dy = m.i32(e + 0x10).wrapping_sub(m.i32(o + 0x10));
+            let dy = t.pos[1].wrapping_sub(r.pos[1]);
             let close_y = if dy < 0 {
-                m.i32(o + 0x10).wrapping_sub(m.i32(e + 0x10)) <= 0xFFFF
+                r.pos[1].wrapping_sub(t.pos[1]) <= 0xFFFF
             } else {
                 dy <= 0xFFFF
             };
             if close_y && d2 < 0x801 {
-                hit |= hits(m, e, o, [vx, vz], dt);
-                if hit && respond(sim, o, e)? {
-                    let m = &mut sim.mem;
-                    let q = m.u32(o + 0x8C);
-                    m.set_u32(q + 0x448, m.u32(q + 0x448) | 1);
-                    m.set_u16(e + 0x4A, 3);
+                hit |= hits(w, e, o, [vx, vz], dt);
+                if hit && respond(w, o, e) {
+                    let t = &mut w.slots[e].e;
+                    t.race_state = 3;
+                    t.knocked = 0;
                     result |= 2;
-                    m.set_u16(e + 0x56, 0);
-                    if m.i16(0x087F_5924 + m.u16(e + 0x7C) as u32 * 2) != 0 && m.u16(o) as u32 == m.u32(world::PLAYER) {
-                        m.set_u32(world::RACE_PHASE, 7);
+                    let kind = t.traffic_type as usize;
+                    w.slots[o].c.contact |= 1;
+                    if w.data.ai.traffic.ends_race[kind] != 0 && w.slots[o].e.index as u32 == w.g.player {
+                        w.g.phase = 7;
                     }
                 }
             }
         }
-        o += 0xA4;
     }
-    Ok(result)
+    result
 }
 
 /// `FUN_08145dac`: racer `o` hits traffic car `t` at the midpoint of their centres: an impulse along the line
-/// between them (restitution clamped to −0x16..−0x11), split by the traffic type's shifts (`0x087F5604`,
-/// `0x087F5684`) between the traffic car (velocity, wobble `+0x38`) and the racer's body (momentum, spin);
-/// the racer's lane, hunter life and the crash sound for the player. Returns whether they were closing.
-fn respond(sim: &mut Sim, o: u32, t: u32) -> Result<bool> {
-    let m = &mut sim.mem;
-    let q = m.u32(o + 0x8C);
-    let b = q + 0xC8;
-    let dt = crate::math::recip(m, m.i32(world::DT) << 8).min(0xC00);
-    let mut n = [
-        (m.i32(o + 0xC) - m.i32(t + 0xC)) >> 2,
-        0,
-        (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 2,
-    ];
+/// between them (restitution clamped to −0x16..−0x11), split by the traffic type's shifts between the traffic car
+/// (velocity, wobble) and the racer's body (momentum, spin); the racer's lane, hunter life and the crash sound
+/// for the player. Returns whether they were closing.
+fn respond(w: &mut CarWorld, o: usize, t: usize) -> bool {
+    let rom = w.rom;
+    let dt = crate::math::recip(rom, w.g.dt << 8).min(0xC00);
+    let (oe, te) = (&w.slots[o].e, &w.slots[t].e);
+    let mut n = [(oe.pos[0] - te.pos[0]) >> 2, 0, (oe.pos[2] - te.pos[2]) >> 2];
     crate::math::normalize14(&mut n);
     let n = [n[0] >> 8, 0, n[2] >> 8];
-    let point = [
-        (m.i32(t + 0xC) + m.i32(o + 0xC)) >> 1,
-        (m.i32(t + 0x14) + m.i32(o + 0x14)) >> 1,
-    ];
-    let r_o = [point[0] - m.i32(o + 0xC), 0, point[1] - m.i32(o + 0x14)];
-    let r_t = [point[0] - m.i32(t + 0xC), 0, point[1] - m.i32(t + 0x14)];
-    let knocked = m.u16(t + 0x4A) == 3;
-    let speed = m.i32(t + 0x24);
+    let point = [(te.pos[0] + oe.pos[0]) >> 1, (te.pos[2] + oe.pos[2]) >> 1];
+    let r_o = [point[0] - oe.pos[0], 0, point[1] - oe.pos[2]];
+    let r_t = [point[0] - te.pos[0], 0, point[1] - te.pos[2]];
+    let knocked = te.race_state == 3;
+    let speed = te.speed;
     let (tx, tz) = if knocked {
-        (m.i32(t + 0x18), m.i32(t + 0x20))
+        (te.dir_x, te.dir_z)
     } else {
-        (speed.wrapping_mul(m.i32(t + 0x18)), speed.wrapping_mul(m.i32(t + 0x20)))
+        (speed.wrapping_mul(te.dir_x), speed.wrapping_mul(te.dir_z))
     };
+    let body = &w.slots[o].c.body;
     let rel = [
-        (dt.wrapping_mul(m.i32(b + crate::ram::body::VEL)) >> 11) - tx,
-        (dt.wrapping_mul(m.i32(b + crate::ram::body::VEL + 8)) >> 11) - tz,
+        (dt.wrapping_mul(body.vel[0]) >> 11) - tx,
+        (dt.wrapping_mul(body.vel[2]) >> 11) - tz,
     ];
     let vn = (rel[0].wrapping_mul(n[0]) >> 6) + (rel[1].wrapping_mul(n[2]) >> 6);
     if vn >= 0 {
-        return Ok(false);
+        return false;
     }
     let k = (-0x11 - ((vn + 0x3000) >> 11)).clamp(-0x16, -0x11);
+    let te = &mut w.slots[t].e;
     if !knocked {
-        m.set_i32(t + 0x18, speed.wrapping_mul(m.i32(t + 0x18)));
-        m.set_i32(t + 0x20, speed.wrapping_mul(m.i32(t + 0x20)));
+        te.dir_x = speed.wrapping_mul(te.dir_x);
+        te.dir_z = speed.wrapping_mul(te.dir_z);
     }
     let j = vn.wrapping_mul(k) >> 4;
     let imp = [n[0].wrapping_mul(j) >> 6, 0, n[2].wrapping_mul(j) >> 6];
-    let kind = m.u16(t + 0x7C) as u32;
-    let shift = m.u32(0x087F_5604 + kind * 4) & 0xFF;
+    let kind = te.traffic_type as usize;
+    let tables = &w.data.ai.traffic;
+    let shift = tables.knock_shift[kind] & 0xFF;
     let asr = |v: i32, s: u32| crate::math::asr(v, s);
     if knocked {
-        m.set_i32(t + 0x18, m.i32(t + 0x18) - asr(imp[0], shift));
-        m.set_i32(t + 0x20, m.i32(t + 0x20) - asr(imp[2], shift));
+        te.dir_x -= asr(imp[0], shift);
+        te.dir_z -= asr(imp[2], shift);
     } else {
-        m.set_i32(t + 0x18, m.i32(t + 0x18) - div(asr(imp[0], shift), speed));
-        m.set_i32(t + 0x20, m.i32(t + 0x20) - div(asr(imp[2], shift), speed));
+        te.dir_x -= div(asr(imp[0], shift), speed);
+        te.dir_z -= div(asr(imp[2], shift), speed);
     }
-    let spin = crate::math::cross(r_t, imp);
-    let wobble_shift = m.u32(0x087F_5604 + kind * 4).wrapping_add(0xD) & 0xFF;
-    m.set_i32(t + 0x38, m.i32(t + 0x38).wrapping_add(asr(spin[1], wobble_shift)));
+    let spin = cross(r_t, imp);
+    let wobble_shift = tables.knock_shift[kind].wrapping_add(0xD) & 0xFF;
+    te.wobble = te.wobble.wrapping_add(asr(spin[1], wobble_shift));
+    let q = &mut w.slots[o].c;
     if j > 0x4000 {
-        m.set_u32(q + 0x4B4, m.u32(q + 0x4B4) | 4);
+        q.hard_hit |= 4;
     }
-    if m.u16(o) as u32 > m.u32(crate::ram::route::OPPONENTS) && m.i32(0x0300_61F0) != 0 {
-        m.set_u32(0x0300_61F0, 0);
+    let (o_index, o_state) = (w.slots[o].e.index as u32, w.slots[o].e.race_state);
+    if o_index > w.g.opponents && w.g.u_61f0 != 0 {
+        w.g.u_61f0 = 0;
     }
-    if m.i32(0x0300_56E0) == 2 && m.u16(o + 0x4A) != 2 {
+    let q = &mut w.slots[o].c;
+    if w.g.mode == 2 && o_state != 2 {
         // `FUN_081413b0`: hunter races: the hit costs the racer hunter life.
-        let v = m.i32(q + 0x4E8) - (m.i32(0x0300_61A0).wrapping_mul(j) >> 8);
-        m.set_i32(q + 0x4E8, v.max(0));
-        m.set_u16(q + 0x4F0, 0);
+        let v = q.hunter_life - (w.g.hunter_damage.wrapping_mul(j) >> 8);
+        q.hunter_life = v.max(0);
+        q.u_4f0 = 0;
     }
-    let shift = m.u32(0x087F_5684 + kind * 4) & 0xFF;
+    let shift = tables.racer_shift[kind] & 0xFF;
     let imp = [asr(imp[0], shift), 0, asr(imp[2], shift)];
-    let mom = crate::ram::body::MOMENTUM;
-    m.set_i32(b + mom, m.i32(b + mom).wrapping_add(imp[0]));
-    m.set_i32(b + mom + 8, m.i32(b + mom + 8).wrapping_add(imp[2]));
-    let turn = crate::math::cross(r_o, [imp[0] >> 8, 0, imp[2] >> 8]);
-    let ang = b + crate::ram::body::ANG_MOMENTUM;
-    m.set_vec3(ang, crate::math::sub(m.vec3(ang), turn));
-    crate::ram::body::update_velocities(m, b);
-    let lane = crate::ram::route::nearest_lane(m, crate::ram::route::lateral(m, o), -1);
-    m.set_u16(q + 0xC0, lane as u16);
-    if m.u16(o) as u32 == m.u32(world::PLAYER) {
-        sim.sounds.push(Command::Stop(0x15));
-        sim.sounds.push(Command::Stop(0x16));
+    let b = &mut q.body;
+    b.momentum[0] = b.momentum[0].wrapping_add(imp[0]);
+    b.momentum[2] = b.momentum[2].wrapping_add(imp[2]);
+    let turn = cross(r_o, [imp[0] >> 8, 0, imp[2] >> 8]);
+    b.ang_momentum = sub(b.ang_momentum, turn);
+    crate::body::update_velocities(b);
+    let lateral = crate::route::lateral(w, o);
+    let lane = crate::route::nearest_lane(w, lateral, -1);
+    w.slots[o].c.lane = lane as u16;
+    if o_index == w.g.player {
+        w.sounds.push(crate::sound::Command::Stop(0x15));
+        w.sounds.push(crate::sound::Command::Stop(0x16));
         if j > 0x800 {
-            sim.sounds.push(Command::Play(if j < 0x5001 { 0x16 } else { 0x15 }));
+            w.sounds
+                .push(crate::sound::Command::Play(if j < 0x5001 { 0x16 } else { 0x15 }));
         }
     }
-    Ok(true)
+    true
 }
 
 fn sub2(a: [i32; 2], b: [i32; 2]) -> [i32; 2] {
@@ -546,33 +525,35 @@ fn closest(d0: [i32; 2], d1: [i32; 2]) -> Option<i32> {
 
 /// The swept test of traffic car `e` (moving by `v`) against racer `o` over the frame: first the centres, then
 /// the traffic type's collision points against the racer's two axle points (`FUN_08146094`).
-fn hits(m: &Mem, e: u32, o: u32, v: [i32; 2], dt: i32) -> bool {
-    let q = m.u32(o + 0x8C);
-    let a0 = [m.i32(e + 0xC) >> 4, m.i32(e + 0x14) >> 4];
+fn hits(w: &CarWorld, e: usize, o: usize, v: [i32; 2], dt: i32) -> bool {
+    let (t, q) = (&w.slots[e].e, &w.slots[o]);
+    let (rom, c) = (w.rom, &q.c);
+    let a0 = [t.pos[0] >> 4, t.pos[2] >> 4];
     let a1 = [a0[0].wrapping_add(v[0]), a0[1].wrapping_add(v[1])];
-    let b0 = [m.i32(o + 0xC) >> 4, m.i32(o + 0x14) >> 4];
+    let b0 = [q.e.pos[0] >> 4, q.e.pos[2] >> 4];
     let b1 = [
-        (dt.wrapping_mul(m.i32(q + 0x11C)) >> 15).wrapping_add(b0[0]),
-        (dt.wrapping_mul(m.i32(q + 0x124)) >> 15).wrapping_add(b0[1]),
+        (dt.wrapping_mul(c.body.vel[0]) >> 15).wrapping_add(b0[0]),
+        (dt.wrapping_mul(c.body.vel[2]) >> 15).wrapping_add(b0[1]),
     ];
     if !closest(sub2(b0, a0), sub2(b1, a1)).is_some_and(|d| d < 0xF4_2400) {
         return false;
     }
-    let kind = m.u16(e + 0x7C) as u32;
-    let points = m.i32(POINT_COUNT + kind * 4);
-    let heading = m.i16(e + 0x32) as i32;
+    let kind = t.traffic_type as usize;
+    let tables = &w.data.ai.traffic;
+    let points = tables.point_count[kind];
+    let heading = t.angles[1] as i32;
     let mut hit = false;
-    for i in 0..points.max(0) as u32 {
-        let off = m.i32(POINTS + kind * 8 + i * 4);
-        let ox = off.wrapping_mul(sin(m, heading)) >> 14;
-        let oz = off.wrapping_mul(cos(m, heading)) >> 14;
+    for i in 0..points.max(0) as usize {
+        let off = tables.points[kind][i];
+        let ox = off.wrapping_mul(sin(rom, heading)) >> 14;
+        let oz = off.wrapping_mul(cos(rom, heading)) >> 14;
         let (c0, c1) = ([a0[0] + ox, a0[1] + oz], [a1[0] + ox, a1[1] + oz]);
         for j in 0..2 {
-            let axle = m.i32(AXLE_OFFSETS + j * 4);
-            let rx = m.i32(q + 0x140).wrapping_mul(axle) >> 12;
-            let rz = m.i32(q + 0x148).wrapping_mul(axle) >> 12;
+            let axle = w.data.car.axle_offsets[j];
+            let rx = c.body.rot[6].wrapping_mul(axle) >> 12;
+            let rz = c.body.rot[8].wrapping_mul(axle) >> 12;
             let (r0, r1) = ([b0[0] + rx, b0[1] + rz], [b1[0] + rx, b1[1] + rz]);
-            let radius = m.i32(HIT_RADIUS + kind * 4);
+            let radius = tables.hit_radius[kind];
             hit |= closest(sub2(r0, c0), sub2(r1, c1)).is_some_and(|d| d < radius);
         }
     }

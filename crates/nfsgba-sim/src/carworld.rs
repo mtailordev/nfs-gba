@@ -9,7 +9,7 @@ use nfsgba_formats::render::Piece;
 use crate::data::GameData;
 use crate::layout::Ptr;
 use crate::sound::Command;
-use crate::state::{Car, CarGlobals, CarProfile, Entity, Query, SectorOffset};
+use crate::state::{Car, CarGlobals, CarProfile, Entity, Query, SectorOffset, TrafficBlock};
 use crate::world::Geometry;
 
 pub const NONE: u32 = 0xFFFF;
@@ -21,6 +21,8 @@ pub struct Slot {
     pub c: Car,
     /// The entity's driver pointer named a car struct (only those are loaded and stored).
     pub has_car: bool,
+    /// A traffic car's block (handler 0x36 with a block).
+    pub block: Option<TrafficBlock>,
 }
 
 impl Slot {
@@ -116,18 +118,31 @@ pub struct CarWorld<'a> {
     pub camera_player: u32,
     /// The upgrade bytes of the car being set up (its save data).
     pub save: [u8; 10],
-    /// A traffic car was asked for and made (the step resumes with the answer).
-    pub spawned: Option<bool>,
-    /// What the step had computed when it paused for the spawn.
-    pub pending: Option<Pending>,
+    /// The address of the profile (`curve_ys` points into it).
+    pub profile_addr: u32,
+    /// Per racer: the grid position the opponents' setup copies (entity template x and z, 8.8).
+    pub grid: Vec<[i32; 2]>,
+    /// The entities `free_entity` searches for a traffic car.
+    pub extra: std::ops::Range<usize>,
     pub sounds: Vec<Command>,
+    /// What the step did that the RAM image keeps: heap blocks and sector-list bookkeeping, replayed in order by
+    /// the adapter (`ram.rs`).
+    pub heap_ops: Vec<HeapOp>,
+    pub list_ops: Vec<ListOp>,
 }
 
-/// State a paused dynamics step carries across the traffic spawn.
-#[derive(Debug, Clone, Copy)]
-pub struct Pending {
-    pub old_sector: u16,
-    pub pressed: u32,
+/// A traffic car's block was allocated or freed (entity index).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeapOp {
+    Alloc(usize),
+    Free(usize),
+}
+
+/// An entity leaves the list of `sector` (its sector when the step started) or joins the list of its sector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListOp {
+    Unlink(usize, u16),
+    Link(usize),
 }
 
 impl CarWorld<'_> {
@@ -161,6 +176,21 @@ impl CarWorld<'_> {
 
     pub fn floor_height(&self, sector: u32, x: i32, z: i32) -> i32 {
         self.geometry().floor_height(sector, x, z)
+    }
+
+    /// The rand table's next value (`FUN_0815fcfc`).
+    pub fn rand(&mut self) -> u32 {
+        nfsgba_fixed::rand_table(self.rom, &mut self.g.rand)
+    }
+
+    /// `atan2_fast` (IWRAM `0x03004470`).
+    pub fn atan2_fast(&self, x: i32, z: i32) -> i32 {
+        nfsgba_fixed::atan2_fast(self.rom, x, z)
+    }
+
+    /// The entity a pointer to the entity array names.
+    pub fn entity_of(&self, p: Ptr<Entity>) -> usize {
+        p.index_from(self.entities) as usize
     }
 
     pub fn is_player(&self, i: usize) -> bool {
