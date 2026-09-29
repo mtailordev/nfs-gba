@@ -731,8 +731,7 @@ mod tests {
         assert_eq!(cars.iter().map(|c| c.paint_variants).sum::<usize>(), 45);
         let textures = vehicle_textures(&rom);
         for c in &cars {
-            for m in c.first_material..c.first_material + c.paint_variants {
-                let t = &textures[m];
+            for t in &textures[c.first_material..c.first_material + c.paint_variants] {
                 assert_eq!((t.width, t.height), (256, 200), "{}", c.name);
                 assert!(
                     t.pixels.iter().all(|&p| p < 32),
@@ -794,7 +793,7 @@ mod tests {
             word(&wram, player + 0x14) as i32 >> 8,
         );
         let m = sector_light(&rom, &city(&rom)[sector], px, pz).expect("two walls straddle the player");
-        let tinted = tint_palette(&city_palette_raw(&rom, environments(&rom)[1].palette), m);
+        let tinted = tint_palette(&city_palette_raw(&rom, environments(&rom)[11].palette), m);
         let ram: Vec<u16> = pal
             .chunks(2)
             .take(256)

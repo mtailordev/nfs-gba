@@ -19,7 +19,7 @@ Everything is raw BGR555. ROM offsets are file offsets (GBA address minus `0x080
 | 160–175 | ramp `paints[1]`; when `cars[1] ≥ 15`, ramp `special[cars[1] − 15]` | `FUN_0813b6d0` |
 | 176–191 | ramp `paints[2]` | `FUN_0813b6d0` |
 | 192 | glass shade at `angle` | `shade_car_paint` (overwrites the city colour) |
-| 193–207 | the city palette's own colours (trim: greys, head lights, tail lights). Nothing car-specific writes them | city palette 3 in the reference race |
+| 193–207 | the city palette's own colours (trim: greys, head lights, tail lights). Nothing car-specific writes them | city palette 13 (= palette 3) in the reference race |
 | 208 | glass shade at `angle + 0x1000` | `shade_car_paint` (overwrites ramp colour 0) |
 | 209–223 | the player's ramp, colours 1–15 | `FUN_0813b6d0` |
 | 240–247 | extra row `record[4] − 1`, only when `record[4] > 0`; otherwise the city colours stay | `FUN_0813b6d0` |

@@ -170,7 +170,7 @@ mod tests {
         };
         let (cars, paints) = (d.bytes4(0x0300_611C), d.bytes4(0x0300_5FEC));
         let record = d.at(d.word(0x0300_539C) + 0x11 * cars[0] as u32)[..0x11].to_vec();
-        let mut base = city_palette_raw(&rom, environments(&rom)[1].palette);
+        let mut base = city_palette_raw(&rom, environments(&rom)[11].palette);
         load_car_palettes(&rom, &mut base, cars, paints, &record, true);
         let (glass, heading) = d.glass_and_heading();
         [base[192], base[208]] = glass_shades(&rom, glass, heading);

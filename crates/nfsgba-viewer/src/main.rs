@@ -205,11 +205,11 @@ fn setup(
     let textures = rom::city_textures(&data);
     let sectors = rom::city(&data);
     let envs = rom::environments(&data);
-    // Environment 1 is the reference race's (palette 3); NFSGBA_ENV picks another. K cycles them.
+    // Environment 11 is the reference race's (`0x0300006C`); NFSGBA_ENV picks another. K cycles them.
     let env = std::env::var("NFSGBA_ENV")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
+        .unwrap_or(11)
         % envs.len();
     // One palette for the whole city (and the skyline), as on the GBA; `tint` fills it every frame.
     let city_palette = images.add(palette_image());

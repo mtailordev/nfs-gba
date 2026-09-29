@@ -18,6 +18,9 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x16C244–0x402000` | 294 blobs | BIOS-LZ77 image bank | formats/lz77-images |
 | `0x33EF14` | | menu palettes | |
 | `0x350000–0x368000` | 96 KiB | ARM code, purpose unknown (not the race IWRAM code) | |
+| `0x36C75C` | | second palette block (rec `+0x04`; literal in `load_car_palettes`) | formats/car-paint |
+| `0x36C95C` | 0x20 each | car paint ramps (block `+0x200`), 16 colours per paint number; glass = colour 12 | formats/car-paint |
+| `0x36CD5C` | 8 × 2 B rows | extra rows for palette slots 240 and 248 (block `+0x600`) | formats/car-paint |
 | `0x370550` | | vehicle texture base (rec `+0x0C`) | formats/vehicle-models |
 | `0x45F5C0` | 146 × 0x24 | vehicle materials (rec `+0x20`) | formats/vehicle-models |
 | `0x460A6C` | 102 × 40 | vehicle models (rec `+0x34`) | formats/vehicle-models |
@@ -37,14 +40,22 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x77A000–0x78E000` | | route data: template entities, racing lines | formats/race-routes |
 | `0x797D10–0x7E53EC` | | text strings | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
+| `0x7C03F0` | 256 × u16 | random table (`rand_table`, index `0x030064C8`) | formats/car-paint |
+| `0x7C05F0` | 0x2000 × i16 | sine table, half wave, 0x4000 = 1.0 (`sin_q14`) | formats/car-paint |
 | `0x7C45F0` | 32,767 × 4 | reciprocal table: entry k = 2^24/(k+1) (light interpolation, likely more) | FIDELITY R2 |
 | `0x7E4A70` / `0x7E4AA0` / `0x7E4AD0` | 12 / 12 / 18 × 4 | route name tables: `(u16 text key, u16 route)` for circuits forward, circuits reverse, sprints | formats/race-routes |
-| `0x7E6EEC` | 20 × 0x80 | car paint presets | formats/vehicle-models |
+| `0x7E6EEC` | 20 × 0x80 | paint presets, used only by a menu function (race colours come from `0x36C95C`) | formats/vehicle-models |
 | `0x7E86A0` | 5,867 × 4 | text table: 977 keys, 5 × 977 strings, 5 module pointers | formats/text-table |
-| `0x7F0BD8` | 15 × 0x58 | car table | formats/vehicle-models |
+| `0x7EEA24` | bytes | special ramp numbers: by `cars[1] − 15` (slot 160) or `cars[0]` (slot 208, paint ≥ 20) | formats/car-paint |
+| `0x7EEB70` | 0x9C per car | i16 (x, y) of decal-set materials in the atlas | formats/car-paint |
+| `0x7EEBBC` | 6 per set | decal sets: 3 i16 vehicle materials per record `[4]` | formats/car-paint |
+| `0x7EF5A0` / `0x7EF672` | 7 per car | overlay material per `(car·7 + rec[1])` / its (x, y) | formats/car-paint |
+| `0x7EF816` | 0x10 per entry | decals per `(car·15 + rec[2])`: two (x, y, material) placements | formats/car-paint |
+| `0x7F0BD8` | 15 × 0x58 | car table (`+0x0C` first material, `+0x0E` palette bank = 1 for all) | formats/vehicle-models, formats/car-paint |
 | `0x7F2798` | 44 × 0x14 | route table | formats/race-routes |
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments (plus variant at `0x7F2FE8`) | formats/city-sectors |
 | `0x7F38B8` | 65 × 4 | Thumb function table (states or menus?) | |
+| `0x7F4344` | u32 per event | opponent 1's paint (`pick_opponent_cars`) | formats/car-paint |
 
 ### Level descriptor (0x68 bytes, `0x7F2B08`)
 
@@ -67,7 +78,8 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x5A` | | u16 city palette index × 0x100 |
 | `+0x5E` | | u16 sky gradient material |
 | `+0x60` | | u16 skyline material |
-| `+0x62`, `+0x64` | | ? (4, 0x19) |
+| `+0x62` | | s16 skyline row offset (4 in all) |
+| `+0x64` | | s16 gradient start entry at a level horizon, plus 4 (25 in all) |
 
 ## RAM (reference race, `data/work/e5298b24/mgba/race.*`)
 
@@ -76,13 +88,44 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03000000…` | race IWRAM code (renderer); see Functions |
 | `0x030000C0` | **world struct** (below) |
 | `0x03000060` | u32 player entity index (0) |
+| `0x0300006C` | environment index (**11** in the reference race) |
+| `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
+| `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre, `+0x1C` focal (0x96) |
+| `0x03000214` | camera yaw (0x4000 per turn) |
+| `0x03005390` / `0x03005392` | s16 screen shake x / y (always 0 in play) |
+| `0x030056B8` | horizon shift in rows (bumper view: car pitch, ±32; 0 otherwise) |
+| `0x030055F8` | camera view (0 bumper, 2 chase; per-view tables `0x7F39BC`/`0x7F39D4`/`0x7F39EC`) |
+| `0x030053A0` | extra projection-centre y offset (8.8) |
+| `0x030053D0` | view rect x0, y0, x1, y1 |
+| `0x03006410` | screen struct (width, height) |
+| `0x03007FFC` → `0x03005810` | IRQ dispatcher (ARM); handler table `0x030056D0` (`+0` mask 0xA0, `+4` VBlank, `+8` VCount) |
+| `0x030001C0` | VCount IRQ: palette entry 0 = next gradient entry, LYC += 2, lines 0–78 |
+| `0x0200120C` | sky gradient buffer, 0x200 BGR555 (pointer `0x030053B8`); only the first 64 are the gradient |
+| `0x030056E8` | gradient read pointer (VBlank sets base + 2·start) |
+| `0x03006490` | IWRAM overlay base − 0xE4 (`0x03000220`): ROM `0x08165218` ↔ IWRAM `0x03000304` |
+| `0x0300649C` | pointer to the 32-byte-block fill `0x030002C0` |
 | `0x03005614` | u32 player's current sector (760 at the start of the reference race) |
 | `0x03005720` | u32 current route index (23 in the reference race) |
-| `0x030055F0` | pointer to the base palette buffer (`0x02001008` in the race) |
-| `0x03005630` | pointer to the second palette buffer |
+| `0x030055F0` | pointer to the base palette buffer (`0x02001008` in the race); the light tint reads it |
+| `0x0300577C` | pointer to the second base palette buffer (`0x02000E04`) |
+| `0x03005630` | i32 palette fade step (±0x10, stepped by 2 to 0); while non-zero the tint and shade write the second buffer. **Not a pointer** |
+| `0x0300563C` | palette dirty flag: `copy_palette_to_ram` copies `*0x0300577C` to palette RAM (outside races) |
+| `0x03005808` | game state (5 = race; `main_frame` tints every game frame) |
+| `0x0300611C` | i8 car id per racer ([0] player → entity 0 `+0x89`; [1..3] opponents) |
+| `0x03005FEC` | i8 paint per racer ([0] = player record `[6]`, also at `0x030000B8`) |
+| `0x0300539C` | pointer to the car records (`0x02000901`, 0x11 bytes per car id; = save block `0x02000808 + 0xF9`, save block pointer `0x030056EC`) |
+| `0x03005700` | car record being edited in the garage |
+| `0x03005784` | opponent count (3) |
+| `0x03006104` | event number |
+| `0x030057F8` | entity index whose heading `shade_car_paint` uses (0) |
+| `0x03006164` | per racer: pointer to the unpacked atlas (player `0x0201FB9C`) |
+| `0x03006094` | per entity: pointer to the unpacked decal |
+| `0x03005780` | race-over flag (`shade_car_paint` skips while set) |
+| `0x030064C8` | `rand_table` index |
 | `0x0201431C` | entity array in the reference race (world `+0x3C`) |
 | `0x0201EC24` | vehicle matrix buffer in the reference race (world `+0xFC`) |
-| palette RAM `0x05000000` | BG palette. Slots 1–143 and 149–255 are tinted by light (`FUN_0813a514`); 192–223 hold the player car (atlas pixel `i` → `192 + (i ^ 16)`); 160–192 other cars?; 248–255 HUD? |
+| `0x02001008` / `0x02000E04` | the two base palette buffers (0x200 bytes each) |
+| palette RAM `0x05000000` | BG palette. Entry 0 = backdrop (`0x4A2E` in the race; opaque index-0 wall texels show it). Slots 1–143 and 149–255 are tinted by light (`FUN_0813a514`). 160–175 / 176–191: ramps `paints[1]` / `paints[2]`; 192 and 208: glass shades; 193–207: city trim; 208–223: player ramp (atlas pixel `i` → `192 + (i ^ 16)`); 240–247 / 248–255: extra car rows (`load_car_palettes`) |
 
 ### World struct (`0x030000C0`)
 
@@ -111,6 +154,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0xE2…+0xE8` | screen clip bounds |
 | `+0xF2` | floor span count |
 | `+0xF8`, `+0xFA` | entity count (4) and extra entity slots (0x20) |
+| `+0xF6` | sky enabled |
 | `+0xFC` | vehicle matrix buffer (0x30 per slot: rotation, translation) |
 
 ### Entity (0xA4 bytes, world `+0x3C`)
@@ -123,13 +167,14 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x0A` | flags (bit 0: use world `+0x58/+0x5A`; bits 1, 3, 4, 6: LOD and texture) |
 | `+0x0C/+0x10/+0x14` | position x, y, z in 8.8 fixed point, city units |
 | `+0x28` | depth-sort key (distance squared) |
+| `+0x2C` | heading, 8.8 fixed point (`>> 8`: 0x4000 per turn) |
 | `+0x36` | LOD piece count? |
-| `+0x44/+0x46/+0x48` | material selection (`+0x48` = first atlas; 8 = Cobalt) |
+| `+0x44/+0x46/+0x48` | material selection (`+0x48` = atlas: player = car table `+0x0C` + record `[3]`; opponents 140–142 in the race) |
 | `+0x64` | second LOD piece offset? |
 | `+0x74` | start sector (template entities) |
-| `+0x84` | RAM pointer to the unpacked texture |
+| `+0x84` | RAM pointer to the unpacked atlas (`0x03006164[racer]`) |
 | `+0x88` | model slot (`0xFF` = none) |
-| `+0x89` | index into a 0x11-byte table (car or paint?) |
+| `+0x89` | car id (index into the 0x11-byte car records) |
 
 ## Functions
 

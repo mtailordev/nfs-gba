@@ -1,7 +1,7 @@
 address,name,kind,comment
 0x0815cf24,bios_lz77_uncomp_wram,function,Thumb stub: swi 0x11
 0x0815cf28,bios_lz77_uncomp_vram,function,Thumb stub: swi 0x12
-0x0812b21c,set_base_palette,function,copies a 0x200-byte palette into both base palette buffers (0x030055F0 / 0x03005630 targets)
+0x0812b21c,set_base_palette,function,copies a 0x200-byte palette into both base palette buffers (*0x030055F0 and *0x0300577C)
 0x08137424,race_spawn_template_entities,function,copies the route's template entities into the entity array and clears extra slots
 0x081372e4,race_menu_palette_setup,function,sets world palettes from level record +0x00 + (+0x5A)*2 (menu/event screen)
 0x081370d4,menu_scene_setup_a,function,menu palette setup (0x33EF14 palettes)
@@ -31,3 +31,45 @@ address,name,kind,comment
 0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)
 0x0816a708,__divsi3,function,libgcc signed divide (truncating; x/0 = 0)
 0x0816a7e4,__modsi3,function,libgcc signed remainder
+0x03004d48,draw_wall_column_pair_transparent,function,wall column pair; writes only when both texels are non-zero (texture first texel 0)
+0x03004db0,draw_wall_column_pair_opaque,function,wall column pair; always writes
+0x03004fa8,draw_floor_span,function,floor/ceiling span; byte store every 2 bytes (half horizontal resolution)
+0x03002c40,draw_floor_span_long,function,splits floor spans into 16-pixel pieces for draw_floor_span
+0x03004a74,blit_scaled_transparent,function,scaled 8bpp blit skipping index 0; writes two buffers
+0x0813b6d0,load_car_palettes,function,copies car paint ramps to base palette slots 160/176/208 (16) and 240/248 (8)
+0x0812b1d8,copy_to_base_palettes,function,copies n colours to slot k of both base palette buffers; sets dirty 0x0300563C
+0x0815f948,sin_q14,function,sine: 0x4000 per turn; table 0x087C05F0 (half wave)
+0x0815e02c,set_bg_palette_entry,function,palette RAM[idx] = colour when idx < 0x100
+0x0815dfd8,copy_palette_to_ram,function,copies a 0x200-byte buffer to palette RAM
+0x0815fcfc,rand_table,function,returns table 0x087C03F0[++*0x030064C8 & 0xFF]
+0x0816a9b4,__umodsi3,function,libgcc unsigned modulo
+0x08151454,vblank_intr_wait,function,swi 5
+0x0813b828,unpack_player_atlas,function,unpack car material, remap into slots (FUN_08163e5c), overlays and decal sets
+0x08163e5c,remap_atlas_pixels,function,p<16: p+body; p<32: p+trim-16
+0x08163e34,remap_decal_pixels,function,p==key: value; else p+add
+0x08163870,blit_material_keyed,function,unpack material (fmt 3/4/5, 0x40 compressed) and blit, skipping key, adding offset
+0x08163d30,decompress_material,function,decompress via FUN_0815e6c8
+0x0813bf58,unpack_decal,function,unpack decal 0x087EF816 into 0x03006094[id] (0x10->0, +0xB0)
+0x0813bd90,draw_decal_on_atlas,function,rotated decal blit into the atlas, twice
+0x0813b634,pick_opponent_cars,function,cars[1..3] = 3*(rand%5)+i, paints = rand%15; paints[1] from 0x087F4344
+0x0813b9b8,setup_race_cars,function,tentative: sets racer entities (+0x89, +0x48, +0x84) and loads the player's atlas and palette
+0x0813a954,race_frame_update,function,race frame: shade_car_paint first, then physics, entities, skyline, world (FUN_030048C8), HUD
+0x0812ae64,main_frame,function,runs the state machine (FUN_0812acec) then the light tint in races; gradient/palette fades (counter 0x03005630)
+0x0812bfa4,garage_draw_car,function,tentative: garage turntable, shade_car_paint(.., 1, angle)
+0x0812beec,garage_load_car_atlas,function,tentative: sets the car, unpacks atlas and decal
+0x0812bf48,garage_load_car_palette,function,tentative: sets the car and paint, FUN_0813b6d0(0)
+0x0812ac14,vblank_irq,function,VBlank IRQ: counters; gradient pointer = base + 2*start; LYC = 0
+0x030001c0,vcount_irq_sky_gradient,function,VCount IRQ (ARM): PAL[0] = *grad++; LYC += 2; lines 0-78
+0x03005810,irq_dispatch,function,ARM IRQ dispatcher; handler table 0x030056D0
+0x0813a318,draw_skyline,function,skyline panorama blit into the mode-4 back buffer (256-byte rows; 32-byte fill)
+0x0815e530,palette_fade_in_step,function,channels += step towards target, capped
+0x0815e4d4,palette_fade_out_step,function,non-zero channels -= step, floor 0
+0x0815e738,iwram_call_7,function,calls the IWRAM copy of a ROM ARM function (overlay base 0x03006490)
+0x0816820c,blit_rows_256,function,ARM row copy: (w>>5)+1 blocks of 32 bytes per row
+0x030002c0,fill32,function,ARM fill of n>>5 32-byte blocks (n<32 returns without pop)
+0x0816a2a4,call_via_r3,function,bx r3
+0x0813867c,camera_toggle_view,function,camera view 0 <-> 2 (SELECT)
+0x081378cc,camera_init,function,camera init: view 4/5, shake = 0, yaw from player
+0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre
+0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre
+0x0814bc30,draw_vehicle,function,(name tentative) vehicle draw; sets the horizon shift from the player's pitch in views < 2

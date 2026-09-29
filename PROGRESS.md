@@ -16,8 +16,8 @@ Done and committed:
   - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
   - world scale: one unit for cars and city, about 48 per metre.
 - **Rust workspace:**
-  - `crates/nfsgba-formats` has 4 real-data tests;
-  - `crates/nfsgba-viewer` (Bevy 0.19.1) shows the textured city, the skies (K cycles them) and a showroom of all cars in every paint variant.
+  - `crates/nfsgba-formats` has 14 real-data tests (modules `paint` and `sky` from the agents);
+  - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
   - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
   - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
 - **Tests:** the Python tools have 12 tests.
@@ -33,9 +33,9 @@ Done and committed:
 Done since the last update: race routes (grid plus racing line, `docs/formats/race-routes.md`); environments (the 12 level descriptors pick palette and sky; K cycles them in the viewer); the in-race light tint mechanism (`FUN_0813a514`).
 
 **Parallel agents (started 2026-09-29, each in its own git worktree/branch; the parent merges):**
-- **viewer-indexed:** R1/R2 in the viewer. Owns `crates/nfsgba-viewer`, `docs/engine/viewer-rendering.md`.
-- **car-paint:** R3/R4. Owns `crates/nfsgba-formats/src/paint.rs`, `docs/formats/car-paint.md`.
-- **sky:** R5/R6. Owns `crates/nfsgba-formats/src/sky.rs`, `docs/engine/sky.md`.
+- **viewer-indexed:** done and merged. R1/R2 closed (`docs/engine/viewer-rendering.md`).
+- **car-paint:** done and merged. Car palette slots 160–255 exact in `paint.rs`; R4 closed; the viewer part of R3 is open (`docs/formats/car-paint.md`).
+- **sky:** done and merged. Gradient and skyline exact in `sky.rs`; the viewer parts of R5/R6 are open (`docs/engine/sky.md`). It found that the reference race is **environment 11**, not 1.
 - **sector-renderer:** R7–R11. Owns `crates/nfsgba-formats/src/render.rs`, `docs/engine/renderer.md`.
 - **vehicle-physics:** car simulation plus trace harness. Owns `crates/nfsgba-sim`, `docs/engine/physics.md`, `tools/trace_*`.
 - **audio:** GBAMOD30 and the LS_Play mixer. Owns `crates/nfsgba-audio`, `docs/formats/audio.md`.
@@ -45,14 +45,16 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
 Next, driven by `docs/FIDELITY.md`:
-1. **R1 + R2:** indexed-colour rendering (index textures plus a palette texture) with the exact per-channel light tint at the camera/player position.
-2. **R3/R4:** exact car paint (`shade_car_paint`, the paint table) and how slots 160–223 are filled.
-3. **R5/R6/R8/R10:** sky renderer, portal step walls, portal traversal and draw limits.
+1. **Viewer integration of R3/R5/R6:** one race palette from `paint::race_palette`; the backdrop per screen line and the skyline layer from `sky`.
+2. **R7–R11, R14–R16:** from the sector-renderer agent (portal traversal, step walls, draw limits, projection, index-0 pairs, half-resolution floors).
+3. **R13:** decals and overlays on the player's atlas; opponent material choice.
 4. **Gameplay parity (roadmap step 4):** handling, AI and cops, traced against the reference build.
 
 ## Environment notes
 
 - Toolchains: Rust 1.98.1 (with clippy and rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10). The analysis venv is `.venv`.
+- `~/.cargo/bin` may be missing from PATH in the tool shells: prefix `export PATH="/c/Users/cyntrex/.cargo/bin:$PATH"`.
+- Agents: never kill `mGBA.exe` by image name (one agent did, ending the others' sessions); stop your own PID with `mgba_ctl.py stop`.
 - In the Bash tool, `python` is a pyenv-win batch shim. **Multi-line `python -c` and `python - <<EOF` get mangled or hang**, so write a script file into the scratchpad instead.
 - In PowerShell, `@(118039/48, -30/48)` fails to parse; pass precomputed numbers.
 - The mGBA stable build from scoop creates `cheats/ patch/ savegame/ savestate/ screenshot/` in its current folder. The tools agent left such folders in the repo root. They are untracked, and the user was asked to delete them.

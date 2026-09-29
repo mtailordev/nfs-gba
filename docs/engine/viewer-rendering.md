@@ -57,7 +57,7 @@ This reproduces `apply_sector_light_to_palette` (`FUN_0813a514`):
 
 **K** cycles the 12 environments. It swaps the raw city palette (which re-tints everything with the current `m`), the gradient material, the skyline index texture and the clear colour.
 
-## Verification (reference race, route 23, environment 1)
+## Verification (reference race, route 23; checked with environment 1, whose palette and gradient equal the race's environment 11)
 
 The scripts are in the session scratchpad `viewer-indexed/` (`compare.py`, `texzero.py`, `pairs.py`). The shot is `NFSGBA_ROUTE=23 NFSGBA_SHOT=route23.png`. The reference is `data/work/e5298b24/mgba/s15.png` with the dumps `race.*.bin`.
 
