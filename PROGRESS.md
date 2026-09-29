@@ -25,6 +25,8 @@ Done and committed:
 
 ## Working rules (from the user)
 
+- **No game code at runtime, no emulator.** Everything in `crates/` is our own Rust; mGBA and unicorn are test oracles only. State moves from the GBA-layout RAM image to typed Rust state once the game loop's frame tests exist (`docs/DECISIONS.md`, 2026-09-29). New code should prefer typed state with a `from_ram`/`to_ram` test adapter.
+
 - **Merging notes:** `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tools/notes_merge.py [--write] docs/engine/notes/*.<agent>.csv` appends clean symbols and inserts new address rows into their region's (sorted) table; conflicts and rows already in a table are listed for a hand edit.
 - **Port against the oracle first** (`tools/oracle`, `docs/engine/harness.md`): run the game's function on generated inputs over a snapshot, save the cases as JSONL, and have a Rust test replay them. Use mGBA only for new snapshots and whole-frame traces. Agents write `docs/engine/notes/symbols.<agent>.csv` and `addresses.<agent>.csv`; the parent runs `tools/notes_merge.py`.
 
