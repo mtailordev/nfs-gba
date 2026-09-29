@@ -555,18 +555,6 @@ pub fn message_hide(rom: &[u8], g: &Globals, objects: &mut [Object], messages: &
     }
 }
 
-/// `map_world_to_screen` (`FUN_08143144`, used by the map screens, not the HUD): map `i`'s pixel of a world
-/// position, `((x >> 8) << 6) / scale + x0` and the same for −z, with scales at `0x7F4480` and origins at
-/// `0x7F44A8`.
-pub fn map_world_to_screen(rom: &[u8], i: usize, x: i32, z: i32) -> (i32, i32) {
-    let scale = u32_at(rom, 0x7F_4480 + 4 * i) as i32;
-    let origin = |k: usize| u32_at(rom, 0x7F_44A8 + 8 * i + 4 * k) as i32;
-    (
-        div((x >> 8) << 6, scale).wrapping_add(origin(0)),
-        div((z.wrapping_neg() >> 8) << 6, scale).wrapping_add(origin(1)),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,10 +576,11 @@ mod tests {
         u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
     }
 
-    /// One record of `tools/ui_hud_trace.lua`.
+    /// One record of `tools/ui_hud_trace.lua`. For a call record, `frame` is the function and `regs` its
+    /// arguments; the racers, VRAM and palette are empty.
     struct Snap<'a> {
-        tag: u32,
         frame: u32,
+        regs: [u32; 4],
         iwram_lo: &'a [u8],
         iwram_hi: &'a [u8],
         objects: Vec<Object>,
@@ -603,8 +592,25 @@ mod tests {
     }
 
     const RECORD: usize = 8 + 0x200 + 0x1600 + 0x370 + 4 * 0xA4 + 4 * (4 + 0x500) + 4 + 0x4000 + 0x200 + 2;
+    const CALL: usize = 24 + 0x200 + 0x1600 + 0x370;
 
     impl<'a> Snap<'a> {
+        fn parse_call(b: &'a [u8]) -> Self {
+            let s = 24 + 0x1800;
+            Snap {
+                frame: le32(b, 4),
+                regs: std::array::from_fn(|i| le32(b, 8 + 4 * i)),
+                iwram_lo: &b[24..24 + 0x200],
+                iwram_hi: &b[24 + 0x200..s],
+                objects: b[s..s + 0x370].chunks(16).map(Object::from_bytes).collect(),
+                racers: Default::default(),
+                needle_scale: 0,
+                vram: &[],
+                palette: Vec::new(),
+                dispcnt: 0,
+            }
+        }
+
         fn parse(b: &'a [u8]) -> Self {
             let mut at = 8;
             let mut take = |n: usize| {
@@ -642,8 +648,8 @@ mod tests {
             let palette = take(0x200).chunks(2).map(|c| le16(c, 0)).collect();
             let dispcnt = le16(take(2), 0);
             Snap {
-                tag: le32(b, 0),
                 frame: le32(b, 4),
+                regs: [0; 4],
                 iwram_lo,
                 iwram_hi,
                 objects,
@@ -762,13 +768,74 @@ mod tests {
         let trace = std::fs::read(&path)
             .map_err(|e| eprintln!("skipping: no trace {} ({e})", path.display()))
             .ok()?;
-        assert_eq!(trace.len() % (2 * RECORD), 0, "{name}: truncated trace");
         let bank = sprite_bank(rom, LEVEL_TABLE);
-        let (mut frames, mut features) = (0, std::collections::BTreeSet::new());
-        for pair in trace.chunks(2 * RECORD) {
-            let (pre, post) = (Snap::parse(&pair[..RECORD]), Snap::parse(&pair[RECORD..]));
-            // A game frame can straddle a VBlank, so the two records' video frames may differ by one.
-            assert_eq!((pre.tag, post.tag), (0, 1), "{name}: records out of step");
+        let (mut frames, mut calls, mut features) = (0, 0, std::collections::BTreeSet::new());
+        // Calls nest (the HUD toggle calls hud_reset): entries are a stack.
+        let (mut at, mut pre, mut entries) = (0, None, Vec::new());
+        while at < trace.len() {
+            let tag = le32(&trace, at);
+            let len = if tag < 2 { RECORD } else { CALL };
+            assert!(at + len <= trace.len(), "{name}: truncated trace");
+            let rec = &trace[at..at + len];
+            at += len;
+            match tag {
+                0 => pre = Some(Snap::parse(rec)),
+                1 => {
+                    let pre = pre.take().expect("a post record follows a pre record");
+                    check_frame(rom, &bank, name, &pre, &Snap::parse(rec), &mut features);
+                    frames += 1;
+                }
+                2 => entries.push(Snap::parse_call(rec)),
+                3 => {
+                    let entry = entries.pop().expect("an exit record follows an entry record");
+                    let exit = Snap::parse_call(rec);
+                    assert_eq!(entry.frame, exit.frame, "{name}: calls out of step");
+                    features.insert(format!("call {:#x}", entry.frame));
+                    check_call(rom, name, &entry, &exit);
+                    calls += 1;
+                }
+                _ => panic!("{name}: unknown record tag {tag}"),
+            }
+        }
+        eprintln!("{name}: {frames} frames and {calls} calls replayed exactly; seen: {features:?}");
+        Some(frames)
+    }
+
+    /// A call record (tags 2, 3): the effect of `hud_message_show`, `FUN_08142e44`, `hud_reset` or the HUD toggle
+    /// `FUN_08143010` on the message slots and the objects must be the port's.
+    fn check_call(rom: &[u8], name: &str, entry: &Snap, exit: &Snap) {
+        let (g, [r0, r1, r2, _]) = (entry.globals(), entry.regs);
+        let (mut objects, mut messages) = (entry.objects.clone(), entry.messages());
+        // The sprite screen struct's object count; after the race it holds the menu screens (results screen).
+        let (screens, screen) = (entry.iw32(0x0300_0174), le16(entry.iw(0x0300_017C, 2), 0) as u32);
+        let count = crate::u16_at(rom, (screens + 8 * screen + 6) as usize & 0x01FF_FFFF) as usize;
+        match entry.frame {
+            0x0814_2EC0 => message_show(rom, &g, &mut messages, r0, r1 as i32, r2 != 0),
+            0x0814_2E44 => message_cancel(rom, &g, &mut objects, &mut messages, r0),
+            0x0814_2148 => {
+                assert_eq!(r0, 0x0300_0164, "hud_reset of another sprite screen struct");
+                reset(rom, &g, &mut objects, count, &mut messages);
+            }
+            0x0814_3010 => toggle(rom, &g, r0 == 1, &mut objects, count, &mut messages),
+            f => panic!("{name}: unknown call {f:#x}"),
+        }
+        let at = format!("{name}: call {:#x}({r0:#x}, {r1:#x}, {r2:#x})", entry.frame);
+        assert_eq!(messages, exit.messages(), "{at}: message slots");
+        for (k, (got, want)) in objects.iter().zip(&exit.objects).enumerate() {
+            assert_eq!(got, want, "{at}: object {k}");
+        }
+    }
+
+    /// One HUD frame (tags 0, 1).
+    fn check_frame(
+        rom: &[u8],
+        bank: &ui::SpriteBank,
+        name: &str,
+        pre: &Snap,
+        post: &Snap,
+        features: &mut std::collections::BTreeSet<String>,
+    ) {
+        {
             assert_ne!(pre.dispcnt & 0x40, 0, "OBJ 1-D mapping is off");
             let at = format!("{name} frame {}", pre.frame);
             let screen = le16(pre.iw(0x0300_017C, 2), 0) as usize;
@@ -810,6 +877,11 @@ mod tests {
                 (true, format!("gear {}", d.gear)),
                 (pre_g.split < 0, "negative split".into()),
                 (pre_g.frames != post_g.frames, "race time ticked".into()),
+                (
+                    div(pre_g.frames.wrapping_mul(100), 60) > 0x5_7A56,
+                    "timer blinking".into(),
+                ),
+                (pre_g.race_state != 8 && post_g.race_state == 8, "time limit hit".into()),
             ] {
                 if seen {
                     features.insert(what);
@@ -821,7 +893,7 @@ mod tests {
             let runs: Vec<Run> = [pre_g.frames, post_g.frames]
                 .into_iter()
                 .take(if pre_g.frames == post_g.frames { 1 } else { 2 })
-                .map(|t| run(rom, &bank, &pre, screen, tile_base, t, post_g.frames))
+                .map(|t| run(rom, bank, pre, screen, tile_base, t, post_g.frames))
                 .collect();
             let one_of = |same: &dyn Fn(&Run) -> bool| runs.iter().any(same);
             assert!(
@@ -850,10 +922,7 @@ mod tests {
                     0x200 + tile
                 );
             }
-            frames += 1;
         }
-        eprintln!("{name}: {frames} frames replayed exactly; seen: {features:?}");
-        Some(frames)
     }
 
     #[test]
@@ -879,6 +948,80 @@ mod tests {
     fn hud_replays_poked_inputs() {
         let Some(rom) = rom() else { return };
         if let Some(n) = replay(&rom, "inputs") {
+            assert!(n >= 900, "{n} frames");
+        }
+    }
+
+    /// Elimination, with opponents 1 and 2 flagged eliminated for a while (temporary pokes of driver `+0x4D8`).
+    #[test]
+    fn hud_replays_an_elimination_race() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "elimination") {
+            assert!(n >= 900, "{n} frames");
+        }
+    }
+
+    /// Racer 0 teleported past the minimap's x clamps for a few frames (temporary pokes: x > 448, and x < 0 at a
+    /// real city position), and a split past an hour.
+    #[test]
+    fn hud_replays_minimap_and_split_edges() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "edges") {
+            assert!(n >= 600, "{n} frames");
+        }
+    }
+
+    /// The race time set to 59:48.33 (poke of 0x03005800), then run past the blink threshold and the 59:59.98
+    /// limit, where the timer sets the race state, until the race ends.
+    #[test]
+    fn hud_replays_the_time_limit() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "timeout") {
+            assert!(n >= 150, "{n} frames");
+        }
+    }
+
+    /// Pause and continue: the HUD toggle `FUN_08143010` hides everything (0), then resets through `hud_reset` (1).
+    #[test]
+    fn hud_replays_a_pause() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "pause") {
+            assert!(n >= 200, "{n} frames");
+        }
+    }
+
+    /// From the race-info screen into a circuit: the race init's `hud_reset`, the countdown and the start.
+    #[test]
+    fn hud_replays_a_race_start() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "racestart") {
+            assert!(n >= 400, "{n} frames");
+        }
+    }
+
+    /// The y clamps, which the city never reaches: y < 0 (the offset goes into x, a game bug), y > 448, and
+    /// x < 0 with y < 0.
+    #[test]
+    fn hud_replays_minimap_y_edges() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "edges-y") {
+            assert!(n >= 300, "{n} frames");
+        }
+    }
+
+    /// Hunter mode with a wingman (portrait, blink, bar under, over and below its range; the bars' wingman rule).
+    #[test]
+    fn hud_replays_a_hunter_race_with_a_wingman() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "hunter-wingman") {
+            assert!(n >= 600, "{n} frames");
+        }
+    }
+
+    #[test]
+    fn hud_replays_a_sprint() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "sprint") {
             assert!(n >= 900, "{n} frames");
         }
     }
