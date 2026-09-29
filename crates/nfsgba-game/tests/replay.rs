@@ -15,9 +15,12 @@ use nfsgba_game::{Game, Machine, trace::Trace, world::World};
 /// `trail` (700 frames of a sprint behind the opponents through heavy traffic) and `views` (600 frames from the
 /// reference race: the bumper view, looking back in both views, the switch back behind the car, L and R held) and
 /// `nitro` (300 frames from the reference race with nitro poked into the tank before recording: the camera's speed
-/// effect and the nitro flames).
+/// effect and the nitro flames), `fadeout` and `fadein` (20 and 14 frames from the reference race with `main_frame`'s
+/// palette fade counter poked: the palettes and the sky gradient fade to black, and in from black).
 /// (session, trace, game frames): every frame of every trace must replay.
-const TRACES: [(&str, &str, usize); 5] = [
+const TRACES: [(&str, &str, usize); 7] = [
+    ("game-loop", "fadeout", 19),
+    ("game-loop", "fadein", 13),
     ("game-loop", "drive", 149),
     ("live-race", "live", 699),
     ("live-race", "trail", 699),

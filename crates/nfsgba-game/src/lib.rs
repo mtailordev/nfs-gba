@@ -227,10 +227,48 @@ impl Game {
         if self.world.lp.game_state == 5 {
             self.tint();
         }
-        is(self.world.g.fade != 0, "palette fades (main_frame, counter 0x03005630)")?;
+        self.fade();
         self.read_keys(keys)?;
         self.irqs_to(t.end);
         Ok(())
+    }
+
+    /// `main_frame`'s palette fade (`FADE` `0x03005630` ≠ 0, after the light tint): the sky gradient (towards the
+    /// level's, when there is a descriptor), BG and OBJ palette RAM (towards the base palette and the OBJ palette)
+    /// move 4 per channel, and the counter 2 towards 0. The fade steps are `menu::fade_in_step`/`fade_out_step`.
+    fn fade(&mut self) {
+        use menu::{fade_in_step, fade_out_step};
+        let w = &mut self.world;
+        if w.g.fade == 0 {
+            return;
+        }
+        let mut ram: Vec<u16> = self
+            .palette
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
+            .collect();
+        let (bg, obj) = ram.split_at_mut(256);
+        let n = w.gradient.len();
+        if w.g.fade > 0 {
+            if !w.fade_gradient.is_empty() {
+                fade_in_step(&mut w.gradient, &w.fade_gradient, 0, n, 4);
+            }
+            fade_in_step(bg, &w.palette_fade, 0, 256, 4);
+            fade_in_step(obj, &w.fade_obj, 0, 256, 4);
+            w.g.fade = (w.g.fade - 2).max(0);
+        } else {
+            if !w.fade_gradient.is_empty() {
+                fade_out_step(&mut w.gradient, 0, n, 4);
+            }
+            fade_out_step(bg, 0, 256, 4);
+            fade_out_step(obj, 0, 256, 4);
+            w.g.fade = (w.g.fade + 2).min(0);
+        }
+        for (b, c) in self.palette.as_chunks_mut::<2>().0.iter_mut().zip(ram) {
+            *b = c.to_le_bytes();
+        }
     }
 
     /// `FUN_0812b084`: shows the page drawn last frame and draws into the other (the view's page).
@@ -542,7 +580,7 @@ impl Game {
         }
     }
 
-    /// `apply_sector_light_to_palette` (`0x0813a514`): palette RAM = the base palette tinted by the light at the
+    /// `apply_sector_light_to_palette` (`0x0813a514`): palette RAM (during a fade, the fade's target buffer) = the base palette tinted by the light at the
     /// player's position in the camera sector; unchanged when no light is found.
     fn tint(&mut self) {
         let w = &self.world;
@@ -552,9 +590,16 @@ impl Game {
         let Some(light) = sector_light(&self.rom, sector, e.pos[0] >> 8, e.pos[2] >> 8) else {
             return;
         };
-        for (i, c) in tint_palette(&w.palette_base, light).into_iter().enumerate() {
+        // During a fade the tint goes to the fade's target buffer (0x0300577C) instead of palette RAM.
+        let fading = w.g.fade != 0;
+        let tinted = tint_palette(&w.palette_base, light);
+        for (i, c) in tinted.into_iter().enumerate() {
             if (1..=143).contains(&i) || (149..=255).contains(&i) {
-                self.palette[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
+                if fading {
+                    self.world.palette_fade[i] = c;
+                } else {
+                    self.palette[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
+                }
             }
         }
     }

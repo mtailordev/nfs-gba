@@ -44,6 +44,8 @@ nfsgba_sim::layout! {
         /// 5 in a race (`main_frame`'s state machine).
         0x0300_5808 game_state: u32,
         0x0300_5620 descriptor: u32,
+        /// The music playing (-1: none; `snd_stop_all` and `music_stop` set it).
+        0x0300_003C music_id: i32,
     }
 }
 
@@ -124,6 +126,10 @@ pub struct World {
     /// The base palette (the city's with the car ramps) and the fade's palette buffer.
     pub palette_base: Vec<u16>,
     pub palette_fade: Vec<u16>,
+    /// What `main_frame`'s palette fade moves towards: the sky gradient's target (the level's, from its
+    /// descriptor's material; empty without a descriptor) and the OBJ palette (world `+0x34`).
+    pub fade_gradient: Vec<u16>,
+    pub fade_obj: Vec<u16>,
     /// The sky gradient (the backdrop colour per line pair) and the entry the last VBlank chose.
     pub gradient: Vec<u16>,
     pub gradient_start: usize,
@@ -227,6 +233,17 @@ impl World {
         };
         let (gradient_at, gradient_ptr) = (m.u32(0x0300_56E8), m.u32(0x0300_53B8));
         let palette = |p: u32| Ptr::<u16>::new(p).read_n(m, 256);
+        // main_frame's fade target for the gradient: world[0] + level table (world +0x20) [material] +8.
+        let descriptor = m.u32(0x0300_5620);
+        let fade_gradient = if descriptor == 0 {
+            Vec::new()
+        } else {
+            let mat = m.u16(descriptor + 0x5E) as u32;
+            let src = m
+                .u32(0x0300_00C0)
+                .wrapping_add(m.u32(m.u32(0x0300_00C0 + 0x20) + 36 * mat + 8));
+            Ptr::<u16>::new(src).read_n(m, GRADIENT as u32)
+        };
         World {
             heads: hdr.sector_heads.read_n(m, hdr.sector_count as u32),
             spare: (hdr.first_entity as usize, hdr.entity_count as usize),
@@ -273,6 +290,8 @@ impl World {
             paints: setup.paints,
             palette_base: palette(setup.palette.addr),
             palette_fade: palette(m.u32(0x0300_577C)),
+            fade_gradient,
+            fade_obj: palette(m.u32(0x0300_00C0 + 0x34)),
             gradient: Ptr::<u16>::new(gradient_ptr).read_n(m, GRADIENT as u32),
             gradient_start: (gradient_at.wrapping_sub(gradient_ptr) / 2) as usize,
             materials: (0..hdr.material_count as u32)

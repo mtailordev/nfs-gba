@@ -12,6 +12,7 @@ offset, u32 length and the bytes), then deletes NAME.frames.bin. A state is EWRA
 deterministic from the savestate).
 """
 import struct
+from pathlib import Path
 import time
 
 import numpy as np
@@ -51,6 +52,10 @@ SCENARIOS = {
     # A+L (nitro in binding set 0) for the camera's speed effect on the focal length and the nitro flames.
     "nitro": ("race", "", 300, ["wait 2", "hold A 200", "hold A,L 150", "hold A 100", "hold A,L 60",
                                 "hold A,L,LEFT 40", "hold A,L,RIGHT 40", "hold A 600"], ["poke 0x0202CAEE 1"]),
+    # From the reference race with `main_frame`'s palette fade poked (FADE 0x03005630): out (-30: 15 frames, the
+    # palettes and the sky gradient lose 4 per channel each), and in (+20: 10 frames, fadein.lua) from black.
+    "fadeout": ("race", "", 20, ["hold A 400"], ["luax emu:write32(0x03005630,-30)"]),
+    "fadein": ("race", "", 14, ["hold A 400"], [f"lua {Path(__file__).with_name('fadein.lua')}"]),
 }
 
 
