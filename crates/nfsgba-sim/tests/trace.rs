@@ -389,3 +389,67 @@ fn perturbed_steps_match_the_oracle() {
         cases.len()
     );
 }
+
+/// `traffic_spawn` (`FUN_08143d48`) in all three kinds, called directly on real trace states in the function oracle
+/// (`tools/trace_spawn.py`): kinds 0 and 2 only come from spawner entities no Carbon race has. Same return value and
+/// RAM writes.
+#[test]
+fn traffic_spawns_match_the_oracle() {
+    let Some(dir) = trace_dir() else {
+        eprintln!("traces not found; skipped");
+        return;
+    };
+    let Ok(text) = fs::read_to_string(dir.join("spawn.jsonl")) else {
+        eprintln!("spawn cases not found (tools/trace_spawn.py); skipped");
+        return;
+    };
+    let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let mut traces: HashMap<String, Trace> = HashMap::new();
+    let mut failures = Vec::new();
+    for (n, c) in cases.iter().enumerate() {
+        let name = c["trace"].as_str().unwrap();
+        let trace = traces
+            .entry(name.to_owned())
+            .or_insert_with(|| load(&dir, name).expect("trace"));
+        let mut mem = trace.state(c["step"].as_u64().unwrap() as usize);
+        for p in c["patch"].as_array().unwrap() {
+            mem.set_bytes(p[0].as_u64().unwrap() as u32, &hex(p[1].as_str().unwrap()));
+        }
+        let before = mem.clone();
+        let near = mem.u32(W_ENTITIES) + 0xA4 * c["near"].as_u64().unwrap() as u32;
+        let kind = c["kind"].as_u64().unwrap() as u32;
+        let got = match nfsgba_sim::traffic::spawn(&mut mem, near, kind) {
+            Ok(v) => v,
+            Err(err) => {
+                failures.push(format!("case {n}: {err}"));
+                continue;
+            }
+        };
+        let (writes, _) = effects(&before, &Sim::new(mem));
+        let want: Vec<(u32, u8)> = c["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                let (a, v) = w.as_str().unwrap().split_once('=').unwrap();
+                (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
+            })
+            .collect();
+        let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
+        let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
+        if got as u64 != c["ret"].as_u64().unwrap() || !extra.is_empty() || !missing.is_empty() {
+            failures.push(format!(
+                "case {n} (kind {kind}): returned {got:#x} want {:#x}, extra {extra:x?} missing {missing:x?}",
+                c["ret"].as_u64().unwrap()
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures[..failures.len().min(10)].join("\n")
+    );
+    eprintln!("traffic spawns: {} oracle cases exact", cases.len());
+}
