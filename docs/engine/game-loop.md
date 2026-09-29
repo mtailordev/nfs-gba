@@ -2,13 +2,15 @@
 
 One game frame of a race, in the game's exact order, composed from the exact subsystems: the car steps
 (`nfsgba-sim`), the world and cars (`render`), the sky, the car paint and the light tint (`paint`,
-`tint_palette`), the HUD (`hud`, `ui`) and the sound engine (`nfsgba-audio`). `Game` owns the whole machine
-state (EWRAM, IWRAM, palette RAM, VRAM, OAM) in the game's own layout. ROM `BN7E` v0, SHA-1 `e5298b24…`.
+`tint_palette`), the HUD (`hud`, `ui`) and the sound engine (`nfsgba-audio`). `Game` owns the race's typed
+`World` (`world.rs`, `docs/engine/typed-state.md`) and the outputs (palette RAM, VRAM, OAM, samples); the RAM
+addresses below say where the game keeps each value, which `World::load` reads from a trace. ROM `BN7E` v0,
+SHA-1 `e5298b24…`.
 
 **Status:** nothing is stood in any more. The opponents' and traffic AI, `camera_update`, the matrix slots, the
-effect sprites and the spark entities all run in `Game::frame`. Five traces hold 2,445 frames. 2,444 of them are exact,
-byte for byte in RAM, VRAM, palette, OAM and the sound engine, both from each traced state and as free runs that carry
-their own state. The other one stops with `Unported` in a car path the physics-paths work still owns (D9–D11). Only the frame timing (T1) and the keys come from the trace. The viewer drives it live
+effect sprites and the spark entities all run in `Game::frame`. Five traces hold 2,445 frames, all exact in the typed
+state (the gameplay state, the sound engine, the atlases) and in VRAM, palette and OAM, both from each traced state
+and as free runs that carry their own state. Only the frame timing (T1) and the keys come from the trace. The viewer drives it live
 (`NFSGBA_PLAY=1`) and plays its sound. The race start, countdown, fades, race end and pause are not in the loop yet
 ([Not ported](#not-ported)).
 

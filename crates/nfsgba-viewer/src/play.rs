@@ -105,7 +105,12 @@ impl Play {
     /// A race dump (`prefix` under `$NFSGBA_DATA/work/e5298b24/`), running or paused.
     pub fn load(rom_bytes: Vec<u8>, prefix: &str, hud: Handle<Image>, running: bool) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24").join(prefix);
-        Ok(Play::new(Machine::load_dump(rom_bytes, &path)?, hud, !running, None))
+        Ok(Play::new(
+            Game::new(Machine::load_dump(rom_bytes, &path)?),
+            hud,
+            !running,
+            None,
+        ))
     }
 
     /// A Quick Play race start on `route` in environment `env`, paused (`race_init::start`).
@@ -113,9 +118,12 @@ impl Play {
         let path = rom::data_dir().join("work/e5298b24/race-init/circuit_pre");
         let (mut machine, mut io) = race_init::load_pre(rom_bytes, &path)?;
         race_init::apply_setup(&mut machine, env, route, 0, PLAYER_CAR);
-        race_init::race_start(&mut machine, &mut io, SEED_VBLANKS).map_err(|e| io::Error::other(e.to_string()))?;
-        race_init::enter_race(&mut machine.mem);
-        let mut play = Play::new(machine, hud, true, Some((env, route)));
+        let mut world =
+            race_init::race_start(&mut machine, &mut io, SEED_VBLANKS).map_err(|e| io::Error::other(e.to_string()))?;
+        race_init::enter_race(&mut world);
+        let data = machine.mem.data().clone();
+        let game = Game::with_world(machine.mem.rom, data, world, machine.palette, machine.vram, machine.oam);
+        let mut play = Play::new(game, hud, true, Some((env, route)));
         // The first race frame runs up to the countdown, which is not ported (G1): the drivers, camera, matrix slots
         // and the world are the game's; anything else that stops it is an error.
         match play.game.frame(0, &Timing::steady()) {
@@ -125,7 +133,7 @@ impl Play {
         }
     }
 
-    fn new(machine: Machine, hud: Handle<Image>, paused: bool, grid: Option<(u32, u32)>) -> Play {
+    fn new(game: Game, hud: Handle<Image>, paused: bool, grid: Option<(u32, u32)>) -> Play {
         let script = std::env::var("NFSGBA_PLAY_KEYS").ok().map(|s| {
             s.split(',')
                 .flat_map(|step| {
@@ -139,7 +147,7 @@ impl Play {
                 .collect()
         });
         Play {
-            game: Game::new(machine),
+            game,
             paused,
             grid,
             clock: 0.0,
@@ -207,13 +215,13 @@ pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<
         }
         play.frames += 1;
     }
-    race.setup = view::RaceView::read(play.game.mem());
+    race.setup = view::RaceView::read(&play.game.world);
     race.current = race.setup.route % race.routes.len();
 }
 
 /// The game's frame, camera and visible list, straight from its RAM (play mode).
 pub fn frame(play: &Play, rom_bytes: &[u8]) -> (rom::render::Frame, rom::render::Portal, rom::render::Visibility) {
-    let m = play.game.mem();
+    let m = &play.game.world;
     (view::frame(m), view::root(m), view::visible(rom_bytes, m))
 }
 

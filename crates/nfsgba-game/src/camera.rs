@@ -1,7 +1,7 @@
 //! The race camera: `camera_dispatch` (`0x081389a0`) runs the view's function ([`GameData::views`]: views 0..6
 //! `camera_update` `0x08137cb0`; 7 `camera_look_at_player`, not ported), always with `param_3 = 0`, so only that
-//! branch of `camera_update` is here. It runs on typed state, a [`CameraFrame`]; `view::camera_frame` loads that
-//! from the game's RAM and `view::store_camera_frame` stores it back (`docs/engine/typed-state.md`).
+//! branch of `camera_update` is here. It runs on typed state, a [`CameraFrame`], which `World::camera_frame`
+//! builds and `World::set_camera_frame` writes back (`docs/engine/typed-state.md`).
 
 use nfsgba_fixed::{angle_diff, atan2_fast, cos_q14 as cos, sin_q14 as sin};
 use nfsgba_formats::render::Piece;

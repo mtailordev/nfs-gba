@@ -201,6 +201,27 @@ fn oracle(dir: &Path, name: &str) -> Vec<Expected> {
 
 /// From the reference build's full RAM at each step's entry, the step gives the next traced car state, and
 /// the same RAM writes and sound commands as the game's own code (`tools/trace_oracle.py`).
+/// Heap bookkeeping, which the typed state does not keep (a traffic car's block is its entity's; the contract,
+/// `docs/DECISIONS.md`): the heap's node table and the bytes of free heap space in `m` (a spawn attempt that
+/// allocates and frees a block leaves its node and zeroed data there).
+fn bookkeeping(m: &Mem) -> impl Fn(&&(u32, u8)) -> bool + use<> {
+    let (nodes, data) = (m.u32(0x0300_64CC), m.u32(0x0300_64D0));
+    let node = |i: u32| nodes + 8 * i;
+    let (mut live, mut cur, mut top) = (Vec::new(), 0, 0);
+    loop {
+        let (start, end) = (m.u16(node(cur) + 4) as u32, m.u16(node(cur) + 6) as u32);
+        live.push(data + 4 * start..data + 4 * end);
+        top = top.max(data + 4 * start);
+        match m.u16(node(cur) + 2) {
+            0xFFFF => break,
+            next => cur = next as u32,
+        }
+    }
+    move |&&(a, _)| {
+        (nodes..nodes + 0x800).contains(&a) || ((data..top).contains(&a) && !live.iter().any(|r| r.contains(&a)))
+    }
+}
+
 #[test]
 fn each_step_matches_the_trace() {
     let Some(dir) = trace_dir() else { return };
@@ -225,8 +246,17 @@ fn each_step_matches_the_trace() {
                 check(&sim, e, &trace.cars[i + 1])
             };
             let (writes, sounds) = effects(&before, &sim);
-            let extra: Vec<_> = writes.iter().filter(|w| !want_writes.contains(w)).take(8).collect();
-            let missing: Vec<_> = want_writes.iter().filter(|w| !writes.contains(w)).take(8).collect();
+            let skip = bookkeeping(&sim.mem);
+            let extra: Vec<_> = writes
+                .iter()
+                .filter(|w| !want_writes.contains(w) && !skip(w))
+                .take(8)
+                .collect();
+            let missing: Vec<_> = want_writes
+                .iter()
+                .filter(|w| !writes.contains(w) && !skip(w))
+                .take(8)
+                .collect();
             if !extra.is_empty() || !missing.is_empty() {
                 bad.push(format!("RAM writes differ: extra {extra:x?}, missing {missing:x?}"));
             }
@@ -359,8 +389,17 @@ fn perturbed_steps_match_the_oracle() {
             .iter()
             .map(|s| s.as_str().unwrap().to_owned())
             .collect();
-        let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
-        let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
+        let skip = bookkeeping(&sim.mem);
+        let extra: Vec<_> = writes
+            .iter()
+            .filter(|w| !want.contains(w) && !skip(w))
+            .take(8)
+            .collect();
+        let missing: Vec<_> = want
+            .iter()
+            .filter(|w| !writes.contains(w) && !skip(w))
+            .take(8)
+            .collect();
         if !extra.is_empty() || !missing.is_empty() || sounds != want_sounds {
             failures.push(format!(
                 "case {n} ({name} step {}, paths {:?}): extra {extra:x?} missing {missing:x?} sounds {sounds:?} want {want_sounds:?}",
@@ -428,6 +467,7 @@ fn calls_match_the_oracle() {
                 continue;
             }
         };
+        let skip = bookkeeping(&mem);
         let (writes, _) = effects(&before, &Sim::new(mem));
         let want: Vec<(u32, u8)> = c["writes"]
             .as_array()
@@ -438,8 +478,16 @@ fn calls_match_the_oracle() {
                 (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
             })
             .collect();
-        let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
-        let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
+        let extra: Vec<_> = writes
+            .iter()
+            .filter(|w| !want.contains(w) && !skip(w))
+            .take(8)
+            .collect();
+        let missing: Vec<_> = want
+            .iter()
+            .filter(|w| !writes.contains(w) && !skip(w))
+            .take(8)
+            .collect();
         let ret_differs = got.is_some_and(|v| v as u64 != c["ret"].as_u64().unwrap());
         if ret_differs || !extra.is_empty() || !missing.is_empty() {
             failures.push(format!(

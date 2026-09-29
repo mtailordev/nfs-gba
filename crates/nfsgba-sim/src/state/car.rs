@@ -1,9 +1,8 @@
 //! The car's typed state: the rigid body, wheels and physics struct, the car step's globals and the profile's
 //! stats. Offsets and names follow `docs/engine/physics.md`.
 
-use super::Entity;
+use super::EntityRef;
 use crate::layout;
-use crate::layout::Ptr;
 
 layout! {
     /// The car's rigid body (physics struct `+0xC8`; `body.rs`).
@@ -160,7 +159,7 @@ layout! {
         0x4F0 u_4f0: u16,
         0x4F2 hunter_countdown: u16,
         /// AI: the entity followed while `u_4f0` runs.
-        0x4F4 follow: Ptr<Entity>,
+        0x4F4 follow: EntityRef,
         /// AI: boost timer.
         0x4F8 boost_timer: i16,
     }
@@ -186,11 +185,11 @@ layout! {
 
     /// The profile's stats the car step keeps (`Profile` holds the rest).
     pub struct CarProfile: 0x498 {
-        /// The AI's drive-force curve (`ai::speed_curve`): count, x range, pointer to the values, the values.
+        /// The AI's drive-force curve (`ai::speed_curve`): count, x range, the values (the game's pointer to them at
+        /// `+0x278` always names `curve`).
         0x26C curve_count: i32,
         0x270 curve_x0: i32,
         0x274 curve_x1: i32,
-        0x278 curve_ys: u32,
         0x27C curve: [i32; 21],
         /// Distance driven (speed >> 12 per step), skids counted, top speed.
         0x2D0 distance: i32,
@@ -236,16 +235,12 @@ layout! {
         0x0300_56F0 steps: u32,
         /// Frame-time tick the wingman's and the knocked-away timers count down by.
         0x0300_5934 frame_ticks: i32,
-        /// Camera matrix yaw (`-look & 0x3FFF`).
-        0x0300_5F9C matrix_yaw: i32,
         0x0300_6048 u_6048: u32,
         /// Wheel-spin scale added to the grid value.
         0x0300_6110 spin_bias: i32,
         0x0300_5604 u_5604: u32,
         0x0300_5608 difficulty: u32,
         0x0300_5610 u_5610: i32,
-        /// The view: 0 bumper, 2 chase.
-        0x0300_55F8 view: u32,
         /// 2 in link play.
         0x0300_5624 link: i32,
         0x0300_5630 fade: i32,
@@ -309,13 +304,13 @@ layout! {
         0x0300_615C gap: i32,
         0x0300_6170 u_6170: i32,
         0x0300_6174 u_6174: i32,
-        0x0300_6178 wingman_target: Ptr<Entity>,
+        0x0300_6178 wingman_target: EntityRef,
         0x0300_6180 u_6180: i32,
         0x0300_6188 u_6188: u32,
         0x0300_618C u_618c: u32,
         0x0300_6190 u_6190: i32,
         0x0300_6194 u_6194: i32,
-        0x0300_619C wingman_car: Ptr<Entity>,
+        0x0300_619C wingman_car: EntityRef,
         /// Someone finished.
         0x0300_61A4 finished: i32,
         /// Hunter races: the life a hit costs, per impulse.
@@ -338,7 +333,7 @@ layout! {
         0x0300_6260 traffic_period: u32,
         0x0300_6264 traffic_timer: u8,
         /// The live traffic cars (entities, null = free), their speed limit and their stop factor.
-        0x0300_6270 live: [Ptr<Entity>; 8],
+        0x0300_6270 live: [EntityRef; 8],
         0x0300_6290 traffic_max_speed: u32,
         0x0300_6294 traffic_stop: i32,
         0x0300_6298 traffic_on: u8,
@@ -349,7 +344,7 @@ layout! {
         /// `rand_table` index.
         0x0300_64C8 rand: u32,
         /// The route's per-section distance scale onto the lap (x256; `RacingLine::scales`).
-        0x0300_6120 scales: [i32; 11],
+        0x0300_6120 scales: [i32; 10],
     }
 }
 

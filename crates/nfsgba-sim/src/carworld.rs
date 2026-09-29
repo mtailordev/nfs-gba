@@ -7,15 +7,14 @@ use nfsgba_formats::career::{BackTable, Plane, Race, Racer, RacingLine};
 use nfsgba_formats::render::Piece;
 
 use crate::data::GameData;
-use crate::layout::Ptr;
 use crate::sound::Command;
-use crate::state::{Car, CarGlobals, CarProfile, Entity, Query, SectorOffset, TrafficBlock};
+use crate::state::{Car, CarGlobals, CarProfile, Entity, EntityRef, Query, SectorOffset, TrafficBlock};
 use crate::world::Geometry;
 
 pub const NONE: u32 = 0xFFFF;
 
 /// One entity of the racers' range and its driver.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Slot {
     pub e: Entity,
     pub c: Car,
@@ -89,6 +88,29 @@ pub struct Route {
     pub back: BackTable,
 }
 
+impl Default for Route {
+    fn default() -> Self {
+        Route {
+            line: RacingLine {
+                sections: Vec::new(),
+                points: Vec::new(),
+                scales: Vec::new(),
+            },
+            extra: Vec::new(),
+            planes: Vec::new(),
+            back: [0; 256],
+        }
+    }
+}
+
+impl PartialEq for Route {
+    fn eq(&self, o: &Self) -> bool {
+        let (a, b) = (&self.line, &o.line);
+        (&a.sections, &a.points, &a.scales, &self.extra, &self.planes, &self.back)
+            == (&b.sections, &b.points, &b.scales, &o.extra, &o.planes, &o.back)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PointExtra {
     pub heading: u16,
@@ -112,37 +134,71 @@ pub struct CarWorld<'a> {
     /// Where the city's walls are (a wall is named by this plus its index times 0x44): the words the car
     /// remembers of the last flag-0x4000 wall.
     pub walls_base: u32,
-    /// The entity array (a pointer to entity `i` is `entities.at(i)`).
-    pub entities: Ptr<Entity>,
+    /// The sector lists: per sector its first entity (`NONE`: none), linked through `Entity::next`.
+    pub heads: Vec<u16>,
     /// The entity the camera follows and the local player (world's `player_entity`), as an index.
     pub camera_player: u32,
+    /// The camera's view (0 bumper, 2 chase) and its matrix yaw.
+    pub view: u32,
+    pub matrix_yaw: i32,
     /// The upgrade bytes of the car being set up (its save data).
     pub save: [u8; 10],
-    /// The address of the profile (`curve_ys` points into it).
-    pub profile_addr: u32,
     /// Per racer: the grid position the opponents' setup copies (entity template x and z, 8.8).
     pub grid: Vec<[i32; 2]>,
     /// The entities `free_entity` searches for a traffic car.
     pub extra: std::ops::Range<usize>,
     pub sounds: Vec<Command>,
-    /// What the step did that the RAM image keeps: heap blocks and sector-list bookkeeping, replayed in order by
-    /// the adapter (`ram.rs`).
-    pub heap_ops: Vec<HeapOp>,
-    pub list_ops: Vec<ListOp>,
 }
 
-/// A traffic car's block was allocated or freed (entity index).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HeapOp {
-    Alloc(usize),
-    Free(usize),
+/// Entities by index, wherever they are kept (the sector lists link them).
+pub trait Entities {
+    fn entity(&mut self, i: usize) -> &mut Entity;
 }
 
-/// An entity leaves the list of `sector` (its sector when the step started) or joins the list of its sector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListOp {
-    Unlink(usize, u16),
-    Link(usize),
+impl Entities for [Entity] {
+    fn entity(&mut self, i: usize) -> &mut Entity {
+        &mut self[i]
+    }
+}
+
+impl Entities for [Slot] {
+    fn entity(&mut self, i: usize) -> &mut Entity {
+        &mut self[i].e
+    }
+}
+
+/// `FUN_081375ac`: unlink entity `index` from its sector's entity list.
+pub fn unlink_entity<E: Entities + ?Sized>(ents: &mut E, heads: &mut [u16], index: usize) {
+    let sector = ents.entity(index).sector as u32;
+    if sector == NONE {
+        return;
+    }
+    let link = ents.entity(index).next;
+    let mut cur = heads[sector as usize] as usize;
+    if cur == index {
+        heads[sector as usize] = link;
+        return;
+    }
+    loop {
+        let next = ents.entity(cur).next as u32;
+        if next == NONE {
+            return;
+        }
+        if next as usize == index {
+            ents.entity(cur).next = link;
+            return;
+        }
+        cur = next as usize;
+    }
+}
+
+/// `FUN_08137578`: push entity `index` onto its sector's entity list.
+pub fn link_entity<E: Entities + ?Sized>(ents: &mut E, heads: &mut [u16], index: usize) {
+    let sector = ents.entity(index).sector;
+    if sector as u32 != NONE {
+        ents.entity(index).next = heads[sector as usize];
+        heads[sector as usize] = index as u16;
+    }
 }
 
 impl CarWorld<'_> {
@@ -188,9 +244,19 @@ impl CarWorld<'_> {
         nfsgba_fixed::atan2_fast(self.rom, x, z)
     }
 
-    /// The entity a pointer to the entity array names.
-    pub fn entity_of(&self, p: Ptr<Entity>) -> usize {
-        p.index_from(self.entities) as usize
+    /// The entity an entity reference names.
+    pub fn entity_of(&self, r: EntityRef) -> usize {
+        r.index().expect("a null entity reference")
+    }
+
+    /// Entity `i` leaves its sector's list.
+    pub fn unlink(&mut self, i: usize) {
+        unlink_entity(&mut self.slots[..], &mut self.heads, i);
+    }
+
+    /// Entity `i` joins its sector's list.
+    pub fn link(&mut self, i: usize) {
+        link_entity(&mut self.slots[..], &mut self.heads, i);
     }
 
     pub fn is_player(&self, i: usize) -> bool {

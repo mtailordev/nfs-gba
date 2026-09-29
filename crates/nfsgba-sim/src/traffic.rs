@@ -3,15 +3,15 @@
 //!
 //! A traffic car takes a free entity (handler 0x36) and a 0x28-byte block ([`TrafficBlock`]), and appears on the
 //! main route a little ahead of or behind the player, in a random lane, unless it would land near a racer or
-//! another traffic car (the 8 live slots, `CarGlobals::live`). The block's heap allocation and the sector list
-//! are the RAM image's: the spawn records them (`CarWorld::heap_ops`, `list_ops`) for the adapter.
+//! another traffic car (the 8 live slots, `CarGlobals::live`). The block belongs to the entity (`Slot::block`); a
+//! failed attempt allocates and frees it in the game, which leaves nothing in the typed state.
 
-use crate::carworld::{CarWorld, HeapOp, ListOp};
+use crate::carworld::CarWorld;
 
 use crate::math::{div, isqrt};
 /// `rand_table` on the RAM image, for the callers that still keep their state there (`slots.rs`).
 pub use crate::ram::rand;
-use crate::state::{Entity, TrafficBlock};
+use crate::state::{Entity, EntityRef, TrafficBlock};
 
 /// Spawn distance from the player: past sqrt(0x18FFFFF), about 1,280 city units; clearance sqrt(0x8FFFF).
 const SPAWN_DISTANCE2: i32 = 0x18F_FFFF;
@@ -55,7 +55,6 @@ pub fn spawn(w: &mut CarWorld, near: usize, kind: u32) -> Option<usize> {
     }
     w.slots[t].e.traffic_mode = kind as i16;
     w.slots[t].block = Some(TrafficBlock::default());
-    w.heap_ops.push(HeapOp::Alloc(t));
     let placed = if kind != 1 {
         (kind != 0 && kind != 2) || at_section_start(w, near, t, kind)
     } else {
@@ -63,7 +62,6 @@ pub fn spawn(w: &mut CarWorld, near: usize, kind: u32) -> Option<usize> {
     };
     if !placed {
         w.slots[t].block = None;
-        w.heap_ops.push(HeapOp::Free(t));
         return None;
     }
     finish(w, t);
@@ -152,7 +150,7 @@ fn ahead_or_behind(w: &mut CarWorld, near: usize, t: usize) -> bool {
     let pos = e.pos;
     for k in 0..8 {
         let live = w.g.live[k];
-        if live.is_null() {
+        if live.is_none() {
             continue;
         }
         let o = &w.slots[w.entity_of(live)].e.pos;
@@ -259,9 +257,9 @@ fn finish(w: &mut CarWorld, t: usize) {
     e.traffic_type = r as u16;
     e.u_70 = 0x200;
     let (dir_x, dir_z) = (e.dir_x, e.dir_z);
-    w.list_ops.push(ListOp::Link(t));
-    if let Some(k) = (0..8).find(|&k| w.g.live[k].is_null()) {
-        w.g.live[k] = w.entities.at(t as u32);
+    w.link(t);
+    if let Some(k) = (0..8).find(|&k| w.g.live[k].is_none()) {
+        w.g.live[k] = EntityRef::to(t);
     }
     let block = w.slots[t].block.as_mut().expect("the spawn allocated the block");
     block.turn_from = [0, 0];

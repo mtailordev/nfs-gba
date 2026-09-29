@@ -525,7 +525,7 @@ fn setup(
         None => play::Play::grid(data.clone(), env as u32, start_route.unwrap_or(23), hud.clone())
             .unwrap_or_else(|e| panic!("race start: {e} (needs the race-init/circuit_pre capture)")),
     };
-    let setup = view::RaceView::read(race_game.game.mem());
+    let setup = view::RaceView::read(&race_game.game.world);
     let env = if dump.is_some() { setup.env % envs.len() } else { env };
     let current = setup.route % routes.len();
     let active = dump.is_some() || start_route.is_some();
@@ -543,7 +543,7 @@ fn setup(
     // materials already in their palette slots (`look`).
     let player_car = setup.cars[0] as usize;
     let player_first = &vehicle_textures[cars[player_car].first_material];
-    let player_pixels = view::player_atlas(race_game.game.mem(), player_first.pixels.len())
+    let player_pixels = view::player_atlas(&race_game.game.world, player_first.pixels.len())
         .unwrap_or_else(|| player_first.pixels.clone());
     for (slot, racer) in setup.racers.iter().enumerate().filter(|(_, r)| r.model > 0) {
         let atlas = if slot == 0 {
@@ -869,7 +869,7 @@ fn visibility(
     for mut v in &mut city {
         v.set_if_neq(shown(!race.original));
     }
-    let mem = play.game.mem();
+    let mem = &play.game.world;
     let game_frame = view::frame(mem);
     let eye = game::frame_transform(&game_frame, world);
     for (car, mut t, mut v) in &mut cars {
@@ -973,7 +973,7 @@ fn tint(
     }
     let sector = if race.active {
         // The player's position in the camera's sector, as the game has it.
-        Some(view::root(play.game.mem()).sector as usize)
+        Some(view::root(&play.game.world).sector as usize)
     } else {
         let t = camera.translation;
         let (px, pz, y) = ((t.x / SCALE).floor() as i32, (-t.z / SCALE).floor() as i32, t.y);
@@ -1012,7 +1012,7 @@ fn tint(
     // NOT 1:1 (R17): for 1–7 scanlines per game frame the game shows the tinted glass instead.
     let base = if race.active {
         let setup = &race.setup;
-        let mut base = view::base_palette(play.game.mem());
+        let mut base = view::base_palette(&play.game.world);
         [base[192], base[208]] = paint::glass_shades(&tint.rom, setup.record[5], setup.racers[0].heading);
         base
     } else {
@@ -1097,7 +1097,7 @@ fn sky(
     let forward = camera.forward().as_vec3();
     let cam = match race.frame {
         // The game's sky camera (the chase camera looks along its yaw and never pitches).
-        Some(_) => view::sky_camera(play.game.mem()),
+        Some(_) => view::sky_camera(&play.game.world),
         None => sky::SkyCamera {
             yaw: game_yaw(forward),
             horizon: horizon(forward),
@@ -1124,7 +1124,7 @@ fn sky(
     }
     if let (Some((frame, _)), Some(visible)) = (world_frame, race.visible.as_ref()) {
         // The cars: the game's entities and matrix slots.
-        let mut scene = view::scene(play.game.mem());
+        let mut scene = view::scene(&play.game.world);
         render::draw_world(&tint.rom, &frame, &tint.rt, &mut scene, &mut visible.clone(), screen);
     }
     let start = sky::gradient_start(desc, &cam);
@@ -1250,7 +1250,7 @@ mod tests {
         assert_eq!((dump.grid, route.grid), (None, Some((11, 7))));
         for (name, p, cars) in [("dump", &dump, 1), ("route 7", &route, 1)] {
             assert!(p.paused, "{name}");
-            let mem = p.game.mem();
+            let mem = &p.game.world;
             let (frame, root, visible) = play::frame(p, &data);
             assert_eq!(frame.camera, view::frame(mem).camera, "{name}");
             assert_eq!(visible.portals.first().map(|p| p.sector), Some(root.sector), "{name}");

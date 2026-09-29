@@ -6,7 +6,7 @@
 
 use std::{fs, path::PathBuf};
 
-use nfsgba_game::{Machine, race_init};
+use nfsgba_game::{Machine, race_init, world::World};
 
 fn dir() -> Option<PathBuf> {
     nfsgba_testkit::fixture("race-init")
@@ -91,9 +91,14 @@ fn race_start_matches_the_game() {
         let mut io: race_init::Io = fs::read(dir.join(format!("{name}_pre.io.bin"))).unwrap()[..0x400]
             .try_into()
             .unwrap();
-        race_init::race_start(&mut g, &mut io, 0).unwrap();
+        let world = race_init::race_start(&mut g, &mut io, 0).unwrap();
         let want = |d: &str| fs::read(dir.join(format!("{name}_oracle.{d}.bin"))).unwrap();
         let mut report = Vec::new();
+        // The typed world against the oracle's.
+        let oracle = Machine::load_dump(rom.clone(), &dir.join(format!("{name}_oracle"))).unwrap();
+        if world != World::load(&oracle) {
+            report.push("  the typed world differs from the oracle's".to_string());
+        }
         for (d, ours, base) in [
             ("wram", &g.mem.ewram[..], 0x0200_0000),
             ("iwram", &g.mem.iwram[..], 0x0300_0000),

@@ -17,6 +17,18 @@ pub struct Trace {
     pub effects: Vec<Vec<u8>>,
 }
 
+/// The entity whose driver word (`+0x8C`) is `driver` in a trace state.
+fn entity_of_driver(s: &[u8], driver: u32) -> usize {
+    let iw = |a: usize| u32::from_le_bytes(s[0x4_0000 + a..0x4_0000 + a + 4].try_into().unwrap());
+    let (base, count) = (iw(0xFC), (iw(0x1B8) & 0xFFFF) + (iw(0x1B8) >> 16));
+    (0..count as usize)
+        .find(|&i| {
+            let at = (base & 0x3_FFFF) as usize + 0xA4 * i + 0x8C;
+            u32::from_le_bytes(s[at..at + 4].try_into().unwrap()) == driver
+        })
+        .expect("a lane timer's driver is an entity's")
+}
+
 impl Trace {
     /// `dir/NAME.*`, or `None` when the files are absent.
     pub fn load(dir: &Path, name: &str) -> io::Result<Trace> {
@@ -42,7 +54,8 @@ impl Trace {
         let num = |f: &str| f.parse::<u32>().ok();
         let timing = rows
             .windows(2)
-            .map(|w| {
+            .enumerate()
+            .map(|(k, w)| {
                 let (r, start) = (&w[0], num(w[0][2]).unwrap());
                 let at = |f: &str| num(f).map(|v| v - start);
                 Timing {
@@ -67,6 +80,7 @@ impl Trace {
                         .split(';')
                         .filter_map(|p| p.split_once(':'))
                         .map(|(d, n)| (u32::from_str_radix(d, 16).unwrap(), num(n).unwrap() - start))
+                        .map(|(d, n)| (entity_of_driver(&states[k], d), n))
                         .collect(),
                 }
             })

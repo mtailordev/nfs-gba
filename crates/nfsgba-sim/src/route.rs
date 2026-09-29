@@ -6,8 +6,8 @@
 //! `lap_crossing`.
 
 use crate::carworld::{CarWorld, Slot};
-use crate::layout::Ptr;
 use crate::math::{cos, div, sin};
+use crate::state::EntityRef;
 
 /// `FUN_0813e860`: normalise waypoint `index` of section `seg`, following links into the next or previous section
 /// and wrapping on circuits. Returns the index and the section it lies in.
@@ -275,10 +275,10 @@ pub fn wingman_command(w: &mut CarWorld) {
     }
     let given = if g.wingman_attacker == 0 {
         let racers = g.opponents;
-        let (mut target, mut place) = (Ptr::NULL, 100);
+        let (mut target, mut place) = (EntityRef::NONE, 100);
         if racers != u32::MAX {
             for (k, s) in w.slots.iter().enumerate().take(racers as usize + 1) {
-                let at = w.entities.at(k as u32);
+                let at = EntityRef::to(k);
                 if at != g.wingman_car && s.e.index as u32 <= racers && s.c.position < place {
                     (target, place) = (at, s.c.position);
                 }
@@ -289,7 +289,7 @@ pub fn wingman_command(w: &mut CarWorld) {
         g.wingman_target = target;
         g.u_61fc = 0;
         g.u_61f0 = 0;
-        !target.is_null()
+        !target.is_none()
     } else {
         let g = &mut w.g;
         g.u_618c = 1;

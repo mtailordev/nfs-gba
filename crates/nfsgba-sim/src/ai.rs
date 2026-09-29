@@ -14,6 +14,7 @@ use crate::carworld::{CarWorld, NONE};
 use crate::data::Curve;
 use crate::math::{angle_diff, atan2, cos, div, dot, isqrt, mat_mul, mul12, mul64, recip, scale, sin, sub, udiv};
 use crate::route;
+use crate::state::EntityRef;
 use crate::{Result, Unported};
 
 macro_rules! car {
@@ -69,7 +70,7 @@ pub fn handler(w: &mut CarWorld, i: usize) -> Result<Option<Effects>> {
     Ok(Some(Effects {
         entity: index,
         heading: (e.heading >> 8) as u32 & 0x3FFF,
-        view: 0x3FFFu32.wrapping_sub(w.g.matrix_yaw as u32),
+        view: 0x3FFFu32.wrapping_sub(w.matrix_yaw as u32),
         size: if e.speed < 0x80 { 0x40 } else { 0x20 },
     }))
 }
@@ -220,7 +221,7 @@ fn wingman_setup(w: &mut CarWorld) {
     g.wingman_cooldown = 0;
     g.u_61d4 = 0;
     g.u_6200 = 0;
-    g.wingman_car = w.entities;
+    g.wingman_car = EntityRef::to(0);
     g.wingman_attacker = 0;
     g.u_618c = 0;
     g.u_61f0 = 0;
@@ -241,7 +242,6 @@ fn speed_curve(w: &mut CarWorld, i: usize) {
     let h = &data.car.handling[ent!(w, i).car as usize];
     w.profile.curve_x0 = 0;
     w.profile.curve_count = 0x15;
-    w.profile.curve_ys = w.profile_addr + 0x27C;
     let top = recip(rom, car!(w, i).word(0x408 + 4 * h[21]));
     let span = car!(w, i).max_rpm.wrapping_mul(top).wrapping_mul(0x180);
     w.profile.curve_x1 = if span < 0 { span + 0xFF } else { span } >> 8;
@@ -1101,7 +1101,7 @@ fn mark_blocked_lanes(w: &mut CarWorld, i: usize) {
     if ent!(w, i).segment == 0 {
         for k in 0..8 {
             let live = w.g.live[k];
-            if live.is_null() {
+            if live.is_none() {
                 continue;
             }
             let t = &w.slots[w.entity_of(live)].e;

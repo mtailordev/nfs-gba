@@ -68,6 +68,10 @@ value. Laps, difficulty and catch-up are not read here (the car init reads them 
 A race from the ROM alone therefore needs the boot and menu code that produce these bytes, above all the heap's
 block layout (the sound init and the menus' live allocations fix every heap address the race uses).
 
+`race_start` returns the race's typed `World` (`nfsgba-game/src/world.rs`), which `Game` runs on. It still builds it
+on this RAM image and loads the world from the result (`World::load`, G3): the inputs above come from the pre-state
+capture, and the heap layout they fix is kept as the world's atlas arena (`World::heap`, R24).
+
 ## Timing
 
 `setup_race_cars` seeds the RNG with the tick counter, which the VBlank IRQ advances while the race loads. The

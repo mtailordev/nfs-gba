@@ -25,6 +25,44 @@ pub const WORLD: u32 = 0x0300_00C0;
 /// The race camera's matrix (the world's `+0x54` points here during a race).
 pub const CAMERA_MATRIX: u32 = 0x0300_57A0;
 
+/// An entity's driver (`+0x8C`): a car's physics struct, or a traffic car's block (the RAM image's heap).
+pub fn driver(m: &crate::Mem, entity_at: u32) -> Ptr<Car> {
+    Ptr::new(m.u32(entity_at + 0x8C))
+}
+
+/// An entity named by its index (`None`: null). The game keeps a pointer into the entity array (world `+0x3C`);
+/// the layout converts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EntityRef(pub Option<u16>);
+
+impl EntityRef {
+    pub const NONE: Self = EntityRef(None);
+
+    pub fn to(i: usize) -> Self {
+        EntityRef(Some(i as u16))
+    }
+
+    pub fn index(self) -> Option<usize> {
+        self.0.map(usize::from)
+    }
+
+    pub fn is_none(self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl layout::Field for EntityRef {
+    const SIZE: u32 = 4;
+    fn load(m: &crate::Mem, at: u32) -> Self {
+        let a = m.u32(at);
+        EntityRef((a != 0).then(|| ((a - m.u32(WORLD + 0x3C)) / Entity::SIZE) as u16))
+    }
+    fn store(&self, m: &mut crate::Mem, at: u32) {
+        let base = m.u32(WORLD + 0x3C);
+        m.set_u32(at, self.0.map_or(0, |i| base + Entity::SIZE * i as u32));
+    }
+}
+
 layout! {
     /// The world struct (`WORLD`): the city's tables (walls and sectors are ROM addresses: `GameData` holds what is
     /// there), the entity array, the renderer's buffers, the sector search's query point, and the counts.
@@ -136,8 +174,6 @@ layout! {
         /// Matrix slot (`0xFF` not drawn) and car id.
         0x88 slot: u8,
         0x89 car: u8,
-        /// The driver's physics struct; traffic uses this word as two u16 (`+0x8C`, `+0x8E`).
-        0x8C driver: Ptr<Car>,
         /// Racing-line segment / route waypoint.
         0x90 waypoint: i16,
         0x94 u_94: u16,
@@ -156,7 +192,7 @@ layout! {
         /// Entity index of the local player.
         0x0300_0060 player: u32,
         /// The player's entity, which the camera follows.
-        0x0300_53AC player_entity: Ptr<Entity>,
+        0x0300_53AC player_entity: EntityRef,
         /// Entity index whose heading `shade_car_paint` uses and behind which the chase view resets.
         0x0300_57F8 focus: u32,
         0x0300_56EC profile: Ptr<Profile>,

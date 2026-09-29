@@ -9,10 +9,11 @@
 //! `traffic_waypoint`, `traffic_mode` (1 lane driving, 2 follow the waypoints, else stop at the waypoint). The
 //! [`TrafficBlock`](crate::state::TrafficBlock): the target point, the turn, flags, lane.
 //!
-//! The block's heap allocation and the sector list are the RAM image's (`CarWorld::heap_ops`, `list_ops`).
+//! The block belongs to the entity (`Slot::block`); the sector lists are `CarWorld::heads` and `Entity::next`.
 
-use crate::carworld::{CarWorld, HeapOp, ListOp, NONE};
+use crate::carworld::{CarWorld, NONE};
 use crate::math::{cos, cross, div, isqrt, sin, sub};
+use crate::state::EntityRef;
 use crate::{Result, Unported};
 
 /// `FUN_081443fc`: entity handler 0x36 for entity `i`.
@@ -39,17 +40,14 @@ pub fn handler(w: &mut CarWorld, i: usize) -> Result<()> {
         }
         3 => knocked_away(w, i, camera),
         2 => {
-            if w.slots[i].block.take().is_some() {
-                w.heap_ops.push(HeapOp::Free(i));
-            }
+            w.slots[i].block = None;
             let e = &mut w.slots[i].e;
             e.state &= 0xFFFE;
             e.slot = 0xFF;
-            w.list_ops.push(ListOp::Unlink(i, e.sector));
+            w.unlink(i);
             w.g.traffic_count = w.g.traffic_count.wrapping_sub(1);
-            let this = w.entities.at(i as u32);
-            if let Some(k) = (0..8).find(|&k| w.g.live[k] == this) {
-                w.g.live[k] = crate::layout::Ptr::NULL;
+            if let Some(k) = (0..8).find(|&k| w.g.live[k] == EntityRef::to(i)) {
+                w.g.live[k] = EntityRef::NONE;
             }
             Ok(())
         }
@@ -209,7 +207,7 @@ fn drive(w: &mut CarWorld, i: usize, camera: usize, old_sector: u16) -> Result<(
             }
         }
     }
-    w.list_ops.push(ListOp::Unlink(i, w.slots[i].e.sector));
+    w.unlink(i);
     let e = &w.slots[i].e;
     w.query.pos[0] = e.pos[0] >> 8;
     w.query.pos[2] = e.pos[2] >> 8;
@@ -237,7 +235,7 @@ fn drive(w: &mut CarWorld, i: usize, camera: usize, old_sector: u16) -> Result<(
             s.e.angles[0] = (pitch as i16).wrapping_neg();
         }
     }
-    w.list_ops.push(ListOp::Link(i));
+    w.link(i);
     let hit = collide_racers(w, i, rom);
     if hit & 2 == 0 {
         w.slots[i].e.slot = 0xFF;
@@ -286,13 +284,14 @@ fn knocked_away(w: &mut CarWorld, i: usize, camera: usize) -> Result<()> {
         e.wobble = if v.wrapping_abs() < 0x10 { 0 } else { v };
     }
     let old = e.sector;
-    w.list_ops.push(ListOp::Unlink(i, old));
+    w.unlink(i);
+    let e = &w.slots[i].e;
     w.query.pos[0] = e.pos[0] >> 8;
     w.query.pos[2] = e.pos[2] >> 8;
     w.query.sector = e.sector;
     let s = find_sector(w);
     w.slots[i].e.sector = if s == NONE { old } else { s as u16 };
-    w.list_ops.push(ListOp::Link(i));
+    w.link(i);
     let e = &w.slots[i].e;
     let floor = w.floor_height(e.sector as u32, e.pos[0] >> 8, e.pos[2] >> 8);
     w.slots[i].e.pos[1] = floor;

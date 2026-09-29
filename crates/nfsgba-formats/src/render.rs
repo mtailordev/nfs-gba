@@ -185,7 +185,7 @@ fn lsl(a: i32, n: u32) -> i32 {
 }
 
 /// A moving wall piece (world `+0x18`, 0x20-byte RAM records), named by wall `+0x2A`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Piece {
     /// `+0x00`, `+0x02`: offset of the wall's corner.
     pub dx: i16,

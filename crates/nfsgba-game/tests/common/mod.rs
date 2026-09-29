@@ -67,15 +67,15 @@ pub fn instances(m: &Mem) -> Vec<Instance> {
     all.extend((0..w.sector_offset_count as u32).map(|k| at::<SectorOffset>(w.sector_offsets.at(k).addr)));
     for i in 0..(w.first_entity + w.entity_count) as u32 {
         let e = w.entities.at(i);
-        let entity = e.read(m);
+        let (entity, driver) = (e.read(m), nfsgba_sim::state::driver(m, e.addr));
         all.push(at::<Entity>(e.addr));
         // Cars, opponents and the wingman have a physics struct (traffic uses the word otherwise).
-        if matches!(entity.handler, 0..=3 | 0x29) && !entity.driver.is_null() {
-            all.push(at::<Car>(entity.driver.addr));
+        if matches!(entity.handler, 0..=3 | 0x29) && !driver.is_null() {
+            all.push(at::<Car>(driver.addr));
         }
         // A traffic car's block.
-        if entity.handler == 0x36 && !entity.driver.is_null() {
-            all.push(at::<TrafficBlock>(entity.driver.addr));
+        if entity.handler == 0x36 && !driver.is_null() {
+            all.push(at::<TrafficBlock>(driver.addr));
         }
     }
     all

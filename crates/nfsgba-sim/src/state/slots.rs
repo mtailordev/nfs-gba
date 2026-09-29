@@ -1,7 +1,7 @@
 //! The state of the matrix slots and the effect sprites (`nfsgba-game/src/slots.rs`, `oam.rs`): the globals they
 //! read, the sprite pool and a car's record. Names follow `docs/engine/game-loop.md` step 6 and `address-map.md`.
 
-use super::Entity;
+use super::EntityRef;
 use crate::layout;
 use crate::layout::Ptr;
 
@@ -18,7 +18,7 @@ layout! {
         0x0300_539C records: Ptr<CarRecord>,
         /// Traffic is on; the eight traffic entities (0 none).
         0x0300_6090 traffic_on: u32,
-        0x0300_6270 traffic: [Ptr<Entity>; 8],
+        0x0300_6270 traffic: [EntityRef; 8],
         /// The AI cars (racers after the player).
         0x0300_57EC ai_cars: i32,
         /// Non-zero: the body matrix comes from the driver's physics orientation.
@@ -56,9 +56,15 @@ layout! {
     /// A car's record (0x11 bytes at `records + 0x11 * car`): the spoiler and exhaust table rows, the rim, the paint.
     pub struct CarRecord: 0x11 {
         0x00 spoiler: u8,
+        0x01 u_01: u8,
         0x02 rim: u8,
         0x03 exhaust: u8,
+        0x04 u_04: u8,
         0x05 paint: u8,
+        /// The glass colour.
+        0x06 glass: u8,
+        /// The car's upgrade levels (its save data).
+        0x07 upgrades: [u8; 10],
     }
 
     /// Who races: the car and paint of each racer, the route and the environment.

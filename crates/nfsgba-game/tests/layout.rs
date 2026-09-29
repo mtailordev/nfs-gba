@@ -80,7 +80,7 @@ fn car_step_globals_are_disjoint() {
     }
 }
 
-/// The camera's stores (`view::store_camera_frame`) write these together: no field of one may overlap another's.
+/// The camera's state (`World::camera_frame`) is loaded from these together: no field of one may overlap another's.
 #[test]
 fn camera_globals_are_disjoint() {
     let Some(dir) = nfsgba_testkit::fixture("game-loop") else {

@@ -21,13 +21,17 @@ use nfsgba_formats::{
 };
 use nfsgba_sim::{Mem, Result, Unported, heap, math, world};
 
-use crate::{Machine, view};
+use crate::{Machine, view, view::hud::HudFrame, world::World};
+use nfsgba_sim::{
+    layout::Field,
+    state::{HudMessages, HudVars, Race, ShadowOam, WorldHeader},
+};
 
 /// The GBA I/O registers (`0x04000000`, 0x400 bytes): the race start sets DISPCNT's OBJ bits, BLDCNT/BLDALPHA
 /// and DISPSTAT's VCount IRQ enable.
 pub type Io = [u8; 0x400];
 
-const WORLD: u32 = view::WORLD;
+const WORLD: u32 = nfsgba_sim::state::WORLD;
 const VIEW: u32 = 0x0300_0080;
 const FB: u32 = 0x0300_6410;
 const SHADOW_OAM: u32 = 0x0300_64F0;
@@ -59,7 +63,12 @@ const LEVELS: u32 = 0x087F_2B08;
 /// `seed_vblanks`: the VBlank IRQs that run before `setup_race_cars` reads the tick counter `0x03000044` as the
 /// rand seed (the only timing the result depends on; 6 or 7 in the recorded race starts, 0 for the IRQ-free
 /// oracle). The tick counter in RAM is left alone: advancing it is the IRQs' job.
-pub fn race_start(g: &mut Machine, io: &mut Io, seed_vblanks: u32) -> Result<()> {
+///
+/// Returns the race's typed [`World`]. NOT 1:1 (G3): it is built on the machine the menus left (the pre-state
+/// capture), which `g` holds before and after: the port runs the race start on that RAM image, because its inputs
+/// are that image (the setup, the profile and car records, the heap's node list and freed blocks' bytes that
+/// decide where the atlases land, R24), and loads the world from the result.
+pub fn race_start(g: &mut Machine, io: &mut Io, seed_vblanks: u32) -> Result<World> {
     let m = &mut g.mem;
     let wingman = m.u32(m.u32(PROFILE) + 0x200);
     m.set_u32(WINGMAN, wingman);
@@ -88,7 +97,7 @@ pub fn race_start(g: &mut Machine, io: &mut Io, seed_vblanks: u32) -> Result<()>
     let level = m.u32(0x0300_006C) * 0x68 + LEVELS;
     race_init(g, io, level, seed_vblanks)?;
     g.mem.set_u32(0x0300_6098, 0);
-    Ok(())
+    Ok(World::load(g))
 }
 
 fn racer_bytes(m: &Mem, at: u32) -> [i8; 4] {
@@ -507,10 +516,10 @@ fn sprite_bank(m: &Mem) -> SpriteBank {
 /// `sprite_screen_update(world + 0xA4, 1)` through `ui::update_sprites`, with its VRAM uploads.
 fn sprite_screen_init(g: &mut Machine) {
     let bank = sprite_bank(&g.mem);
-    let mut h = view::hud::load(&g.mem);
-    let (screen, tile_base) = (h.vars.screen as usize, h.vars.tile_base);
+    let (vars, mut h) = hud_load(&g.mem);
+    let (screen, tile_base) = (vars.screen as usize, vars.tile_base);
     let uploads = ui::update_sprites(&g.mem.rom, &bank, screen, &mut h.objects, &mut h.oam, true, tile_base);
-    view::hud::store(&mut g.mem, &h);
+    hud_store(&mut g.mem, &vars, &h);
     for u in uploads {
         let at = 0x1_0000 + 32 * u.tile;
         g.vram[at..at + u.len].copy_from_slice(&g.mem.rom[u.src..u.src + u.len]);
@@ -533,10 +542,84 @@ fn hud_off(m: &mut Mem) {
 
 fn hud_with(m: &mut Mem, f: impl FnOnce(&[u8], &hud::Globals, &mut [ui::Object], usize, &mut hud::Messages)) {
     let bank = sprite_bank(m);
-    let mut h = view::hud::load(m);
-    let count = bank.screens[h.vars.screen as usize].count;
+    let (vars, mut h) = hud_load(m);
+    let count = bank.screens[vars.screen as usize].count;
     f(&m.rom, &h.g, &mut h.objects, count, &mut h.messages);
-    view::hud::store(m, &h);
+    hud_store(m, &vars, &h);
+}
+
+/// The HUD's frame on the RAM image the race start builds.
+fn hud_load(m: &Mem) -> (HudVars, HudFrame) {
+    let (w, race) = (WorldHeader::load(m, WORLD), Race::load(m, 0));
+    let vars = HudVars::load(m, 0);
+    let g = hud::Globals {
+        hud: vars.hud,
+        mode: vars.mode,
+        language: vars.language,
+        units: vars.units,
+        frames: vars.frames,
+        split: vars.split,
+        opponents: vars.opponents,
+        ai_cars: vars.ai_cars,
+        laps: vars.laps,
+        wingman: vars.wingman,
+        portrait: vars.portrait,
+        portrait_blink: vars.portrait_blink,
+        bar: vars.bar,
+        bar_max: vars.bar_max,
+        arrow: vars.arrow,
+        route: vars.route,
+        needle_scale: race.profile.read(m).needle_scale,
+        player: vars.player as usize,
+        race_state: vars.race_state,
+        race_state_changed: vars.race_state_changed,
+    };
+    let racers = std::array::from_fn(|i| {
+        let at = w.entities.at(i as u32);
+        let (e, d) = (at.read(m), nfsgba_sim::state::driver(m, at.addr));
+        hud::Racer {
+            x: e.pos[0],
+            z: e.pos[2],
+            heading: e.heading,
+            driver: (!d.is_null()).then(|| {
+                let c = d.read(m);
+                hud::Driver {
+                    revs: c.revs,
+                    gear: c.gear,
+                    speed: c.speed,
+                    position: c.position,
+                    laps_left: c.laps_left,
+                    rev_scale: c.max_rpm,
+                    dial: c.nitro_tank,
+                    flags: c.route_flags,
+                    hunter_life: c.hunter_life,
+                }
+            }),
+        }
+    });
+    let f = HudFrame {
+        objects: vars.objects.read_n(m, view::hud::OBJECTS),
+        messages: HudMessages::load(m, 0).slots,
+        oam: ShadowOam::load(m, 0).entries,
+        g,
+        racers,
+    };
+    (vars, f)
+}
+
+fn hud_store(m: &mut Mem, vars: &HudVars, f: &HudFrame) {
+    let mut vars = vars.clone();
+    vars.race_state = f.g.race_state;
+    vars.race_state_changed = f.g.race_state_changed;
+    vars.portrait = f.g.portrait;
+    vars.portrait_blink = f.g.portrait_blink;
+    vars.bar = f.g.bar;
+    vars.store(m, 0);
+    for (k, o) in f.objects.iter().enumerate() {
+        vars.objects.at(k as u32).write(m, o);
+    }
+    HudMessages { slots: f.messages }.store(m, 0);
+    ShadowOam { entries: f.oam }.store(m, 0);
 }
 
 /// `race_spawn_template_entities(world, route entities)`: every sector's entity list emptied, the route's
@@ -996,6 +1079,6 @@ pub fn load_pre(rom: Vec<u8>, prefix: &std::path::Path) -> std::io::Result<(Mach
 /// Game state 5 (the race) after `race_start`, which `game_state_step` runs in state 4. A `Game::frame` on it then
 /// runs `race_frame_update` up to the countdown (the racers' drivers, the camera, the matrix slots, the world drawn)
 /// and stops there with `Unported` (the handover after `race_start` is open, FIDELITY G1): a race start to look at.
-pub fn enter_race(m: &mut Mem) {
-    m.set_u32(0x0300_5808, 5);
+pub fn enter_race(w: &mut World) {
+    w.lp.game_state = 5;
 }

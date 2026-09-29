@@ -1,11 +1,7 @@
-//! Who races and how they look, read from the game's RAM for the viewer: the racers as `draw_sector_entities`
-//! sees them, their cars and paints, the player's car record, the route and the environment.
+//! Who races and how they look, read from the race's [`World`] for the viewer: the racers as
+//! `draw_sector_entities` sees them, their cars and paints, the player's car record, the route and the environment.
 
-use nfsgba_sim::{
-    Mem,
-    layout::Field,
-    state::{Race, RaceSetup, SlotGlobals, WORLD, WorldHeader},
-};
+use crate::world::World;
 
 /// A racer as `draw_sector_entities` and the viewer see it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,10 +63,9 @@ pub struct RaceView {
 }
 
 impl RaceView {
-    pub fn read(m: &Mem) -> RaceView {
-        let (w, race, setup) = (WorldHeader::load(m, WORLD), Race::load(m, 0), RaceSetup::load(m, 0));
+    pub fn read(w: &World) -> RaceView {
         let racer = |i: u32| {
-            let e = w.entities.at(i).read(m);
+            let e = &w.slots[i as usize].e;
             Racer {
                 pos: e.pos,
                 heading: e.heading >> 8,
@@ -81,32 +76,36 @@ impl RaceView {
                 extra: e.extra_model,
             }
         };
-        let records = SlotGlobals::load(m, 0).records;
+        let r = &w.records[w.cars[0] as usize];
+        let mut record = [0; 0x11];
+        record[..7].copy_from_slice(&[r.spoiler, r.u_01, r.rim, r.exhaust, r.u_04, r.paint, r.glass]);
+        record[7..].copy_from_slice(&r.upgrades);
         RaceView {
-            racers: [0, 1, 2, 3].map(|k| racer((race.player + k) % 4)),
-            cars: setup.cars,
-            paints: setup.paints,
-            record: std::array::from_fn(|k| u8::load(m, records.addr + 0x11 * setup.cars[0] as u32 + k as u32)),
-            route: setup.route as usize,
-            env: setup.env as usize,
+            racers: [0, 1, 2, 3].map(|k| racer((w.g.player + k) % 4)),
+            cars: w.cars,
+            paints: w.paints,
+            record,
+            route: w.g.route_index as usize,
+            env: w.g.level as usize,
         }
     }
 }
 
-/// Vehicle matrix slot `s` (world `+0xFC`), built for the frame's camera.
-pub fn matrix(m: &Mem, s: u8) -> [i32; 12] {
-    let w = WorldHeader::load(m, WORLD);
-    <[i32; 12]>::load(m, w.matrix_slots + 0x30 * s as u32)
+/// Vehicle matrix slot `s`, built for the frame's camera.
+pub fn matrix(w: &World, s: u8) -> [i32; 12] {
+    w.matrices[s as usize]
 }
 
-/// The player's atlas as the race holds it in EWRAM (entity `+0x84`, when draw flag bit 3), `len` bytes, rim and all.
-pub fn player_atlas(m: &Mem, len: usize) -> Option<Vec<u8>> {
-    let (w, race) = (WorldHeader::load(m, WORLD), Race::load(m, 0));
-    let e = w.entities.at(race.player).read(m);
-    (e.flags & 8 != 0).then(|| m.bytes(e.atlas, len).to_vec())
+/// The player's atlas as the race holds it (entity `+0x84`, when draw flag bit 3), `len` bytes, rim and all.
+pub fn player_atlas(w: &World, len: usize) -> Option<Vec<u8>> {
+    let e = &w.slots[w.g.player as usize].e;
+    (e.flags & 8 != 0).then(|| {
+        let at = (e.atlas & 0x3_FFFF) as usize;
+        w.heap[at..at + len].to_vec()
+    })
 }
 
 /// The race's base palette (the city's with the racers' car ramps, before the light tint).
-pub fn base_palette(m: &Mem) -> Vec<u16> {
-    RaceSetup::load(m, 0).palette.read_n(m, 256)
+pub fn base_palette(w: &World) -> Vec<u16> {
+    w.palette_base.clone()
 }

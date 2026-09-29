@@ -85,7 +85,7 @@ fn racing_step(w: &mut CarWorld, i: usize) {
     let e = &mut ent!(w, i);
     if g.focus == index {
         e.flags |= 1;
-        if g.view > 1 {
+        if w.view > 1 {
             e.state |= 4;
         } else {
             e.state &= 0xFFFB;

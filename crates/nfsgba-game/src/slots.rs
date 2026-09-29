@@ -1,14 +1,13 @@
 //! The per-frame matrix slots (64 of 0x30 bytes, counter `slot_counter`), the 2D effect sprites the race puts into
 //! the sprite pool (rear lights, brake lights, exhaust flames, sparks), the spark entities (handler 0x34) and the
-//! player's rim redraw. Every function names the game function it is. It runs on typed state, a [`Slots`] frame:
-//! `view::slots` loads it from the game's RAM and stores it back (`docs/engine/typed-state.md`).
+//! player's rim redraw. Every function names the game function it is. It runs on typed state, a [`Slots`] frame,
+//! which `World::with_slots` builds and writes back (`docs/engine/typed-state.md`).
 
 use nfsgba_fixed::{angle_diff, cos_q14, div, recip, sin_q14};
 use nfsgba_formats::atlas;
 use nfsgba_sim::{
     Result, Unported,
     data::GameData,
-    layout::Ptr,
     slot_data::{BILLBOARD, EXHAUST_MATERIAL, FLARE},
     state::{Camera, Car, CarRecord, Entity, MaterialInfo, SlotGlobals, Sprite, ViewPort},
     world::NONE,
@@ -489,7 +488,6 @@ impl Slots<'_> {
         s.dir_z = 0;
         s.handler = 0x34;
         s.material = 0;
-        s.driver = Ptr::NULL;
         let r1 = self.rand();
         self.entities[i].u_1c = -0x200 - (r1 >> 5);
         let r2 = self.rand();
@@ -665,7 +663,7 @@ impl Slots<'_> {
     }
 }
 
-/// What the player's rim redraw reads (`view::slots::rim_frame`).
+/// What the player's rim redraw reads (`World::rim_redraw`).
 pub struct RimFrame {
     pub phase: u32,
     pub player: u32,

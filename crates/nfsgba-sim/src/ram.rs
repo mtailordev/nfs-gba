@@ -1,20 +1,20 @@
 //! The adapters between the GBA RAM image and the typed [`CarWorld`]: load every entity with its driver (a car's
 //! physics struct or a traffic car's block), the globals, the wall pieces and the racing line; run a typed
-//! function (the car step, the opponents' AI, the traffic); store it all back. The heap blocks and the sector
-//! lists stay the RAM image's: the typed step records them and the adapter replays them (`HeapOp`, `ListOp`).
-//! A few RAM-image twins of typed functions remain for the tests and the game loop (`route`, `contact`).
+//! function (the car step, the opponents' AI, the traffic); store it all back, allocating or freeing the heap
+//! blocks of the traffic cars that gained or lost one. Only the sim's RAM tests use this (the game runs on
+//! `nfsgba_game::world::World`); so do the RAM-image twins of typed functions (`route`, `contact`).
 
 use nfsgba_formats::career::{LinePoint, RacingLine, Section};
 
-use crate::carworld::{CarWorld, HeapOp, ListOp, PointExtra, Route, Slot};
+use crate::carworld::{CarWorld, PointExtra, Route, Slot};
 use crate::data::GameData;
 use crate::layout::{Field, Ptr};
 use crate::mem::Mem;
 use crate::sound::Command;
 use crate::state::{
-    Car, CarGlobals, CarProfile, Entity, Query, SectionRec, TrafficBlock, WORLD, WaypointRec, WorldHeader,
+    Camera, Car, CarGlobals, CarProfile, Entity, EntityRef, Query, SectionRec, TrafficBlock, WORLD, WaypointRec,
+    WorldHeader, driver,
 };
-use crate::world;
 use crate::{Result, Sim, heap};
 
 /// The plane table and the back table of the racing line (`*0x03005FB4`, `*0x03005FB8`), and the profile.
@@ -40,11 +40,12 @@ pub fn load<'a>(m: &Mem, rom: &'a [u8], data: &'a GameData, who: usize) -> CarWo
     let total = hdr.first_entity as usize + hdr.entity_count as usize;
     let slots = (0..total as u32)
         .map(|k| {
-            let e = Entity::load(m, hdr.entities.at(k).addr);
-            let has_car = matches!(e.handler, 0..=3 | 0x29) && in_ewram(e.driver.addr, Car::SIZE);
-            let c = if has_car { e.driver.read(m) } else { Car::default() };
-            let block = (e.handler == 0x36 && in_ewram(e.driver.addr, TrafficBlock::SIZE))
-                .then(|| TrafficBlock::load(m, e.driver.addr));
+            let at = hdr.entities.at(k).addr;
+            let (e, d) = (Entity::load(m, at), driver(m, at));
+            let has_car = matches!(e.handler, 0..=3 | 0x29) && in_ewram(d.addr, Car::SIZE);
+            let c = if has_car { d.read(m) } else { Car::default() };
+            let block =
+                (e.handler == 0x36 && in_ewram(d.addr, TrafficBlock::SIZE)).then(|| TrafficBlock::load(m, d.addr));
             Slot { e, c, has_car, block }
         })
         .collect::<Vec<_>>();
@@ -94,15 +95,14 @@ pub fn load<'a>(m: &Mem, rom: &'a [u8], data: &'a GameData, who: usize) -> CarWo
         piece_kind,
         offsets,
         walls_base: hdr.walls,
-        entities: hdr.entities,
-        camera_player: Ptr::<Entity>::new(m.u32(PLAYER_ENTITY)).index_from(hdr.entities),
+        heads: hdr.sector_heads.read_n(m, hdr.sector_count as u32),
+        camera_player: EntityRef::load(m, PLAYER_ENTITY).index().unwrap_or(0) as u32,
+        view: Camera::load(m, 0).view,
+        matrix_yaw: Camera::load(m, 0).matrix_yaw,
         save,
-        profile_addr: profile_at,
         grid,
         extra: hdr.first_entity as usize..total,
         sounds: Vec::new(),
-        heap_ops: Vec::new(),
-        list_ops: Vec::new(),
         g,
     }
 }
@@ -170,13 +170,17 @@ fn load_route(m: &Mem, hdr: &WorldHeader, g: &CarGlobals) -> Route {
 pub fn store(m: &mut Mem, w: &CarWorld) {
     let hdr = WorldHeader::load(m, WORLD);
     for (k, s) in w.slots.iter().enumerate() {
-        s.e.store(m, hdr.entities.at(k as u32).addr);
+        let at = hdr.entities.at(k as u32).addr;
+        s.e.store(m, at);
         if s.has_car {
-            s.e.driver.write(m, &s.c);
+            driver(m, at).write(m, &s.c);
         }
         if let Some(b) = &s.block {
-            b.store(m, s.e.driver.addr);
+            b.store(m, driver(m, at).addr);
         }
+    }
+    for (k, h) in w.heads.iter().enumerate() {
+        hdr.sector_heads.at(k as u32).write(m, h);
     }
     let mut g = w.g.clone();
     g.scales[..w.route.line.scales.len()].copy_from_slice(&w.route.line.scales);
@@ -210,37 +214,29 @@ pub fn rand(m: &mut Mem) -> u32 {
     r
 }
 
-/// Loads the world for car `who`, runs `f`, replays what it recorded for the heap (the traffic cars' blocks),
-/// stores the world back and replays the sector-list changes; returns `f`'s result and the sound commands it
-/// issued.
+/// Loads the world for car `who`, runs `f`, allocates or frees the heap blocks of the traffic cars that gained or
+/// lost one (frees first), stores the world back; returns `f`'s result and the sound commands it issued.
 pub fn with_world<R>(m: &mut Mem, who: usize, f: impl FnOnce(&mut CarWorld) -> R) -> (R, Vec<Command>) {
     let data = m.data().clone();
     let rom = std::mem::take(&mut m.rom);
     let mut w = load(m, &rom, &data, who);
+    let had: Vec<bool> = w.slots.iter().map(|s| s.block.is_some()).collect();
     let r = f(&mut w);
-    for op in std::mem::take(&mut w.heap_ops) {
-        match op {
-            HeapOp::Alloc(k) => w.slots[k].e.driver = Ptr::new(heap::alloc_zeroed(m, TrafficBlock::SIZE)),
-            HeapOp::Free(k) => {
-                heap::free(m, w.slots[k].e.driver.addr);
-                w.slots[k].e.driver = Ptr::NULL;
-            }
+    let ents = WorldHeader::load(m, WORLD).entities;
+    for (k, s) in w.slots.iter().enumerate() {
+        let at = ents.at(k as u32).addr + 0x8C;
+        if had[k] && s.block.is_none() {
+            heap::free(m, m.u32(at));
+            m.set_u32(at, 0);
+        }
+    }
+    for (k, s) in w.slots.iter().enumerate() {
+        if !had[k] && s.block.is_some() {
+            let p = heap::alloc_zeroed(m, TrafficBlock::SIZE);
+            m.set_u32(ents.at(k as u32).addr + 0x8C, p);
         }
     }
     store(m, &w);
-    for op in std::mem::take(&mut w.list_ops) {
-        match op {
-            ListOp::Unlink(k, sector) => {
-                // The entity's sector is the one it left.
-                let e = world::entity(m, k as u32);
-                let now = m.u16(e + 0x78);
-                m.set_u16(e + 0x78, sector);
-                world::unlink_entity(m, k as u32);
-                m.set_u16(e + 0x78, now);
-            }
-            ListOp::Link(k) => world::link_entity(m, k as u32),
-        }
-    }
     let sounds = std::mem::take(&mut w.sounds);
     drop(w);
     m.rom = rom;
@@ -259,19 +255,22 @@ fn with_car<R>(m: &mut Mem, e: u32, f: impl FnOnce(&mut CarWorld, usize) -> R) -
 pub fn car_handler(sim: &mut Sim, e: u32) -> Result<()> {
     let m = &mut sim.mem;
     let i = m.u16(e) as usize;
-    world::unlink_entity(m, i as u32);
     let state = m.u16(e + 0x4A);
     if state == 0 {
         let p = heap::alloc_zeroed(m, 0x4FC);
         m.set_u32(e + 0x8C, p);
     }
-    let ((), sounds) = with_world(m, i, |w| crate::car::handler(w, i));
+    // The decal is unpacked before the entity rejoins its list; neither touches the other.
+    let ((), sounds) = with_world(m, i, |w| {
+        w.unlink(i);
+        crate::car::handler(w, i);
+        w.link(i);
+    });
     sim.sounds.extend(sounds);
     let m = &mut sim.mem;
     if state == 0 && i as u32 == m.u32(0x0300_0060) {
         crate::decal::unpack_decal(m, e);
     }
-    world::link_entity(m, i as u32);
     Ok(())
 }
 
@@ -282,17 +281,21 @@ pub fn ai_handler(sim: &mut Sim, e: u32) -> Result<Option<crate::ai::Effects>> {
     let i = m.u16(e) as usize;
     let state = m.u16(e + 0x4A);
     let driving = state.wrapping_sub(1) < 2;
-    if driving {
-        world::unlink_entity(m, i as u32);
-    } else if state == 0 {
+    if state == 0 {
         let p = heap::alloc_zeroed(m, 0x4FC);
         m.set_u32(e + 0x8C, p);
     }
-    let (r, sounds) = with_world(m, i, |w| crate::ai::handler(w, i));
+    let (r, sounds) = with_world(m, i, |w| {
+        if driving {
+            w.unlink(i);
+        }
+        let r = crate::ai::handler(w, i);
+        if driving {
+            w.link(i);
+        }
+        r
+    });
     sim.sounds.extend(sounds);
-    if driving {
-        world::link_entity(&mut sim.mem, i as u32);
-    }
     r
 }
 
@@ -366,7 +369,7 @@ pub fn race(m: &Mem) -> nfsgba_formats::career::Race {
 pub fn racer(m: &Mem, e: u32) -> nfsgba_formats::career::Racer {
     let ent = Entity::load(m, e);
     Slot {
-        c: ent.driver.read(m),
+        c: driver(m, e).read(m),
         e: ent,
         has_car: true,
         block: None,
@@ -378,12 +381,12 @@ pub fn racer(m: &Mem, e: u32) -> nfsgba_formats::career::Racer {
 pub fn store_racer(m: &mut Mem, e: u32, r: &nfsgba_formats::career::Racer) {
     let ent = Entity::load(m, e);
     let mut s = Slot {
-        c: ent.driver.read(m),
+        c: driver(m, e).read(m),
         e: ent,
         has_car: true,
         block: None,
     };
     s.set_racer(r);
     s.e.store(m, e);
-    s.e.driver.write(m, &s.c);
+    driver(m, e).write(m, &s.c);
 }

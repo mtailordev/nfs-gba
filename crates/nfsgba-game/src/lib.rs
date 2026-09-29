@@ -17,17 +17,23 @@ pub mod race_init;
 pub mod slots;
 pub mod trace;
 pub mod view;
+pub mod world;
 
 use std::{io, path::Path, sync::Arc};
 
-use nfsgba_audio::{Engine, Rom, ram};
+use nfsgba_audio::Rom;
 use nfsgba_formats::{
     city, hud, paint, render, sector_light, sky, tint_palette,
     ui::{self, SpriteBank},
 };
-use nfsgba_sim::{Mem, Sim, Unported, data::GameData, layout::Field, sound::Command, state::Camera};
+use nfsgba_sim::{
+    Mem, Unported,
+    carworld::{CarWorld, Slot},
+    data::GameData,
+    sound::Command,
+};
 
-use view::WORLD;
+use world::World;
 
 /// A frame's hardware timing: timer 3's count when `main_frame` reads it (1,024-cycle ticks since the previous
 /// frame), and where the VBlank IRQs land. Counts are cumulative from `main_frame`'s entry, at the points of the
@@ -49,8 +55,8 @@ pub struct Timing {
     pub timer: Option<u32>,
     /// The whole frame.
     pub end: u32,
-    /// When an opponent's AI reads the race time for its lane-change timer (`0x0813C95C`): (driver struct, count).
-    pub lanes: Vec<(u32, u32)>,
+    /// When an opponent's AI reads the race time for its lane-change timer (`0x0813C95C`): (entity, count).
+    pub lanes: Vec<(usize, u32)>,
 }
 
 impl Timing {
@@ -130,15 +136,16 @@ pub enum Checkpoint {
 
 pub struct Game {
     pub rom: Vec<u8>,
-    /// The ROM's tables, parsed once (shared with the RAM image's `Mem::data`).
+    /// The ROM's tables, parsed once.
     pub data: Arc<GameData>,
-    pub sim: Sim,
+    /// The race's state.
+    pub world: World,
+    /// What the frame puts out: palette RAM, VRAM (the two mode-4 pages and the OBJ tiles) and OAM.
     pub palette: Vec<u8>,
     pub vram: Vec<u8>,
     pub oam: Vec<u8>,
     /// DISPCNT's frame select: the mode-4 page on screen (0: `0x06000000`, 1: `0x0600A000`).
     pub display_page: u8,
-    pub audio: Engine,
     /// Samples the sound hardware played during the last frame (signed 8-bit, 176 per VBlank, 10,512 Hz).
     pub sound: Vec<u8>,
     pub bank: SpriteBank,
@@ -146,64 +153,38 @@ pub struct Game {
     irqs: u32,
 }
 
-const FRAME_COUNT: u32 = 0x0300_5628;
-const GAME_STATE: u32 = 0x0300_5808;
-const PHASE: u32 = 0x0300_0048;
-const FADE: u32 = 0x0300_5630;
-const RACE_OVER: u32 = 0x0300_5780;
-const LINK: u32 = 0x0300_5624;
-const PROFILE: u32 = 0x0300_56EC;
-const PLAYER: u32 = 0x0300_0060;
-const HELD: u32 = 0x0300_64C4;
-const PRESSED: u32 = 0x0300_64C0;
-const SFX_OPTION: u32 = 0x0300_53A4;
-const AUDIO_GLOBALS: u32 = 0x0300_6370;
-const WORK_AREA: usize = 0x160C;
-
 fn is(r: bool, what: &'static str) -> nfsgba_sim::Result<()> {
     if r { Err(Unported(what)) } else { Ok(()) }
 }
 
 impl Game {
+    /// The game at a machine state (a trace, an emulator dump, the race start's result).
     pub fn new(m: Machine) -> Game {
-        let rom = m.mem.rom.clone();
-        let audio = {
-            let mm = &m.mem;
-            let eng = mm.u32(AUDIO_GLOBALS);
-            let buffer = |k: u32| mm.bytes(0x0300_5DEC + 0xB0 * k, 0xB0);
-            ram::load(
-                mm.bytes(eng, WORK_AREA),
-                mm.bytes(AUDIO_GLOBALS, 16),
-                [buffer(0), buffer(1)],
-            )
-        };
-        let descriptor = m.mem.u32(0x0300_5620) as usize - 0x0800_0000;
+        let world = World::load(&m);
+        Game::with_world(m.mem.rom.clone(), m.mem.data().clone(), world, m.palette, m.vram, m.oam)
+    }
+
+    pub fn with_world(
+        rom: Vec<u8>,
+        data: Arc<GameData>,
+        world: World,
+        palette: Vec<u8>,
+        vram: Vec<u8>,
+        oam: Vec<u8>,
+    ) -> Game {
+        let descriptor = world.lp.descriptor as usize - 0x0800_0000;
         Game {
             bank: ui::sprite_bank(&rom, descriptor),
-            data: m.mem.data().clone(),
             rom,
-            sim: Sim::new(m.mem),
-            palette: m.palette,
-            vram: m.vram,
-            oam: m.oam,
+            data,
+            world,
+            palette,
+            vram,
+            oam,
             display_page: 0,
-            audio,
             sound: Vec::new(),
             irqs: 0,
         }
-    }
-
-    pub fn machine(&self) -> Machine {
-        Machine {
-            mem: self.sim.mem.clone(),
-            palette: self.palette.clone(),
-            vram: self.vram.clone(),
-            oam: self.oam.clone(),
-        }
-    }
-
-    pub fn mem(&self) -> &Mem {
-        &self.sim.mem
     }
 
     /// One game frame with the keys held when it ends (`KEYINPUT` as `main_frame` samples it; bit set = held).
@@ -220,72 +201,60 @@ impl Game {
     ) -> nfsgba_sim::Result<()> {
         self.sound.clear();
         // Timer 3 (FUN_08162228 stops it, FUN_0816223c reads it): the frame time for the physics.
-        let m = &mut self.sim.mem;
-        m.set_u32(0x0300_5934, t.timer3 as u32);
-        if m.u32(LINK) == 2 {
-            m.set_u32(0x0300_5640, 15);
+        let g = &mut self.world.g;
+        g.frame_ticks = t.timer3 as i32;
+        if g.link == 2 {
+            g.dt = 15;
         } else {
             if t.timer3 == 0 {
-                m.set_u32(0x0300_5934, 0x200);
+                g.frame_ticks = 0x200;
             }
-            let ft = nfsgba_sim::math::div(25_500, m.i32(0x0300_5934));
-            m.set_i32(0x0300_5640, ft.clamp(10, 100));
+            g.dt = nfsgba_sim::math::div(25_500, g.frame_ticks).clamp(10, 100);
         }
         self.irqs = 0;
         self.irqs_to(t.entities);
         self.flip_page();
-        let m = &self.sim.mem;
         is(
-            m.u32(GAME_STATE) != 5,
+            self.world.lp.game_state != 5,
             "game states other than the race (state machine FUN_0812acec)",
         )?;
         self.race_frame(t, assist)?;
-        view::hud::draw_effect_sprites(&self.rom, &mut self.sim.mem);
+        view::hud::draw_effect_sprites(&self.rom, &mut self.world);
         // FUN_0816102c: the shadow OAM to OAM.
-        self.oam.copy_from_slice(&view::hud::shadow_oam_bytes(&self.sim.mem));
-        let m = &mut self.sim.mem;
-        m.set_u32(FRAME_COUNT, m.u32(FRAME_COUNT).wrapping_add(1));
-        if m.u32(GAME_STATE) == 5 {
+        self.oam.copy_from_slice(&view::hud::shadow_oam_bytes(&self.world));
+        let g = &mut self.world.g;
+        g.race_frames = g.race_frames.wrapping_add(1);
+        if self.world.lp.game_state == 5 {
             self.tint();
         }
-        is(
-            self.sim.mem.i32(FADE) != 0,
-            "palette fades (main_frame, counter 0x03005630)",
-        )?;
+        is(self.world.g.fade != 0, "palette fades (main_frame, counter 0x03005630)")?;
         self.read_keys(keys)?;
         self.irqs_to(t.end);
-        self.store_audio();
         Ok(())
     }
 
-    /// `FUN_0812b084`: shows the page drawn last frame and draws into the other (view `+0x00`).
+    /// `FUN_0812b084`: shows the page drawn last frame and draws into the other (the view's page).
     fn flip_page(&mut self) {
-        let m = &mut self.sim.mem;
-        let fb = 0x0300_6410;
-        let draw = if m.u32(FRAME_COUNT) & 1 == 0 {
+        let w = &mut self.world;
+        let (mode, pages) = (w.screen.mode, w.screen.pages);
+        let draw = if w.g.race_frames & 1 == 0 {
             self.display_page = 0;
-            if m.u8(fb + 8) == 0x0F {
-                m.u32(fb + 0xC)
-            } else {
-                m.u32(fb + 0x10)
-            }
+            if mode == 0x0F { pages[0] } else { pages[1] }
         } else {
             self.display_page = 1;
-            m.u32(fb + 0xC)
+            pages[0]
         };
-        m.set_u32(0x0300_0080, draw);
+        w.view.page = draw;
     }
 
     /// `FUN_0812b040`: `KEYINPUT` into the held and newly pressed words, and the player's control word.
     fn read_keys(&mut self, keys: u16) -> nfsgba_sim::Result<()> {
-        let m = &mut self.sim.mem;
-        let raw = 0x3FF & !keys;
-        let held = !raw;
-        m.set_u16(PRESSED, held & !m.u16(HELD));
-        m.set_u16(HELD, held);
-        is(m.u32(LINK) == 2, "link play (FUN_0814737c, FUN_081469d8)")?;
-        let player = m.u32(PLAYER);
-        m.set_u16(0x0300_57D8 + 2 * player, held);
+        let w = &mut self.world;
+        let held = !(0x3FF & !keys);
+        w.input.pressed = held & !w.input.held;
+        w.input.held = held;
+        is(w.g.link == 2, "link play (FUN_0814737c, FUN_081469d8)")?;
+        w.g.input[w.g.player as usize] = held;
         Ok(())
     }
 
@@ -299,58 +268,36 @@ impl Game {
 
     /// Whether a VBlank IRQ now would count the race time: racing and not paused.
     fn race_time_runs(&self) -> bool {
-        self.sim.mem.u32(0x0300_5398) == 0 && self.sim.mem.u32(PHASE) == 2
+        self.world.lp.paused == 0 && self.world.g.phase == 2
     }
 
     /// A VBlank IRQ (`vblank_irq`): the sound DMA, mix and buffer swap, the counters (the race time while
     /// racing and not paused) and the sky gradient's start for the next display frame.
     fn vblank(&mut self) {
-        {
-            self.sound.extend(self.audio.vblank(Rom(&self.rom)));
-            let m = &mut self.sim.mem;
-            let inc = |m: &mut Mem, a: u32| m.set_u32(a, m.u32(a).wrapping_add(1));
-            inc(m, 0x0300_53B4);
-            if self.race_time_runs() {
-                let m = &mut self.sim.mem;
-                inc(m, nfsgba_sim::ram::route::RACE_TIME);
-            }
-            let m = &mut self.sim.mem;
-            inc(m, 0x0300_0044);
-            inc(m, 0x0300_5724);
-            let desc = m.u32(0x0300_5620);
-            if desc != 0 {
-                let k = (m.i16(desc + 100) as i32 - (m.i32(0x0300_56B8) >> 1) - ((m.i16(0x0300_5392) as i32 >> 1) + 4))
-                    .max(0);
-                m.set_u32(0x0300_56E8, m.u32(0x0300_53B8).wrapping_add(2 * k as u32));
-            }
-            m.set_u16(0x0300_7FF8, m.u16(0x0300_7FF8) | 1);
-            m.set_u32(0x0300_5728, m.u32(0x0300_5728) | 1);
+        self.sound.extend(self.world.audio.vblank(Rom(&self.rom)));
+        let runs = self.race_time_runs();
+        let w = &mut self.world;
+        w.lp.vblanks = w.lp.vblanks.wrapping_add(1);
+        if runs {
+            w.g.time = w.g.time.wrapping_add(1);
         }
-    }
-
-    fn store_audio(&mut self) {
-        let m = &mut self.sim.mem;
-        let eng_at = m.u32(AUDIO_GLOBALS);
-        let (mut eng, mut globals) = (m.bytes(eng_at, WORK_AREA).to_vec(), m.bytes(AUDIO_GLOBALS, 16).to_vec());
-        ram::store(&self.audio, &mut eng, &mut globals);
-        m.set_bytes(eng_at, &eng);
-        m.set_bytes(AUDIO_GLOBALS, &globals);
-        for k in 0..2 {
-            let at = self.audio.buffer_addr[k];
-            m.set_bytes(at, &self.audio.buffers[k]);
+        w.lp.ticks = w.lp.ticks.wrapping_add(1);
+        w.lp.u_5724 = w.lp.u_5724.wrapping_add(1);
+        if w.lp.descriptor != 0 {
+            let at = (w.lp.descriptor & 0xFF_FFFF) as usize + 100;
+            let line = i16::from_le_bytes([self.rom[at], self.rom[at + 1]]) as i32;
+            let k = (line - (w.camera.horizon >> 1) - ((w.screen.shake[1] as i32 >> 1) + 4)).max(0);
+            w.gradient_start = k as usize;
         }
-    }
-
-    fn sfx_option(&self) -> u32 {
-        self.sim.mem.u32(SFX_OPTION)
+        w.lp.irq |= 1;
     }
 
     /// The sound commands the entity handlers issued, in order (`nfsgba_sim::sound`), each after the VBlank IRQs
     /// that came before its effect in the frame (`t.sounds`; the sim records the commands instead of running
     /// them): a rate change takes effect when the call returns (after its division), a stop at its entry (it
     /// zeroes the volume first). A play that an IRQ interrupted half-way is not modelled.
-    fn play_commands(&mut self, t: &Timing, done: &mut usize) -> nfsgba_sim::Result<()> {
-        for c in std::mem::take(&mut self.sim.sounds) {
+    fn play_commands(&mut self, commands: Vec<Command>, t: &Timing, done: &mut usize) -> nfsgba_sim::Result<()> {
+        for c in commands {
             if let Some(&(entry, ret)) = t.sounds.get(*done) {
                 match c {
                     Command::Pitch(..) => self.irqs_to(ret),
@@ -362,44 +309,40 @@ impl Game {
                 }
             }
             *done += 1;
-            let rom = Rom(&self.rom);
+            let (rom, option) = (Rom(&self.rom), self.world.g.volume);
+            let audio = &mut self.world.audio;
             match c {
                 Command::Play(id) => {
-                    self.audio.carbon_play_sound(rom, id, self.sim.mem.u32(SFX_OPTION));
+                    audio.carbon_play_sound(rom, id, option);
                 }
-                Command::Stop(id) => self.audio.carbon_stop_sound(rom, id),
-                Command::Pitch(id, rate8) => self.audio.carbon_set_sound_rate(rom, id, rate8),
+                Command::Stop(id) => audio.carbon_stop_sound(rom, id),
+                Command::Pitch(id, rate8) => audio.carbon_set_sound_rate(rom, id, rate8),
                 Command::Start {
                     sample,
                     pitch,
                     channel,
                     volume,
                 } => {
-                    self.audio.play_sfx(rom, sample, pitch, channel as i32, volume as i32);
+                    audio.play_sfx(rom, sample, pitch, channel as i32, volume as i32);
                 }
             }
         }
         Ok(())
     }
 
-    /// Runs `step` with the race time the game read `at` IRQs into the frame (the IRQs themselves run later, where
-    /// the frame's other timing points put them): the ticks between now and then are lent to it.
-    fn lend<R>(&mut self, at: Option<u32>, step: impl FnOnce(&mut Sim) -> R) -> R {
+    /// Runs `step` on the car world for car `who` with the race time the game read `at` IRQs into the frame (the
+    /// IRQs themselves run later, where the frame's other timing points put them): the ticks between now and
+    /// then are lent to it.
+    fn lend<R>(&mut self, at: Option<u32>, who: usize, step: impl FnOnce(&mut CarWorld) -> R) -> (R, Vec<Command>) {
         let lent = match at {
             Some(n) if self.race_time_runs() => n.saturating_sub(self.irqs),
             _ => 0,
         };
-        let rt = nfsgba_sim::ram::route::RACE_TIME;
-        let m = &mut self.sim.mem;
-        m.set_u32(rt, m.u32(rt).wrapping_add(lent));
-        let r = step(&mut self.sim);
-        let m = &mut self.sim.mem;
-        m.set_u32(rt, m.u32(rt).wrapping_sub(lent));
+        let w = &mut self.world;
+        w.g.time = w.g.time.wrapping_add(lent);
+        let r = w.with_cars(&self.rom, &self.data, who, step);
+        w.g.time = w.g.time.wrapping_sub(lent);
         r
-    }
-
-    fn entity(&self, i: u32) -> u32 {
-        self.sim.mem.u32(WORLD + 0x3C) + 0xA4 * i
     }
 
     /// `race_frame_update` (`0x0813a954`) while racing.
@@ -408,93 +351,87 @@ impl Game {
         t: &Timing,
         assist: &mut dyn FnMut(Checkpoint, &mut Game) -> bool,
     ) -> nfsgba_sim::Result<()> {
-        let m = &mut self.sim.mem;
-        m.set_u32(0x0300_56F0, m.u32(0x0300_56F0).wrapping_add(1));
+        let w = &mut self.world;
+        w.g.steps = w.g.steps.wrapping_add(1);
         // FUN_081360dc(1) / FUN_08139e10: restart the engine loop when its slot fell silent.
-        if !self.audio.sfx_playing(1) {
-            let id = self.sim.mem.i8(self.sim.mem.u32(PROFILE) + 0x2EF) as i32 as u32;
-            let opt = self.sfx_option();
-            self.audio.carbon_play_sound(Rom(&self.rom), id, opt);
+        if !w.audio.sfx_playing(1) {
+            let id = w.profile.engine_sound as i32 as u32;
+            w.audio.carbon_play_sound(Rom(&self.rom), id, w.g.volume);
         }
         self.shade_car_paint();
-        view::slots::reset_counter(&mut self.sim.mem); // FUN_0814f8a0
-        let m = &mut self.sim.mem;
-        let profile = m.u32(PROFILE);
-        m.set_u32(profile + 0x2E0, 0);
-        m.set_u32(profile + 0x2E4, 0);
-        m.set_u16(WORLD + 0xF6, 0);
+        let w = &mut self.world;
+        w.slot_counter = 0; // FUN_0814f8a0
+        (w.profile.gear_changed, w.contact, w.sky) = (0, 0, 0);
         self.update_entities(t)?;
         assist(Checkpoint::Entities, self);
         if !assist(Checkpoint::Camera, self) {
-            // During the migration the camera's typed state is loaded from and stored to the RAM image here.
-            let mut f = view::camera_frame(&self.sim.mem);
+            let mut f = self.world.camera_frame();
             camera::dispatch(&self.rom, &self.data, &mut f)?;
-            view::store_camera_frame(&mut self.sim.mem, &f);
+            self.world.set_camera_frame(f);
         }
         is(
-            !matches!(Camera::load(&self.sim.mem, 0).view, 0 | 2),
+            !matches!(self.world.camera.view, 0 | 2),
             "camera views other than the bumper and chase views",
         )?;
-        let mut vis = view::visible(&self.rom, &self.sim.mem);
+        let mut vis = view::visible(&self.rom, &self.world);
         if vis.sky {
-            self.sim.mem.set_u16(WORLD + 0xF6, 1);
+            self.world.sky = 1;
         }
         if !assist(Checkpoint::Slots, self) {
-            view::slots::race_slots(&self.rom, &self.data, &mut self.sim.mem)?;
+            let (rom, data) = (&self.rom, &self.data);
+            self.world.with_slots(rom, data, |f| f.race_slots())?;
         }
-        let page = (self.sim.mem.u32(0x0300_0080) - 0x0600_0000) as usize;
-        if self.sim.mem.u16(WORLD + 0xF6) != 0 {
-            let m = &self.sim.mem;
-            let desc = sky::sky_desc(&self.rom, m.u32(0x0300_006C) as usize);
-            let clip = [m.i32(0x0300_53D4), m.i32(0x0300_53DC)];
+        let page = (self.world.view.page - 0x0600_0000) as usize;
+        if self.world.sky != 0 {
+            let w = &self.world;
+            let desc = sky::sky_desc(&self.rom, w.g.level as usize);
+            let clip = [w.screen.rect[1], w.screen.rect[3]];
             sky::draw_skyline(
                 &self.rom,
                 &desc,
-                &view::sky_camera(m),
+                &view::sky_camera(w),
                 clip,
                 &mut self.vram[page..page + 240 * 160],
             );
         }
         self.draw_world(&mut vis, page);
-        let m = &self.sim.mem;
-        let (phase, fade) = (m.u32(PHASE), m.i32(FADE));
+        let w = &self.world;
+        let (phase, fade) = (w.g.phase as u32, w.g.fade);
         is(
             (phase == 1 || phase == 9) && fade == 0,
             "the race countdown (race_start_from_table_b)",
         )?;
         is(
-            m.u32(0x0300_5714) == 3,
+            w.lp.start_state == 3,
             "the race start set-up (FUN_0813a054..FUN_0813a108)",
         )?;
         self.irqs_to(t.timer.unwrap_or(t.hud));
         self.hud();
-        let m = &self.sim.mem;
-        let over = m.u32(RACE_OVER);
+        let over = self.world.g.race_over;
         is(phase.wrapping_sub(6) < 3 && over == 0, "the race-end countdown")?;
         is(phase == 3 && over == 0, "the race end")?;
         self.positions();
-        // A car-to-car contact this frame (profile +0x2E0, +0x2E4 set by the car steps).
-        let m = &self.sim.mem;
-        let driver = m.u32(self.entity(m.u32(PLAYER)) + 0x8C);
-        if m.u32(profile + 0x2E0) != 0 && m.u32(profile + 0x2E4) != 0 && m.u8(driver + 0x4D1) == 0 {
-            let rom = Rom(&self.rom);
-            self.audio.carbon_play_sound(rom, 0x20, self.sim.mem.u32(SFX_OPTION));
-            self.audio.carbon_set_sound_rate(rom, 0x20, 0x4B0);
+        // A contact this frame (profile +0x2E0, +0x2E4 set by the car steps).
+        let w = &self.world;
+        let nitro = w.slots[w.g.player as usize].c.nitro_on;
+        if w.profile.gear_changed != 0 && w.contact != 0 && nitro == 0 {
+            let (rom, option) = (Rom(&self.rom), w.g.volume);
+            self.world.audio.carbon_play_sound(rom, 0x20, option);
+            self.world.audio.carbon_set_sound_rate(rom, 0x20, 0x4B0);
         }
-        let m = &self.sim.mem;
         is(over != 0 && fade == 0, "the race end")?;
         if phase != 1 {
-            let mut h = view::hud::load(m);
-            if h.vars.message_flag == 0 {
+            let mut h = self.world.hud_frame();
+            if self.world.g.wrong_way == 0 {
                 hud::message_cancel(&self.rom, &h.g, &mut h.objects, &mut h.messages, 2);
             } else {
                 hud::message_show(&self.rom, &h.g, &mut h.messages, 2, 0x3C, false);
             }
-            view::hud::store(&mut self.sim.mem, &h);
+            self.world.set_hud_frame(h);
         }
-        let m = &self.sim.mem;
+        let w = &self.world;
         is(
-            over == 0 && m.u16(PRESSED) & 8 != 0 && fade == 0 && m.u32(0x0300_5398) == 0,
+            over == 0 && w.input.pressed & 8 != 0 && fade == 0 && w.lp.paused == 0,
             "the pause menu (START)",
         )
     }
@@ -504,55 +441,81 @@ impl Game {
     /// traffic (0x36).
     fn update_entities(&mut self, t: &Timing) -> nfsgba_sim::Result<()> {
         let mut sounds = 0;
-        for i in 0..view::entity_count(&self.sim.mem) {
-            let e = self.entity(i);
-            let m = &self.sim.mem;
-            if m.u16(e + 8) & 3 != 3 || m.u16(e + 0x78) == 0xFFFF {
+        for i in 0..self.world.entity_count() {
+            let e = &self.world.slots[i].e;
+            if e.state & 3 != 3 || e.sector == 0xFFFF {
                 continue; // (sector 0xFFFF: the game prints a debug message)
             }
-            match m.u16(e + 0x4E) {
+            let (state, handler) = (e.race_state, e.handler);
+            match handler {
                 0..=3 => {
-                    if matches!(m.u16(e + 0x4A), 2 | 0x100) {
-                        view::slots::rim_redraw_for(&self.rom, &self.data, &mut self.sim.mem, i as usize)?;
+                    if state == 0 {
+                        self.world.new_car(&self.rom, i);
+                    }
+                    if matches!(state, 2 | 0x100) {
+                        self.world.rim_redraw(&self.rom, &self.data, i)?;
                     }
                     // The step reads the race time (route_gap, lap crossing) with the IRQs before route_gap
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
                     // the IRQs themselves run after it, between the sound commands they fell between.
                     let at = t.gap_reads.first().copied().or(t.gap);
-                    self.lend(at, |sim| view::car::step(sim, e))?;
+                    // FUN_0814bd4c: the entity leaves its sector's list for the step.
+                    let ((), commands) = self.lend(at, i, |w| {
+                        w.unlink(i);
+                        nfsgba_sim::car::handler(w, i);
+                        w.link(i);
+                    });
+                    // The player's decal, unpacked into its rim buffer (NOT 1:1, R24: in the heap arena).
+                    if state == 0 && i as u32 == self.world.g.player {
+                        self.world.on_arena(&self.rom, i, nfsgba_sim::decal::unpack_decal);
+                    }
                     // route_gap reads the race time again after its division (split = rt₂ − x·rt₁ / y); the sim
                     // reads it once, so an IRQ in between adds its tick afterwards.
                     if let [first, second, ..] = t.gap_reads[..]
                         && self.race_time_runs()
                     {
-                        let m = &mut self.sim.mem;
-                        m.set_u32(0x0300_615C, m.u32(0x0300_615C).wrapping_add(second - first));
+                        let g = &mut self.world.g;
+                        g.gap = g.gap.wrapping_add((second - first) as i32);
                     }
-                    self.play_commands(t, &mut sounds)?;
+                    self.play_commands(commands, t, &mut sounds)?;
                 }
                 0x29 => {
+                    if state == 0 {
+                        self.world.new_car(&self.rom, i);
+                    }
                     // The lane-change timer reads the race time the IRQs have counted by then.
-                    let d = m.u32(e + 0x8C);
-                    let at = t.lanes.iter().find(|(driver, _)| *driver == d).map(|&(_, n)| n);
-                    let effects = self.lend(at, |sim| view::ai::opponent(sim, e))?;
-                    self.play_commands(t, &mut sounds)?;
-                    if let Some(f) = effects {
-                        let (rom, data, m) = (&self.rom, &self.data, &mut self.sim.mem);
-                        view::slots::opponent_effects(
-                            rom,
-                            data,
-                            m,
-                            i as usize,
-                            f.heading as i32,
-                            f.view as i32,
-                            f.size,
-                        );
+                    let at = t.lanes.iter().find(|(e, _)| *e == i).map(|&(_, n)| n);
+                    let driving = state.wrapping_sub(1) < 2;
+                    // FUN_0814a2a0: a driving car leaves its sector's list for the step.
+                    let (effects, commands) = self.lend(at, i, |w| {
+                        if driving {
+                            w.unlink(i);
+                        }
+                        let r = nfsgba_sim::ai::handler(w, i);
+                        if driving {
+                            w.link(i);
+                        }
+                        r
+                    });
+                    self.play_commands(commands, t, &mut sounds)?;
+                    if let Some(f) = effects? {
+                        let (rom, data) = (&self.rom, &self.data);
+                        self.world.with_slots(rom, data, |s| {
+                            s.opponent_effects(i, f.heading as i32, f.view as i32, f.size)
+                        });
                     }
                 }
-                0x34 => view::slots::effect_handler(&self.rom, &self.data, &mut self.sim.mem, i as usize),
+                0x34 => {
+                    let (rom, data) = (&self.rom, &self.data);
+                    self.world.with_slots(rom, data, |s| s.effect_handler(i));
+                }
                 0x36 => {
-                    view::ai::traffic(&mut self.sim, e)?;
-                    self.play_commands(t, &mut sounds)?;
+                    // FUN_081443fc.
+                    let (r, commands) = self
+                        .world
+                        .with_cars(&self.rom, &self.data, 0, |w| nfsgba_sim::traffic_ai::handler(w, i));
+                    r?;
+                    self.play_commands(commands, t, &mut sounds)?;
                 }
                 _ => return Err(Unported("an entity handler other than 0..3, 0x29, 0x34 and 0x36")),
             }
@@ -562,40 +525,34 @@ impl Game {
 
     /// `shade_car_paint(world, entities[*0x030057F8], 0, 0)`: the glass colours from the heading.
     fn shade_car_paint(&mut self) {
-        let m = &mut self.sim.mem;
-        if m.u32(RACE_OVER) != 0 {
+        let w = &mut self.world;
+        if w.g.race_over != 0 {
             return;
         }
-        let ents = m.u32(WORLD + 0x3C);
-        let record = m.u32(0x0300_539C) + 0x11 * m.u8(ents + 0x89) as u32;
-        let e = ents + 0xA4 * m.u32(0x0300_57F8);
-        let shades = paint::glass_shades(&self.rom, m.u8(record + 5), m.i32(e + 0x2C) >> 8);
-        let direct = m.i32(FADE) == 0;
+        let record = &w.records[w.slots[0].e.car as usize];
+        let e = &w.slots[w.g.focus as usize].e;
+        let shades = paint::glass_shades(&self.rom, record.paint, e.heading >> 8);
+        let direct = w.g.fade == 0;
         for (k, s) in shades.into_iter().enumerate() {
-            let o = 0x180 + 0x20 * k as u32;
-            for buffer in [0x0300_577C, 0x0300_55F0] {
-                m.set_u16(m.u32(buffer) + o, s);
-            }
+            let i = 0xC0 + 0x10 * k;
+            (w.palette_fade[i], w.palette_base[i]) = (s, s);
             if direct {
-                let at = 2 * (0xC0 + 0x10 * k);
-                self.palette[at..at + 2].copy_from_slice(&s.to_le_bytes());
+                self.palette[2 * i..2 * i + 2].copy_from_slice(&s.to_le_bytes());
             }
         }
     }
 
-    /// `apply_sector_light_to_palette` (`0x0813a514`): palette RAM = the base buffer tinted by the light at the
+    /// `apply_sector_light_to_palette` (`0x0813a514`): palette RAM = the base palette tinted by the light at the
     /// player's position in the camera sector; unchanged when no light is found.
     fn tint(&mut self) {
-        let m = &self.sim.mem;
-        let e = self.entity(m.u32(PLAYER));
-        let sector = m.u32(0x0300_5614) as usize;
+        let w = &self.world;
+        let e = &w.slots[w.g.player as usize].e;
         let sectors = city(&self.rom);
-        let Some(light) = sector_light(&self.rom, &sectors[sector], m.i32(e + 0x0C) >> 8, m.i32(e + 0x14) >> 8) else {
+        let sector = &sectors[w.camera.sector as usize];
+        let Some(light) = sector_light(&self.rom, sector, e.pos[0] >> 8, e.pos[2] >> 8) else {
             return;
         };
-        let base = m.u32(0x0300_55F0);
-        let raw: Vec<u16> = (0..256).map(|i| m.u16(base + 2 * i)).collect();
-        for (i, c) in tint_palette(&raw, light).into_iter().enumerate() {
+        for (i, c) in tint_palette(&w.palette_base, light).into_iter().enumerate() {
             if (1..=143).contains(&i) || (149..=255).contains(&i) {
                 self.palette[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
             }
@@ -604,9 +561,9 @@ impl Game {
 
     /// `draw_visible_sectors` (`iwram_call` to `0x030048c8`) into the draw page.
     fn draw_world(&mut self, vis: &mut render::Visibility, page: usize) {
-        let m = &self.sim.mem;
-        let (frame, rt) = (view::frame(m), view::runtime(&self.rom, m));
-        let mut scene = view::scene(m);
+        let w = &self.world;
+        let (frame, rt) = (view::frame(w), view::runtime(&self.rom, w));
+        let mut scene = view::scene(w);
         render::draw_world(
             &self.rom,
             &frame,
@@ -615,14 +572,14 @@ impl Game {
             vis,
             &mut self.vram[page..page + 240 * 160],
         );
-        let entities = scene.entities.clone();
+        let entities = std::mem::take(&mut scene.entities);
         drop(scene);
-        view::store_entities(&mut self.sim.mem, &entities);
+        view::store_entities(&mut self.world, &entities);
     }
 
     /// `hud_update(world + 0xA4)` then `sprite_screen_update(world + 0xA4, 0)`.
     fn hud(&mut self) {
-        let mut h = view::hud::load(&self.sim.mem);
+        let mut h = self.world.hud_frame();
         let mut obj_palette: Vec<u16> = (0..256)
             .map(|i| u16::from_le_bytes([self.palette[0x200 + 2 * i], self.palette[0x201 + 2 * i]]))
             .collect();
@@ -634,7 +591,7 @@ impl Game {
             &mut h.messages,
             &mut obj_palette,
         );
-        let (screen, tile_base) = (h.vars.screen as usize, h.vars.tile_base);
+        let (screen, tile_base) = (self.world.hud.screen as usize, self.world.hud.tile_base);
         if let Some(tiles) = minimap {
             let e = self.bank.elements[self.bank.screens[screen].first + 38];
             let at = 0x1_0000 + 32 * e.tile.wrapping_add(tile_base) as usize;
@@ -665,68 +622,61 @@ impl Game {
                 v = nfsgba_fixed::iwram_divmod(v << 8, 0x19B).0;
             }
             let rest = nfsgba_fixed::iwram_divmod(v, 100).1;
-            h.vars.digit = nfsgba_fixed::iwram_divmod(rest, 10).1;
+            self.world.g.div_rem = nfsgba_fixed::iwram_divmod(rest, 10).1;
         }
-        view::hud::store(&mut self.sim.mem, &h);
+        self.world.set_hud_frame(h);
     }
 
-    /// `FUN_0813ea04`: race positions (driver `+0xA8`), 1-based, from the race progress.
+    /// `FUN_0813ea04`: race positions, 1-based, from the race progress.
     fn positions(&mut self) {
-        let m = &self.sim.mem;
-        let n = m.u32(0x0300_5784) + 1;
-        let player = m.u32(PLAYER);
-        let driver = |m: &Mem, e: u32| m.u32(e + 0x8C);
-        if m.u32(PHASE) == 9 {
+        let w = &mut self.world;
+        let n = w.g.opponents as usize + 1;
+        let player = w.g.player as usize;
+        if w.g.phase == 9 {
             for i in 0..n {
-                let d = driver(&self.sim.mem, self.entity(player + i));
-                self.sim.mem.set_u32(d + 0xA8, i + 1);
+                w.slots[player + i].c.position = i as i32 + 1;
             }
             return;
         }
-        let lapped = m.u32(0x0300_608C) != 0;
-        let progress = |m: &Mem, e: u32| {
-            let d = driver(m, e);
+        let lapped = w.g.circuit != 0;
+        let last = {
+            let s = &w.route.line.sections[0];
+            let k = (s.first as usize).wrapping_add(s.count as usize).wrapping_sub(1);
+            w.route.line.points[k].distance
+        };
+        let laps = w.g.laps;
+        let progress = |s: &Slot| {
             if !lapped {
-                return m.i32(d + 0xAC);
+                return s.c.progress;
             }
-            let list = m.u32(WORLD + 0x40);
-            let last = m.u32(WORLD + 0x44)
-                + (m.i32(list + 4) as u32).wrapping_mul(0x18)
-                + (m.u16(list) as u32).wrapping_mul(0x18)
-                - 8;
-            (m.i32(0x0300_56E4).wrapping_sub(m.i8(d + 0xC5) as i32))
-                .wrapping_mul(m.i32(last))
-                .wrapping_add(m.i32(d + 0xAC))
+            (laps.wrapping_sub(s.c.laps_left as i32))
+                .wrapping_mul(last)
+                .wrapping_add(s.c.progress)
         };
         for i in 0..n {
-            let e = self.entity(player + i);
-            let m = &self.sim.mem;
-            if m.u16(e + 0x4A) == 2 {
+            let e = &w.slots[player + i];
+            if e.e.race_state == 2 {
                 continue;
             }
-            let mut position = 1u32;
-            for j in 0..n {
-                let o = self.entity(j);
-                if m.u16(driver(m, o) + 0x4D8) & 8 != 0 || e == o {
+            let mut position = 1;
+            for (j, o) in w.slots.iter().enumerate().take(n) {
+                if o.c.route_flags & 8 != 0 || player + i == j {
                     continue;
                 }
-                let (pe, po) = (progress(m, e), progress(m, o));
-                if pe.wrapping_sub(po) < 0 || (pe == po && j < i) || m.u16(o + 0x4A) == 2 {
+                let (pe, po) = (progress(e), progress(o));
+                if pe.wrapping_sub(po) < 0 || (pe == po && j < i) || o.e.race_state == 2 {
                     position += 1;
                 }
             }
-            let d = driver(m, e);
-            self.sim.mem.set_u32(d + 0xA8, position);
+            w.slots[player + i].c.position = position;
         }
     }
 
     /// The backdrop colour of each screen line (palette entry 0 as the VCount IRQ sets it every 2 lines from
-    /// the gradient buffer `*0x030053B8`, starting at the entry the last VBlank chose).
+    /// the sky gradient, starting at the entry the last VBlank chose).
     pub fn backdrop(&self) -> [u16; 160] {
-        let m = &self.sim.mem;
-        let (ptr, base) = (m.u32(0x0300_56E8), m.u32(0x0300_53B8));
-        let start = (ptr.wrapping_sub(base) / 2) as usize;
-        std::array::from_fn(|y| m.u16(base + 2 * sky::backdrop_entry(start, y) as u32))
+        let w = &self.world;
+        std::array::from_fn(|y| w.gradient[sky::backdrop_entry(w.gradient_start, y)])
     }
 
     /// The 240×160 mode-4 page on screen (palette indices; 0 shows the backdrop).

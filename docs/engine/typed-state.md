@@ -1,15 +1,20 @@
 # Typed state: conventions for the migration
 
-**End state.** `Game` owns `data: Arc<GameData>` (the ROM tables, parsed once) and a typed `World` (entities,
-cars, camera, race, HUD, menus). Subsystems are functions on typed state. The GBA RAM image (`Mem`) lives only in
-tests, loaded and stored through the layouts to compare with traces. The integer maths stays as it is
-(`nfsgba-fixed`). The camera (`nfsgba-game/src/camera.rs`) is the pilot; the car step (`nfsgba-sim`, `CarWorld`)
-is typed too.
+**End state (reached for the race frame, 2026-09-29).** `Game` owns `data: Arc<GameData>`, the typed `World`
+(`nfsgba-game/src/world.rs`: every entity with its car or traffic block, the sector lists as index lists, the car
+globals, the camera, the matrix slots and effect sprites, the HUD, the loop's globals, the palettes, the sound
+engine) and the outputs (palette RAM, VRAM, OAM, samples). `Game::frame` runs every subsystem on `World`: it builds
+each subsystem's frame (`CarWorld`, `CameraFrame`, `Slots`, `HudFrame`) from `World` and writes it back; no `Mem`.
+`World::load(&Machine)` reads a machine state (a trace, a dump, the race start's result); nothing stores it back.
+Each global word lives once in `World` (the car globals own the words `HudVars`, `SlotGlobals` and `Race` share).
+The integer maths stays as it is (`nfsgba-fixed`).
 
 **The contract (2026-09-29, `docs/DECISIONS.md`):** the mechanics, physics and calculations are exact, not the bytes.
 Typed state holds what the game logic uses; scratch, stale and unused bytes are left out. The replay test compares
-the whole machine except its scratch list, and inside a typed struct only the declared fields
-(`tests/common/mod.rs` lists every struct instance), so a byte left out of a struct is not compared.
+the game's `World` with `World::load` of the next traced state (all of it but the heap arena, compared as the
+racers' atlases, and the VCount IRQ's gradient pointer) and the outputs (palette RAM but entry 0, VRAM, OAM); so a
+byte no typed field declares is not compared. The layout test round-trips every struct instance
+(`tests/common/mod.rs`).
 
 ## Where things live
 
@@ -19,8 +24,10 @@ the whole machine except its scratch list, and inside a typed struct only the de
 | Every typed RAM struct and global block, declared once with its offsets | `nfsgba_sim::state` (split into `state/<area>.rs` when it grows) |
 | `GameData` and `bn7e`, the table of every ROM offset typed code uses | `nfsgba_sim::data` |
 | Subsystem logic on typed state: no `Mem`, no GBA address | its module, e.g. `nfsgba-game/src/camera.rs` |
-| Adapters: `<area>_frame(&Mem)` and `store_<area>_frame(&mut Mem, &Frame)` | `nfsgba-game/src/view/<area>.rs`; for the car world (car step, AI, traffic) in `nfsgba_sim::ram`, because the sim's own tests use them (`carworld.rs` + `ram.rs`, called from `view/car.rs`, `view/ai.rs`) |
+| `World`, `World::load`, the subsystems' frames built from it (`with_cars`, `with_slots`, `camera_frame`, `hud_frame`) | `nfsgba-game/src/world.rs`; the renderer's and the viewer's readers in `view/` |
+| The car world on a RAM image, for the sim's own RAM tests only | `nfsgba_sim::ram` (`carworld.rs` + `ram.rs`) |
 | Round-trip and overlap tests over every replay-trace state | `nfsgba-game/tests/layout.rs`; `state.rs` tests |
+| Typed replay (`World` against `World::load` of the next traced state, plus the outputs) | `nfsgba-game/tests/replay.rs` |
 
 ## Declaring state
 
@@ -52,12 +59,12 @@ the whole machine except its scratch list, and inside a typed struct only the de
 ## Migrating one subsystem
 
 1. List the RAM it reads and writes (its `m.` calls). Add the missing fields to `state.rs`.
-2. Define its frame struct: inputs plus in/out state (`CameraFrame`). Add the load and store adapters in `view.rs`.
+2. Define its frame struct: inputs plus in/out state (`CameraFrame`), built from and written back to `World`.
 3. Rewrite the logic on the frame with the existing Rust port as the reference: the same integer operations
    (`wrapping_*` exactly where the original has them) and the same results. The structure is free: indices instead
    of pointers, enums, loops over `Vec`s, named fields; drop what only served the GBA (heap bookkeeping, scratch
    copies, the order of invisible writes).
-4. At the call site in `Game::frame`: load, run, store. The replay tests stay unchanged and green.
+4. At the call site in `Game::frame`: build the frame from `World`, run, write it back. The replay tests stay green.
 5. Shared helpers: one typed implementation. RAM-image callers reach it through an adapter (`world::geometry` runs
    the typed `Geometry` on `Mem`). A RAM-image twin may stay only while unmigrated callers need it, and it says so
    (`world::wall_flags`).
@@ -65,28 +72,25 @@ the whole machine except its scratch list, and inside a typed struct only the de
    reads it, the rewrite is wrong.
 
 **Done** means: no `Mem` and no address in the logic module; replay and layout tests green; `tools/gate.py` 7/7.
-When a whole frame is typed, the per-subsystem adapters merge into `World::load` / `World::store` (tests only),
-and `Game` holds the `World`.
 
-## State the RAM image keeps (heap blocks, sector lists)
+## Heap blocks, sector lists, pointers
 
-A typed step does not allocate or link. It records what it did (`CarWorld::heap_ops`: a traffic car's block was
-allocated or freed; `list_ops`: an entity left or joined its sector's list) and `ram::with_world` replays it on the
-RAM image after the step, in order, then stores the world. The traffic spawn therefore runs inside the car step. The
-few RAM twins left in `nfsgba_sim::ram` (`route::lap`, `wingman_command`, `contact::suspension`) serve the tests.
+A traffic car's block is `Slot::block` (allocated: `Some`, freed: `None`), a racer's physics struct `Slot::c`; the
+sector lists are `World::heads` plus `Entity::next` (`carworld::{link_entity, unlink_entity}`, shared with the
+sparks in `slots.rs`). Pointers to entities are `EntityRef` (an index; the layout converts). The heap allocator
+and its node table are not modelled: `ram::with_world` (the sim's RAM tests) allocates or frees the blocks that
+changed, and those tests leave heap bookkeeping out (`tests/trace.rs` `bookkeeping`).
 
 ## Order
 
 Done:
-- the camera; the car step (`CarWorld`); the AI and traffic (on `CarWorld`, spawn inside the car step);
-- the matrix slots and effect sprites (`slots.rs`, `oam.rs`; `view/slots.rs`, `state/slots.rs`, `slot_data.rs`), the
-  HUD adapters (`view/hud.rs`, `state/hud.rs`), the race readers (`view/race.rs`);
+- the race frame on `World` (camera, car step, AI, traffic, matrix slots and effects, HUD, renderer, sound);
 - the menus: the top level and every screen with a handler in Rust (Kind7 map, Event, Career results, List, Setup,
   Kind38 hints, Intro; `nfsgba-game/src/menu/`, `state/menu.rs`); the typed code reaches the rest (scene setup,
   palettes, frame buffers, the text and blit primitives, game functions not ported) through the `Host` trait,
   `menu/adapt.rs`. Only the garage screens (Kind18, U3) and the exit handlers are unported calls.
 
-Still on RAM: the menus' scene/palette/VRAM helpers (`menu/mod.rs`, FIDELITY U7); `race_init`;
-heap alloc/free and the sector lists (recorded by typed code, replayed by `ram::with_world`); the rim redraw's heap
-reads (R24). Next: the flip: `race_start` builds a typed `World` and `Game` holds it,
-with RAM images only in tests.
+Still on RAM: the menus' scene/palette/VRAM helpers (`menu/mod.rs`, FIDELITY U7); the race start
+(`race_init::race_start` runs on the menus' RAM image and returns `World::load` of the result, G3); the atlases' heap
+arena `World::heap`, which the rim redraw reads around its buffer (R24; the live cars are written into it first).
+Next: the race start on typed state (the menus' outputs as its inputs), then the arena.
