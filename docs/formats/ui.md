@@ -144,7 +144,7 @@ The mode updates call, in this order, with the driver `*(entity[*0x030057F8] + 0
 | driver | `+0x3C` revs, `+0x40` gear, `+0x44` speed, `+0xA8` position, `+0xC5` laps left (s8), `+0x454` rev scale, `+0x4C8` dial, `+0x4D8` flags (bit 3 eliminated), `+0x4E8` hunter life |
 | written | race state `0x03000048` := 8 and `0x030000AC` := 1 past 59:59.98; split clamped to 0 |
 
-**Divide.** The digits go through the IWRAM routine `0x03000220` (ROM copy `0x08165134`), called through `*0x03006494` with the remainder stored at `0x03006480`: shift-and-subtract on the magnitudes, the quotient signed by `n ^ d`, the remainder `n − |q|·d` (off for negative `n`; a negative `d` is mishandled but never passed). Port: `hud::divmod`. Elsewhere `__divsi3` (truncating).
+**Divide.** The digits go through the IWRAM routine `0x03000220` (ROM copy `0x08165134`), called through `*0x03006494` with the remainder stored at `0x03006480`: shift-and-subtract on the magnitudes, the quotient signed by `n ^ d`, the remainder `n − |q|·d` (off for negative `n`; a negative `d` is mishandled but never passed). Port: `nfsgba_fixed::iwram_divmod`. Elsewhere `__divsi3` (truncating).
 
 **Elements:**
 - *Language panels:* object 0 = language; object 4 = 3 in Italian, else 0. Object 14 = language; objects 17 and 18 dx = `0x7F4378[language]`; object 18 = 3 in Italian, else 0.
