@@ -5,10 +5,9 @@
 //!   (59.7275 Hz), from the dump's machine state (`docs/engine/game-loop.md`);
 //! - `NFSGBA_DUMP` alone: the same machine, paused;
 //! - a route (`NFSGBA_ROUTE`, R, K): the typed `race_init::start` on the pre-race capture's `Setup` with
-//!   the choice made (`Setup::choose`), paused.
+//!   the choice made (`Setup::choose`), paused, or with `NFSGBA_PLAY=1` played from the grid (intro, countdown, GO).
 //!
-//! NOT 1:1 (G1): a route's race start is paused; the handover to `Game::frame` (intro, countdown, fades) is not
-//! ported. The camera and matrix slots are the game's (`race_init::pose`), the light tint the viewer's.
+//! The camera and matrix slots are the game's (`race_init::pose`), the light tint the viewer's.
 //!
 //! Keys: arrows = D-pad, X = A (accelerate), Z = B (brake), A = L, S = R, Enter = START, Backspace = SELECT.
 //! `NFSGBA_PLAY_KEYS=A*40,A+LEFT*12,...` plays a script instead (GBA key names, counts in game frames).
@@ -39,6 +38,8 @@ pub const PLAYER_CAR: u8 = 2;
 /// The VBlanks before `setup_race_cars` reads the tick counter (6 or 7 in the recorded race starts).
 const SEED_VBLANKS: u32 = 7;
 
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub const VIDEO_HZ: f32 = 59.7275;
 const KEYS: [&str; 10] = ["A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L"];
 
@@ -50,6 +51,8 @@ pub struct Play {
     /// (environment, route) of a route's race start; `None` for a dump.
     pub grid: Option<(u32, u32)>,
     clock: f32,
+    /// Distinguishes one `Play` from the next (a new race start).
+    pub id: u64,
     pub frames: u64,
     /// Why play stopped (a game code path that is not ported), if it did.
     pub stopped: Option<String>,
@@ -102,6 +105,15 @@ pub fn start_sound(mut commands: Commands, play: Res<Play>, mut sounds: ResMut<A
 }
 
 impl Play {
+    /// How far the display is between the last two game frames (0..1; 1 when nothing runs).
+    pub fn alpha(&self) -> f32 {
+        if self.paused || self.stopped.is_some() {
+            1.0
+        } else {
+            (self.clock / (4.0 / VIDEO_HZ)).clamp(0.0, 1.0)
+        }
+    }
+
     /// A race dump (`prefix` under `$NFSGBA_DATA/work/e5298b24/`), running or paused.
     pub fn load(rom_bytes: Vec<u8>, prefix: &str, hud: Handle<Image>, running: bool) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24").join(prefix);
@@ -113,14 +125,15 @@ impl Play {
         ))
     }
 
-    /// A Quick Play race start on `route` in environment `env`, paused (`race_init::start`).
-    pub fn grid(rom_bytes: Vec<u8>, env: u32, route: u32, hud: Handle<Image>) -> io::Result<Play> {
+    /// A Quick Play race start on `route` in environment `env` (`race_init::start`), paused or, with `running`,
+    /// played from the grid (intro, countdown, GO).
+    pub fn grid(rom_bytes: Vec<u8>, env: u32, route: u32, hud: Handle<Image>, running: bool) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24/race-init/circuit_pre");
         let (mut setup, display) = race_setup::load_pre(rom_bytes.clone(), &path)?;
         setup.choose(env, route, 0, PLAYER_CAR);
         let game =
             race_init::start(rom_bytes, &setup, display, SEED_VBLANKS).map_err(|e| io::Error::other(e.to_string()))?;
-        let mut play = Play::new(game, hud, true, Some((env, route)));
+        let mut play = Play::new(game, hud, !running, Some((env, route)));
         // The first race frame runs up to the countdown, which is not ported (G1): the drivers, camera, matrix slots
         // and the world are the game's; anything else that stops it is an error.
         match play.game.frame(0, &Timing::steady()) {
@@ -148,6 +161,7 @@ impl Play {
             paused,
             grid,
             clock: 0.0,
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             frames: 0,
             stopped: None,
             script,
@@ -188,18 +202,42 @@ fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
 }
 
 /// Runs the game frames that are due (unless paused) and reads the race back from the game's RAM.
-pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<Play>, mut race: ResMut<Race>) {
-    if !play.paused && play.stopped.is_none() {
-        play.clock += time.delta_secs();
-    }
+pub fn play(
+    time: Res<Time>,
+    input: Res<ButtonInput<KeyCode>>,
+    mut play: ResMut<Play>,
+    mut race: ResMut<Race>,
+    mut stats: Local<(f32, u32, u32, f32, f32)>,
+) {
     let step = 4.0 / VIDEO_HZ;
+    if !play.paused && play.stopped.is_none() {
+        // A slow game frame must not make the next display frames run several (a spiral): at most 3 are owed.
+        play.clock = (play.clock + time.delta_secs()).min(3.0 * step);
+        // Display fps and game-frame time, logged every 3 s (display frames, game frames, seconds, ms sum, ms max).
+        stats.0 += time.delta_secs();
+        stats.1 += 1;
+        if stats.0 >= 3.0 {
+            let (secs, shown, games, sum, max) = *stats;
+            info!(
+                "display {:.1} fps, {games} game frames ({:.1}/s), game frame {:.2} ms avg, {max:.2} ms max",
+                shown as f32 / secs,
+                games as f32 / secs,
+                sum / games.max(1) as f32
+            );
+            *stats = (0.0, 0, 0, 0.0, 0.0);
+        }
+    }
     while play.clock >= step && !play.paused && play.stopped.is_none() {
         play.clock -= step;
         let keys = match &play.script {
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
             None => keyboard(&input),
         };
-        match play.game.frame(keys, &Timing::steady()) {
+        let began = std::time::Instant::now();
+        let result = play.game.frame(keys, &Timing::steady());
+        let ms = began.elapsed().as_secs_f32() * 1000.0;
+        (stats.2, stats.3, stats.4) = (stats.2 + 1, stats.3 + ms, stats.4.max(ms));
+        match result {
             Err(e) => {
                 warn!("play stopped at game frame {}: {e}", play.frames);
                 play.stopped = Some(e.to_string());

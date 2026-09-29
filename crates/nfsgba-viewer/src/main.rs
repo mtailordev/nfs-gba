@@ -14,7 +14,10 @@
 //! Controls: R moves to the next race route (a new race start; K in a race: the next environment); G switches
 //! between the game camera and the free camera (Bevy `FreeCamera`: hold right mouse to look, M toggles, WASD move,
 //! Q/E down/up, Shift run, scroll wheel speed); O toggles the original-resolution frame; K switches environment.
-//! `NFSGBA_ROUTE=<n>` starts a Quick Play race start on route n (paused, G1); `NFSGBA_DUMP=<dir/name>` starts from a race dump
+//! Play controls (`NFSGBA_PLAY=1`): X accelerate, Z brake, arrows steer, S handbrake, X+A nitro, S+A wingman,
+//! Enter pause (stops play: the menus are not connected), O original frame, G free camera, T racing line.
+//! Cars and camera are drawn at the display rate, blended between the last two game frames (`Smooth`).
+//! `NFSGBA_ROUTE=<n>` starts a Quick Play race on route n (paused, or with `NFSGBA_PLAY=1` played from the grid); `NFSGBA_DUMP=<dir/name>` starts from a race dump
 //! under `$NFSGBA_DATA/work/e5298b24/` (e.g. `mgba/race`, the reference race); `NFSGBA_ORIGINAL=1` starts in the
 //! original-resolution frame; `NFSGBA_ENV=<n>` picks the environment; `NFSGBA_CAM=x,y,z,tx,ty,tz` sets the free
 //! camera's start eye and target (metres); `NFSGBA_SHOT=<file.png>` saves one frame and quits.
@@ -309,7 +312,7 @@ fn main() {
     })
     .add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: "NFS Carbon GBA city viewer (unofficial)".into(),
+            title: "NFS Carbon GBA viewer (unofficial) - play: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>".into(),
             // Four times the GBA screen: every GBA pixel is 4×4 window pixels.
             resolution: WindowResolution::new(960, 640),
             ..default()
@@ -318,13 +321,14 @@ fn main() {
     }))
     .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
     .add_audio_source::<play::GbaSound>()
+    .init_resource::<Smooth>()
     .add_systems(Startup, setup)
     .add_systems(PostStartup, play::start_sound)
     .add_systems(
         Update,
         (
             shot,
-            (play::play, keys, game_camera, visibility, sky, tint).chain(),
+            (play::play, poses, keys, game_camera, visibility, sky, tint).chain(),
             racing_line,
             play::hud_layer,
         ),
@@ -522,8 +526,14 @@ fn setup(
     let race_game = match &dump {
         Some(prefix) => play::Play::load(data.clone(), prefix, hud.clone(), running)
             .unwrap_or_else(|e| panic!("NFSGBA_DUMP={prefix}: {e} (needs the dump's palette, vram and oam too)")),
-        None => play::Play::grid(data.clone(), env as u32, start_route.unwrap_or(23), hud.clone())
-            .unwrap_or_else(|e| panic!("race start: {e} (needs the race-init/circuit_pre capture)")),
+        None => play::Play::grid(
+            data.clone(),
+            env as u32,
+            start_route.unwrap_or(23),
+            hud.clone(),
+            running,
+        )
+        .unwrap_or_else(|e| panic!("race start: {e} (needs the race-init/circuit_pre capture)")),
     };
     let setup = view::RaceView::read(&race_game.game.world);
     let env = if dump.is_some() { setup.env % envs.len() } else { env };
@@ -536,6 +546,7 @@ fn setup(
         match (&dump, running) {
             (Some(_), true) => " (from the dump, running)",
             (Some(_), false) => " (from the dump, paused)",
+            (None, true) => " (race start, running)",
             _ => " (race start, paused)",
         }
     );
@@ -681,7 +692,8 @@ fn setup(
         )],
     ));
     info!(
-        "city bounds {min:.0} .. {max:.0} m; keys: R next route, G game/free camera, O original frame, K sky; \
+        "city bounds {min:.0} .. {max:.0} m; play a race: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>; keys: R next route, \
+         G game/free camera, O original frame, T racing line, K sky; \
          free camera: right mouse look, WASD/QE move, Shift run, wheel speed"
     );
 }
@@ -772,7 +784,7 @@ fn keys(
     // The first route (from the next one on) whose race start the game code runs.
     if let Some((env, routes)) = start {
         for route in routes {
-            match play::Play::grid(tint.rom.clone(), env, route, race.hud.clone()) {
+            match play::Play::grid(tint.rom.clone(), env, route, race.hud.clone(), !play.paused) {
                 Ok(p) => {
                     commands.insert_resource(p);
                     (race.active, race.game_camera) = (true, true);
@@ -805,12 +817,74 @@ fn keys(
     }
 }
 
+/// The camera and every racer's world pose at one game frame.
+#[derive(Clone, Default)]
+struct Poses {
+    camera: Transform,
+    /// Per racer (index = `RaceCar::slot`); `None` without a matrix slot.
+    cars: Vec<Option<Transform>>,
+}
+
+/// The poses of the last two game frames; the display blends between them (`Play::alpha`), so cars and camera move
+/// at the display rate while the game steps at its own.
+/// NOT 1:1 (presentation, by contract): the picture lags the simulation by up to one game frame; a jump larger
+/// than `TELEPORT` (a respawn, a new race) is not interpolated.
+#[derive(Resource, Default)]
+struct Smooth {
+    prev: Poses,
+    curr: Poses,
+    /// (`Play::id`, `Play::frames`) of `curr`.
+    key: Option<(u64, u64)>,
+}
+
+/// A jump longer than this (city units) is shown at once.
+const TELEPORT: f32 = 2000.0 * SCALE;
+
+fn blend(a: &Transform, b: &Transform, t: f32) -> Transform {
+    if a.translation.distance(b.translation) > TELEPORT {
+        return *b;
+    }
+    Transform {
+        translation: a.translation.lerp(b.translation, t),
+        rotation: a.rotation.slerp(b.rotation, t),
+        scale: b.scale,
+    }
+}
+
+/// Reads the game's camera and racer poses when it has stepped.
+fn poses(play: Res<play::Play>, race: Res<Race>, mut smooth: ResMut<Smooth>) {
+    let key = Some((play.id, play.frames));
+    if !play.paused && smooth.key == key {
+        return;
+    }
+    let mem = &play.game.world;
+    let eye = game::frame_transform(&view::frame(mem), world);
+    let now = Poses {
+        camera: eye,
+        cars: race
+            .setup
+            .racers
+            .iter()
+            .map(|r| (r.slot != 0xFF).then(|| pose_from_matrix(&eye, &view::matrix(mem, r.slot))))
+            .collect(),
+    };
+    let fresh = smooth.key.is_none_or(|k| k.0 != play.id) || play.paused;
+    smooth.prev = if fresh {
+        now.clone()
+    } else {
+        std::mem::take(&mut smooth.curr)
+    };
+    smooth.curr = now;
+    smooth.key = key;
+}
+
 /// The game camera: the camera the game left in RAM (`camera_update`, the chase view), the viewer camera set to its
 /// eye and view direction, and the game's visible-sector list from its camera sector.
 fn game_camera(
     mut race: ResMut<Race>,
     tint: Res<Tint>,
     play: Res<play::Play>,
+    smooth: Res<Smooth>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
 ) {
     if !race.game_camera {
@@ -818,7 +892,9 @@ fn game_camera(
         return;
     }
     let (frame, root, visible) = play::frame(&play, &tint.rom);
-    **camera = game::frame_transform(&frame, world);
+    // The original frame is one picture per game frame; the GPU view moves between the last two.
+    let alpha = if race.original { 1.0 } else { play.alpha() };
+    **camera = blend(&smooth.prev.camera, &smooth.curr.camera, alpha);
     (race.frame, race.visible) = (Some((frame, root)), Some(visible));
 }
 
@@ -829,10 +905,12 @@ fn game_camera(
 /// included), seen from the game's camera whichever camera is shown.
 /// NOT 1:1 (R10): hidden surfaces come from the depth buffer; the game overdraws in list order (painter's).
 /// NOT 1:1 (R29): the cars are not clipped to their portal's span and the screen-row cull is not applied.
+#[allow(clippy::too_many_arguments)]
 fn visibility(
     race: Res<Race>,
     tint: Res<Tint>,
     play: Res<play::Play>,
+    smooth: Res<Smooth>,
     mut logged: Local<Vec<(render::Portal, u128)>>,
     mut images: ResMut<Assets<Image>>,
     mut city: Query<&mut Visibility, (With<CityMesh>, Without<RaceCar>)>,
@@ -871,11 +949,11 @@ fn visibility(
     }
     let mem = &play.game.world;
     let game_frame = view::frame(mem);
-    let eye = game::frame_transform(&game_frame, world);
+    let alpha = if race.original { 1.0 } else { play.alpha() };
     for (car, mut t, mut v) in &mut cars {
         let r = &race.setup.racers[car.slot];
-        if r.slot != 0xFF {
-            t.set_if_neq(pose_from_matrix(&eye, &view::matrix(mem, r.slot)));
+        if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.cars.get(car.slot), smooth.curr.cars.get(car.slot)) {
+            t.set_if_neq(blend(a, b, alpha));
         }
         // The entity's camera depth as `draw_sector_entities` computes it.
         let depth = {
@@ -891,9 +969,10 @@ fn visibility(
     }
 }
 
-/// The current racing line.
-fn racing_line(race: Res<Race>, mut gizmos: Gizmos) {
-    if race.active && !race.original {
+/// The current racing line (debug overlay, off until T).
+fn racing_line(keys: Res<ButtonInput<KeyCode>>, mut on: Local<bool>, race: Res<Race>, mut gizmos: Gizmos) {
+    *on ^= keys.just_pressed(KeyCode::KeyT);
+    if *on && race.active && !race.original {
         let line: Vec<Vec3> = race.route().waypoints.iter().map(|w| race.at(w) + Vec3::Y).collect();
         gizmos.linestrip(line, Color::srgb(1.0, 0.2, 0.1));
     }
@@ -1096,8 +1175,13 @@ fn sky(
     }
     let forward = camera.forward().as_vec3();
     let cam = match race.frame {
-        // The game's sky camera (the chase camera looks along its yaw and never pitches).
-        Some(_) => view::sky_camera(&play.game.world),
+        // The game's sky camera (the chase camera looks along its yaw and never pitches); the yaw follows the
+        // interpolated view, so the skyline scrolls at the display rate (the original frame keeps the game's).
+        Some(_) => {
+            let cam = view::sky_camera(&play.game.world);
+            let yaw = if race.original { cam.yaw } else { game_yaw(forward) };
+            sky::SkyCamera { yaw, ..cam }
+        }
         None => sky::SkyCamera {
             yaw: game_yaw(forward),
             horizon: horizon(forward),
@@ -1187,7 +1271,7 @@ mod tests {
         let (mut kept, mut dropped, mut started) = (0, 0, 0);
         // Route 0 has no grid of its own.
         for route in 1..routes.len() {
-            let Ok(play) = play::Play::grid(data.clone(), 11, route as u32, Handle::default()) else {
+            let Ok(play) = play::Play::grid(data.clone(), 11, route as u32, Handle::default(), false) else {
                 continue;
             };
             started += 1;
@@ -1246,7 +1330,7 @@ mod tests {
             return;
         };
         let dump = play::Play::load(data.clone(), "game-loop/s18", Handle::default(), false).unwrap();
-        let route = play::Play::grid(data.clone(), 11, 7, Handle::default()).unwrap();
+        let route = play::Play::grid(data.clone(), 11, 7, Handle::default(), false).unwrap();
         assert_eq!((dump.grid, route.grid), (None, Some((11, 7))));
         for (name, p, cars) in [("dump", &dump, 1), ("route 7", &route, 1)] {
             assert!(p.paused, "{name}");
@@ -1281,6 +1365,18 @@ mod tests {
             }
             assert!(posed >= cars, "{name}: {posed} racers have a matrix slot");
         }
+    }
+
+    /// The display blends between game frames, and a teleport is shown at once.
+    #[test]
+    fn blend_interpolates_but_not_across_a_jump() {
+        let a = Transform::from_xyz(0.0, 0.0, 0.0);
+        let b = Transform::from_xyz(2.0, 0.0, 0.0).with_rotation(Quat::from_rotation_y(1.0));
+        let half = blend(&a, &b, 0.5);
+        assert!((half.translation.x - 1.0).abs() < 1e-6);
+        assert!(half.rotation.angle_between(Quat::from_rotation_y(0.5)) < 1e-5);
+        let far = Transform::from_xyz(2.0 * TELEPORT, 0.0, 0.0);
+        assert_eq!(blend(&a, &far, 0.5).translation, far.translation);
     }
 
     /// The game camera's transform looks where the render frame looks: every point projects to the same screen x.

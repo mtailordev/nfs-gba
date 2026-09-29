@@ -183,9 +183,17 @@ This part makes the race view the game's view: the camera, the projection, what 
 
 - **One path (R28):** every mode that shows a race is an `nfsgba_game::Game` (`play::Play`); the viewer reads the camera (`play::frame`: `view::frame`, `view::root`, `view::visible`), the racers (`race_init::RaceView`), the vehicle matrix slots (`race_init::matrix`), the sky camera (`view::sky_camera`) and, for the original-resolution frame, the scene (`view::scene`) from it, never from RAM addresses. There is no viewer-side camera, slot or racer model.
   - `NFSGBA_DUMP=<dir/name>`: an mGBA race dump from `$NFSGBA_DATA/work/e5298b24/` (palette, VRAM and OAM too; the reference race is `mgba/race`, a `tools/game_trace.py` state such as `game-loop/s18` also works). Paused; with `NFSGBA_PLAY=1` the keyboard drives `Game::frame` (`play.rs`).
-  - `NFSGBA_ROUTE=<n>` (R: next route, K: next environment): `race_init::apply_setup` on `race-init/circuit_pre` (environment, route, mode 0, car 2), `race_start`, then one `Game::frame` from game state 5, which runs the first race frame up to the countdown (drivers, camera, matrix slots, the world) and stops there (G1). Paused. The opponents and their looks are what `race_start` deals (`tools/oracle/synth.py` checks it against the game's code). The light tint is applied by the viewer to the game's base palette.
+  - `NFSGBA_ROUTE=<n>` (R: next route, K: next environment): `race_init::apply_setup` on `race-init/circuit_pre` (environment, route, mode 0, car 2), `race_start`, then one `Game::frame` from game state 5, which runs the first race frame up to the countdown (drivers, camera, matrix slots, the world) and stops there (G1). Paused, or with `NFSGBA_PLAY=1` played from the grid through the intro, countdown and GO (R and K keep the mode). The opponents and their looks are what `race_start` deals (`tools/oracle/synth.py` checks it against the game's code). The light tint is applied by the viewer to the game's base palette.
 - **Game camera and free camera:** the game camera is the default in a race. G switches to the free camera (Bevy `FreeCamera`), which is a non-game mode; without a race the viewer starts in it.
 - **Original-resolution frame:** O shows the game's own frame, drawn on the CPU with `render::draw_world` into the sky layer's 240×160 index screen, over the skyline. The frame includes the cars, from `view::scene` (entities, sector heads, matrix slots, EWRAM atlases). Running play shows the page the game drew.
+
+### Controls
+
+`NFSGBA_PLAY=1` (with `NFSGBA_ROUTE=<n>` or `NFSGBA_DUMP=<dir/name>`): X accelerate, Z brake, arrows steer, S handbrake, X+A nitro, S+A wingman, Enter pause (stops play: the menus are not connected). O original frame, G free camera, T racing line (off by default), R next route, K next environment.
+
+### Smooth motion
+
+The simulation steps once per game frame (about 15 per second). The camera and every racer's world pose are kept for the last two game frames (`Smooth`) and drawn blended at the display rate (position lerp, rotation slerp, `Play::alpha` = time since the last step over the step; no blending across a jump over 2000 city units; the original frame is not blended). The skyline yaw follows the blended camera, so it scrolls every display frame. The picture lags the simulation by up to one game frame. Release build, route 7: 78 to 147 display fps, game frame 0.7 ms (1.5 ms max); `play` logs both every 3 s.
 
 ### Game camera (R11)
 
