@@ -56,6 +56,8 @@ pub struct Play {
     pub frames: u64,
     /// Why play stopped (a game code path that is not ported), if it did.
     pub stopped: Option<String>,
+    /// What to tell the player when play stopped at a hand-over to the menus (not connected yet).
+    pub banner: Option<String>,
     script: Option<Vec<u16>>,
     pub hud: Handle<Image>,
     /// The samples the game's sound hardware played, waiting for the audio device.
@@ -164,10 +166,41 @@ impl Play {
             id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             frames: 0,
             stopped: None,
+            banner: None,
             script,
             hud,
             sound: Arc::default(),
         }
+    }
+}
+
+/// The text shown when the race hands over to the menus, which are not connected: for the results the player's
+/// place and finish time (`ranked` is in finishing order; times are 1/60 s), else a note.
+fn banner(h: &nfsgba_game::Handover) -> String {
+    use nfsgba_game::Handover;
+    let next = "R or Enter: next race";
+    match h {
+        Handover::Results(r) => {
+            let k = r
+                .ranked
+                .ids
+                .iter()
+                .position(|&id| u32::from(id) == r.last_player)
+                .unwrap_or(0);
+            let cs = r.ranked.finish[k] as u64 * 100 / 60;
+            format!(
+                "Race over: place {} of 4, {:02}:{:02}.{:02}
+{next}",
+                k + 1,
+                cs / 6000,
+                cs / 100 % 60,
+                cs % 100
+            )
+        }
+        Handover::Pause => format!(
+            "Paused (the menus are not connected)
+{next}"
+        ),
     }
 }
 
@@ -244,6 +277,7 @@ pub fn play(
                 break;
             }
             Ok(nfsgba_game::Flow::Handover(h)) => {
+                play.banner = Some(banner(&h));
                 warn!(
                     "play stopped at game frame {}: the race hands over to the menus ({h:?})",
                     play.frames

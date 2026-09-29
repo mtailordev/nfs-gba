@@ -330,6 +330,7 @@ fn main() {
             shot,
             (
                 play::play,
+                banner,
                 poses,
                 keys,
                 game_camera,
@@ -529,6 +530,23 @@ fn setup(
             height: Val::Percent(100.0),
             ..default()
         },
+    ));
+    commands.spawn((
+        Banner,
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(40.0),
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            top: Val::Percent(40.0),
+            ..default()
+        },
+        Visibility::Hidden,
     ));
     let start_route: Option<u32> = std::env::var("NFSGBA_ROUTE").ok().and_then(|s| s.parse().ok());
     // A route wins over a dump left in the environment.
@@ -791,7 +809,8 @@ fn keys(
 ) {
     let (env, route) = (race.setup.env as u32, race.setup.route as u32);
     let routes = race.routes.len() as u32;
-    let start = if keys.just_pressed(KeyCode::KeyR) {
+    let next = keys.just_pressed(KeyCode::KeyR) || (play.banner.is_some() && keys.just_pressed(KeyCode::Enter));
+    let start = if next {
         Some((env, (1..=routes).map(|k| (route + k) % routes).collect::<Vec<_>>()))
     } else if keys.just_pressed(KeyCode::KeyK) && race.active && play.grid.is_some() {
         Some(((env + 1) % skies.palettes.len() as u32, vec![route]))
@@ -1021,6 +1040,23 @@ fn visibility(
         let drawn_model = r.models_at(depth).contains(&car.model);
         v.set_if_neq(shown(race.active && !race.original && listed && drawn_model));
     }
+}
+
+/// The note over the screen when play stopped at a hand-over to the menus.
+#[derive(Component)]
+struct Banner;
+
+fn banner(play: Res<play::Play>, mut text: Single<(&mut Text, &mut Visibility), With<Banner>>) {
+    let (t, v) = &mut *text;
+    let shown = play.banner.as_deref().unwrap_or("");
+    if t.0 != shown {
+        t.0 = shown.to_string();
+    }
+    v.set_if_neq(if shown.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    });
 }
 
 /// A traffic car part: entity `ent`'s model `model` in vehicle material `material`.
@@ -1389,6 +1425,7 @@ fn shot(
     time: Res<Time>,
     play: Res<play::Play>,
     mut taken: Local<Option<f32>>,
+    mut waited: Local<u32>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Ok(path) = std::env::var("NFSGBA_SHOT") else { return };
@@ -1397,7 +1434,11 @@ fn shot(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let t = time.elapsed_secs();
+    // (30 display frames after the game got there, so text and fades have drawn)
     if t > 8.0 && play.frames >= frames && taken.is_none() {
+        *waited += 1;
+    }
+    if *waited >= 30 && taken.is_none() {
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
         *taken = Some(t);
     }
