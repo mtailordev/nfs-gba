@@ -243,6 +243,15 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
         paints,
         palette_base: Vec::new(),
         palette_fade: Vec::new(),
+        fade_gradient: {
+            let mat = m.u16(level + 0x5E) as u32;
+            let src = m.u32(level + 8).wrapping_add(m.u32(m.u32(level + 0x1C) + 36 * mat + 8));
+            (0..120).map(|i| m.u16(src + 2 * i)).collect()
+        },
+        fade_obj: {
+            let at = m.u32(level + 4) + m.u16(level + 0x58) as u32 * 2;
+            (0..256).map(|i| m.u16(at + 2 * i)).collect()
+        },
         gradient: s.gradient.clone(),
         gradient_start: 0,
         materials: vec![(0, 0, 0); n_materials as usize],
@@ -366,6 +375,7 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
     // The race music (rand & 3, id + 1; a new id requests its module) and the engine sound.
     let r = nfsgba_fixed::rand_table(rom, &mut w.g.rand);
     let id = (r & 3) as i32 + 1;
+    w.lp.music_id = id;
     if s.music != id {
         w.audio.music_request = m.u32(0x087E_E238 + 4 * id as u32);
     }
@@ -849,6 +859,8 @@ pub fn differing(a: &World, b: &World) -> Vec<&'static str> {
         paints,
         palette_base,
         palette_fade,
+        fade_gradient,
+        fade_obj,
         gradient,
         gradient_start,
         materials,
