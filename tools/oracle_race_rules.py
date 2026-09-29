@@ -423,7 +423,11 @@ def gen_career_race_payout(gba, rng, n):
         c.put(p + 0x1FC, "B", slot)
         c.put(p + 0x10, "b", car)
         c.put(p + 0xC, "I", rng.randrange(0, 200000))
-        c.raw(p + 0x205, random_statuses(rng, rng.randrange(1, 4)))
+        statuses = bytearray(random_statuses(rng, rng.randrange(1, 4)))
+        if rng.random() < 0.15:  # status 0 and nothing done: the reward index before the zone's first event
+            for e in range(12 * zone, 12 * zone + 12):
+                statuses[e >> 2] &= ~(3 << (2 * (e & 3))) & 0xFF
+        c.raw(p + 0x205, bytes(statuses))
         c.raw(recs + 17 * car, bytes([rng.randrange(21), rng.randrange(9), rng.randrange(17), rng.randrange(12),
                                       rng.randrange(64), rng.randrange(4)] + [0] * 11))
         c.raw(0x03005730, random_ranked(rng, opponents))

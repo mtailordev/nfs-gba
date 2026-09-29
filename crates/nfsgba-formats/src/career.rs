@@ -601,13 +601,17 @@ fn tier(v: i32, limits: &[i32], add: &[i32]) -> i32 {
     add[limits.iter().take_while(|&&l| v >= l).count()]
 }
 
-/// Career race result (`FUN_0812efe8`): `place` is 1 (won), 2 (second) or 3 (anything else). Updates the event's
-/// status (2 bits per event: 1 won, 2 second, 3 not done) and the cash, and returns the payout.
-pub fn race_payout(save: &mut Save, events: &[Event], zone: usize, slot: usize, place: u8, percent: i32) -> i32 {
+/// Career race result (`FUN_0812efe8`, only when `0x030000A0` is 1): `place` is 1 (won), 2 (second) or 3 (anything
+/// else), from [`payout_place`]. Updates the event's status (2 bits per event: 1 won, 2 second, 3 not done) and the
+/// cash, and returns the payout (also stored at profile `+0x3B8`). The reward is that of the zone's event number
+/// "events done" (one fewer when this event already counts); quirk kept: with status 0 (never written by the game)
+/// and nothing done that is the word before the zone's first record.
+pub fn race_payout(rom: &[u8], save: &mut Save, zone: usize, slot: usize, place: u8, percent: i32) -> i32 {
     let event = zone * 12 + slot;
     let old = save.event_status(event);
     let done = (0..if zone == 5 { 6 } else { 12 }).filter(|&e| matches!(save.event_status(zone * 12 + e), 1 | 2));
-    let base = events[zone * 12 + done.count() - usize::from(old != 3)].reward as i32;
+    let index = (zone * 12 + done.count()) as isize - isize::from(old != 3);
+    let base = i32::from(i16_at(rom, (EVENT_TABLE as isize + 8 * index + 6) as usize));
     if place < old {
         save.events[event >> 2] = save.events[event >> 2] & !(3 << ((event & 3) * 2)) | place << ((event & 3) * 2);
     }
@@ -1622,26 +1626,15 @@ mod tests {
 
     #[test]
     fn race_rules() {
+        let Some(rom) = rom() else { return };
         let mut save = blank_save();
-        let events: Vec<Event> = (0..EVENT_COUNT)
-            .map(|i| Event {
-                zone: (i / 12) as u8,
-                slot: (i % 12) as u8,
-                skill: 0,
-                track: 0,
-                mode: RaceMode::Circuit,
-                reverse: false,
-                laps: 3,
-                traffic: 0,
-                reward: 100 + 25 * i as i16,
-            })
-            .collect();
-        assert_eq!(race_payout(&mut save, &events, 0, 3, 1, 110), 110); // first win: next reward in line
+        // Zone 1 rewards: 100, 150, 175, …
+        assert_eq!(race_payout(&rom, &mut save, 0, 3, 1, 110), 110); // first win: the first reward in line
         assert_eq!(save.event_status(3), 1);
-        assert_eq!(race_payout(&mut save, &events, 0, 3, 1, 100), 50); // replay: half the last reward
-        assert_eq!(race_payout(&mut save, &events, 0, 4, 2, 100), 62); // second place: half (125 / 2)
-        assert_eq!(race_payout(&mut save, &events, 0, 5, 3, 100), 0);
-        assert_eq!(save.cash, 222);
+        assert_eq!(race_payout(&rom, &mut save, 0, 3, 1, 100), 50); // replay: half the last reward
+        assert_eq!(race_payout(&rom, &mut save, 0, 4, 2, 100), 75); // second place: half the next (150 / 2)
+        assert_eq!(race_payout(&rom, &mut save, 0, 5, 3, 100), 0);
+        assert_eq!(save.cash, 235);
         assert_eq!(
             (reward_percent(100), reward_percent(101), reward_percent(176)),
             (100, 110, 140)
@@ -1805,7 +1798,6 @@ mod tests {
     #[test]
     fn race_rules_match_the_traces() {
         let Some(rom) = rom() else { return };
-        let events = events(&rom);
         let mut counts = std::collections::BTreeMap::<String, usize>::new();
         // Per file: the lapped flag the plane table was built with (0 when a file has no build line).
         let mut built: std::collections::HashMap<String, bool> = Default::default();
@@ -2004,7 +1996,7 @@ mod tests {
                     let rec: [u8; 17] = t.bytes("records")[17 * car..17 * car + 17].try_into().unwrap();
                     let percent = reward_percent(style_rating(&rom, car, &rec));
                     let (zone, slot) = (t.get("zone").parse().unwrap(), t.get("slot").parse().unwrap());
-                    let paid = race_payout(&mut save, &events, zone, slot, payout_place(&t.bytes("order")), percent);
+                    let paid = race_payout(&rom, &mut save, zone, slot, payout_place(&t.bytes("order")), percent);
                     assert_eq!(paid, t.get("paid").parse::<i32>().unwrap(), "{}", at());
                     assert_eq!(
                         (save.cash, save.events.to_vec()),
@@ -2018,7 +2010,8 @@ mod tests {
                     save.events.copy_from_slice(&t.bytes("events"));
                     save.field_1f8 = t.get("f1f8").parse().unwrap();
                     let flags = t.ints("flags");
-                    save.unlock_flags = (0..6).filter(|&b| flags[b] & 1 != 0).map(|b| 1 << b).sum();
+                    // The rebuild tests the RAM flag words for != 0 (the save stores bit 0 of each).
+                    save.unlock_flags = (0..6).filter(|&b| flags[b] != 0).map(|b| 1 << b).sum();
                     assert_eq!(save.unlocks(&rom)[..], t.bytes("unlocks")[..], "{}", at());
                 }
                 "save_encode" => {
