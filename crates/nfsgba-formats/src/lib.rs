@@ -6,6 +6,7 @@ use std::{env, fs, io, path::PathBuf};
 pub mod atlas;
 pub mod career;
 pub mod hud;
+pub mod menu;
 pub mod paint;
 pub mod render;
 pub mod sky;
