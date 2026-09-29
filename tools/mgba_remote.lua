@@ -7,22 +7,18 @@
 --   save NAME / load NAME      savestate NAME.ss
 --   trace NAME [SKIP] / untrace
 --                              log every call of the car handler FUN_0814bd4c for entity 0 (the player) to
---                              NAME.csv, at its entry: frame, keys, the globals the car step reads, entity 0
---                              (0xA4 bytes) and its physics struct (entity +0x8C, 0x4FC bytes) as hex, then the
---                              other racers (entities 1..3) as entity:physics|...; the first logged call also
---                              dumps memory as NAME.<domain>.bin, and every call appends EWRAM + IWRAM to
---                              NAME.ram.bin (tools/trace_race.py turns that into deltas). SKIP: calls to leave
---                              out first, e.g. the car's init step (docs/engine/physics.md)
+--                              NAME.csv, at its entry: frame, keys, a few globals, entity 0 (0xA4 bytes) and its
+--                              physics struct (entity +0x8C, 0x4FC bytes) as hex. The first logged call also dumps
+--                              memory as NAME.<domain>.bin, and every call appends EWRAM + IWRAM to NAME.ram.bin
+--                              (tools/trace_race.py turns that into deltas). SKIP: calls to leave out first
+--                              (docs/engine/physics.md)
 local dir = os.getenv("NFSGBA_MGBA_DIR")
 local KEYS = {A = 0, B = 1, SELECT = 2, START = 3, RIGHT = 4, LEFT = 5, UP = 6, DOWN = 7, R = 8, L = 9}
 local queue, batch, wait, held = {}, nil, 0, false
 local trace, traceRam, traceName, traceSkip, breakpoint
--- Globals logged per car step (docs/engine/physics.md): name, address, size. The car step reads them; other
--- code (the frame timer, the race controller, the keypad) writes them.
+-- Globals in the CSV for summaries (the full RAM is in NAME.ram.bin): name, address, size
 local GLOBALS = {{"dt", 0x03005640, 4}, {"phase", 0x03000048, 4}, {"input", 0x030057D8, 2},
-  {"flag610c", 0x0300610C, 4}, {"sector", 0x03005614, 4}, {"racetime", 0x03005800, 4}, {"armed", 0x03005780, 4},
-  {"countdown", 0x03005630, 4}, {"mode5624", 0x03005624, 4}}
-local OTHERS = 3
+  {"flag610c", 0x0300610C, 4}, {"sector", 0x03005614, 4}}
 
 local function writeFile(path, data, mode)
   local f = assert(io.open(path, mode or "wb"))
@@ -49,13 +45,6 @@ local function dump(name)
   log("dump " .. name .. " " .. table.concat(regs, " "))
 end
 
-local function car(entity)
-  local physics = emu:read32(entity + 0x8C) -- not allocated before the car's init step (state 0)
-  local physicsHex = ""
-  if physics >= 0x02000000 and physics + 0x4FC <= 0x02040000 then physicsHex = hex(emu:readRange(physics, 0x4FC)) end
-  return hex(emu:readRange(entity, 0xA4)), physicsHex
-end
-
 local function traceStep()
   local entity = emu:read32(0x030000C0 + 0x3C) -- world struct +0x3C: entity array, entity 0 = player
   if emu:readRegister("r1") ~= entity then return end
@@ -65,15 +54,10 @@ local function traceStep()
   for _, g in ipairs(GLOBALS) do
     table.insert(fields, g[3] == 2 and emu:read16(g[2]) or emu:read32(g[2]))
   end
-  local e, p = car(entity)
-  table.insert(fields, e)
-  table.insert(fields, p)
-  local others = {}
-  for k = 1, OTHERS do
-    local oe, op = car(entity + 0xA4 * k)
-    table.insert(others, oe .. ":" .. op)
-  end
-  table.insert(fields, table.concat(others, "|"))
+  table.insert(fields, hex(emu:readRange(entity, 0xA4)))
+  local physics = emu:read32(entity + 0x8C) -- not allocated before the car's init step (state 0)
+  local ok = physics >= 0x02000000 and physics + 0x4FC <= 0x02040000
+  table.insert(fields, ok and hex(emu:readRange(physics, 0x4FC)) or "")
   trace:write(table.concat(fields, ",") .. "\n")
   traceRam:write(emu.memory.wram:readRange(0, 0x40000))
   traceRam:write(emu.memory.iwram:readRange(0, 0x8000))
@@ -113,7 +97,7 @@ local function run(line)
     traceRam = assert(io.open(dir .. "/" .. a .. ".ram.bin", "wb"))
     local header = {"frame", "keys"}
     for _, g in ipairs(GLOBALS) do table.insert(header, g[1]) end
-    trace:write(table.concat(header, ",") .. ",entity,physics,others\n")
+    trace:write(table.concat(header, ",") .. ",entity,physics\n")
     breakpoint = emu:setBreakpoint(traceStep, 0x0814BD4C)
   elseif op == "untrace" then
     if breakpoint then emu:clearBreakpoint(breakpoint) end

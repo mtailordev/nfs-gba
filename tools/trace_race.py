@@ -32,9 +32,8 @@ SCENARIOS = {
     "handbrake": ["hold A 150", "hold A,R,LEFT 50", "hold A,RIGHT 40", "hold A,R,RIGHT 40", "hold A 60"],
     "long": ["hold A 180", "hold A,LEFT 30", "hold A 90", "hold A,RIGHT 45", "hold A 120", "hold A,LEFT 60",
              "hold A 150", "hold A,RIGHT 30", "hold A 200", "hold A,LEFT 40", "hold A 150"],
-    # From the race info screen through the intro and the launch among the opponents; the car's init step
-    # (FUN_0814b98c, not ported) is left out: "trace 1" skips one car step.
-    "start": [*MENU_TO_RACE, "trace 1", "hold A 10", "wait 100", "hold A 700"],
+    # From the race info screen: the car's init step, the intro, the launch among the opponents, traffic.
+    "start": [*MENU_TO_RACE, "trace", "hold A 10", "wait 100", "hold A 700"],
 }
 
 # Entity 0 fields for --summary: name, offset, size (see docs/engine/physics.md)

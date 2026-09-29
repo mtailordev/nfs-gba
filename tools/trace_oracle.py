@@ -31,10 +31,15 @@ HANDLER = 0x0814BD4C
 RET = 0x08000000
 SP = 0x03007E80
 STACK = range(0x03007A00, SP)
-# Bytes other game code maintains between car steps: entity sector-list link, draw-list link, view depth, byte
-# +0x88; physics race position (the ranking)
-EXTERNAL = {0x02, 0x03, 0x04, 0x05, 0x28, 0x29, 0x2A, 0x2B, 0x88}
-PHYSICS_EXTERNAL = {0xA8, 0xA9, 0xAA, 0xAB}
+# Bits other game code maintains between car steps, as {offset: mask}: entity sector-list link, draw-list link,
+# flags +0x0A bit 2, view depth, byte +0x88; physics race position (the ranking)
+EXTERNAL = {0x02: 0xFF, 0x03: 0xFF, 0x04: 0xFF, 0x05: 0xFF, 0x0A: 0x04, 0x28: 0xFF, 0x29: 0xFF, 0x2A: 0xFF,
+            0x2B: 0xFF, 0x88: 0xFF}
+PHYSICS_EXTERNAL = {0xA8: 0xFF, 0xA9: 0xFF, 0xAA: 0xFF, 0xAB: 0xFF}
+
+
+def same(got: bytes, want: bytes, external: dict) -> bool:
+    return all((g ^ w) & ~external.get(k, 0) & 0xFF == 0 for k, (g, w) in enumerate(zip(got, want)))
 # Stubbed calls: address -> (name, argument count)
 STUBS = {0x08135FDC: ("play", 2), 0x08136028: ("stop", 1), 0x081360B4: ("pitch", 2), 0x08152E40: ("start", 4),
          0x0813BD90: ("decal", 3)}
@@ -144,8 +149,7 @@ def replay(name: str) -> int:
         physics = struct.unpack("<I", u.mem_read(entity + 0x8C, 4))[0]
         got_e, got_p = bytes(u.mem_read(entity, 0xA4)), bytes(u.mem_read(physics, 0x4FC))
         want_e, want_p = bytes.fromhex(nxt["entity"]), bytes.fromhex(nxt["physics"])
-        if any(got_e[k] != want_e[k] for k in range(0xA4) if k not in EXTERNAL) or \
-                any(got_p[k] != want_p[k] for k in range(0x4FC) if k not in PHYSICS_EXTERNAL):
+        if not same(got_e, want_e, EXTERNAL) or not same(got_p, want_p, PHYSICS_EXTERNAL):
             bad += 1
             print(f"{name} step {i}: the oracle does not reproduce the trace")
         lines.append(f"{i};{' '.join(f'{a:08x}={v:02x}' for a, v in writes)};{' '.join(calls)}")
