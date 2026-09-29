@@ -99,7 +99,22 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F2588` | 44 × 0xC | race slot per route number: environment, route index (`race_setup_route`) | formats/career |
 | `0x7F2798` | 44 × 0x14 | route table | formats/race-routes |
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments; the **menu descriptor** at `0x7F2FE8` has the same layout | formats/city-sectors, formats/ui |
-| `0x7F38B8` | 65 × 4 | Thumb function table (states or menus?) | |
+| `0x7F1100` | 15 × 0x158 | handling records | engine/physics |
+| `0x7F3050` | per route | race-start byte | engine/physics |
+| `0x7F37D8` | per route | side-segment sector lists | engine/physics |
+| `0x7F3CDA` | | breakable-wall partners | engine/physics |
+| `0x7F3DD0` | 12 | the zero vector (also driver `+0xF8` init) | engine/physics |
+| `0x7F40D0` | per (setting, reverse) | race-start word | engine/physics |
+| `0x7F4120` | 4 | lane offsets (`nearest_lane`) | engine/physics |
+| `0x7F4164`, `0x7F41A0` | | curves: yaw damping by slip angle; rear grip by slip and yaw | engine/physics |
+| `0x7F42E4` | per wingman | grid/skill value | engine/physics |
+| `0x7F546C` | | traffic types (u16 model, u16 paint) | engine/physics |
+| `0x7F5488` | | traffic lane offsets | engine/physics |
+| `0x7F5494` | 4 × 9 × 8 | control bindings | engine/physics |
+| `0x7F55FC` | 2 | car-to-car axle offsets | engine/physics |
+| `0x7F5904` | 8 words | grip per floor surface | engine/physics |
+| `0x7F5988` | 10 × 5 words | upgrade weights | engine/physics |
+| `0x7F38B8` | 65 × 4 | **entity handler table** (world `+0x78`, by entity `+0x4E`; `update_entities`): 0..3 car handler, 0x29 opponents, 0xE empty, 0x36 AI/traffic | engine/physics |
 | `0x7F4378` | 5 | HUD digit x shift per language | formats/ui |
 | `0x7F437D`, `0x7F43BD`, `0x7F43FD` | 16 × 4 | HUD message tables (race modes 0/1, 3, 2) | formats/ui |
 | `0x7F4480`, `0x7F44A8` | | map scales and offsets (`map_world_to_screen`) | formats/ui |
@@ -144,6 +159,30 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03000060` | u32 player entity index (0) |
 | `0x0300006C` | environment index (**11** in the reference race) |
 | `0x0300003C` | current music id (−1 none) |
+| `0x03000048` | race phase (9 intro, 2 racing, 3 over; 1 and 4 skip the dynamics) |
+| `0x03000220` | IWRAM image start; `iwram_divmod` (signed divide storing a remainder in `0x03006480`) |
+| `0x03005384` | wrong way (more than 27 steps against the route) |
+| `0x03005628` | counter that picks the traffic type (hypothesis: a frame counter) |
+| `0x03005640` | frame time (25,500 / timer-3 ticks, 10..100; 15 if `0x03005624` is 2), written by `main_frame` |
+| `0x030057D8` | u16 control word per entity (`0xFC00 \| keys` for the player) |
+| `0x03005FB4` | pointer to the waypoint lines (0x20 each: direction, widening, crossing plane, length) |
+| `0x03006000` | 5 words: the player's upgrade totals; `+0x10` nitro level × 10 |
+| `0x0300601C` | off-route warning (−1/0/1) |
+| `0x03006030` | gravity (0x4F0, set by `car_init`) |
+| `0x03006074` | manual gearbox state |
+| `0x03006078`, `0x03006084`, `0x03006088`, `0x03006028`, `0x03006090`, `0x03006158`, `0x03006190` | race-start globals (`race_start_setup`) |
+| `0x030060A4` | the player's final drive |
+| `0x030060C0` | 16 words: route segments visited |
+| `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step |
+| `0x03006120` | per route segment: distance scale (0x100 for the main route) |
+| `0x03006150`, `0x0300614C` | nitro full-tank flag; grip-doubling flag |
+| `0x03006154` | time limit (0x4650; 0x2328 in career) |
+| `0x0300615C` | time gap to the car ahead/behind |
+| `0x030061F0` | traffic wall-hit flag |
+| `0x03006240`, `0x03006264`, `0x03006260`, `0x03006298`, `0x0300625C` | traffic: spawned count (max 4), countdown (byte), countdown reload, traffic on, type count |
+| `0x03006270` | 8 × pointer: live traffic cars |
+| `0x0300629C` | u8 control binding set (0 automatic, 1 manual) |
+| `0x03006480` | IWRAM divider remainder |
 | `0x03000044` | rand seed applied by `setup_race_cars` |
 | `0x03005A00` | IWRAM block (0x54C): mode-1 mixer code, then mix buffers `0x03005DEC` / `0x03005E9C` (176 samples each) |
 | `0x03005F4C` / `0x03005F50` | sound work-area pointer (0x26AC allocated) / 28-byte engine config |
@@ -175,7 +214,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005FB8` | pointer to the backward-step table for branch starts (`racing_line_step`) |
 | `0x0300608C` | lapped race (0 = sprint) |
 | `0x030061A4` | someone finished |
-| `0x030061B0…0x030061F4`, `0x0300617C` | hunter tuning |
+| `0x030061B0…0x030061F4`, `0x0300617C` | hunter tuning; `0x03006184` = hunter wall-hit factor (0x240) |
 | `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
 | `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre (120, 79), `+0x0C` pitch 240, `+0x10` near 64, `+0x1C` focal 150 |
 | `0x03000214` | camera yaw (0x4000 per turn; the skyline scrolls by it) |
@@ -268,7 +307,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0xEE` | visible count |
 | `+0xF0` | 0 each frame |
 | `+0xF2` / `+0xF4` | flat outline / clipped outline lengths |
-| `+0xF8`, `+0xFA` | entity count (4) and extra entity slots (0x20) |
+| `+0xF8`, `+0xFA` | first entity and entity count for the update loop and `free_entity` (race: 4 and 0x20) |
 | `+0xF6` | sky visible |
 | `+0xFC` | vehicle matrix buffer (0x30 per slot: rotation, translation) |
 
