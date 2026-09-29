@@ -19,9 +19,9 @@ What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 - **Checks:** `tools/gate.py` (rustfmt, clippy `-D warnings`, all tests with data required, Python tests, fixture manifest, notes, `NOT 1:1` markers) passes 7/7. The ledger has 36 open entries and 35 closed.
 - **Not yet:** boot → menus → race in our code (the menus port has logic but no drawing: U3, U7); the garage screens (Kind18); coverage of the 415 functions never reached; the high-resolution view agrees with the reference frame only 49% exactly (R27).
 - **Structural debt still open (from the 2026-09-29 audit):**
-  - 52% of the Rust keeps state in a GBA-layout RAM image (the typed `World` step);
-  - the viewer's own camera copy (`game::Chase`) and two racing-line models (D16);
-  - ROM data read by hard-coded BN7E offsets (`GameData` step);
+  - most of the sim and game still keep state in a GBA-layout RAM image (the typed `World` step; the camera is typed, the car step in progress);
+  - two racing-line models (D16);
+  - ROM data read by hard-coded BN7E offsets (`GameData` exists; each migrated subsystem moves its offsets into `data::bn7e`);
   - several Closed claims have no test in the repo.
 
   (Fixed since the audit: silent test skips, fixture provenance, duplicated helpers, recorders and oracle drivers.)
@@ -50,8 +50,8 @@ Everything is merged and pushed (`origin/main`), nothing runs, the gate passes.
 Done: the test kit and merge gate (`tools/gate.py`, `docs/engine/testkit.md`, `docs/engine/fixtures.csv`); one recorder, one oracle CLI, one script loader (`tools/record.py`, `tools/oracle/cases.py`); one copy of the game's maths (`crates/nfsgba-fixed`), one decoder, one dump reader, one copy of each shared helper; ledgers gated (every `NOT 1:1` names an open ID).
 
 Left, in order:
-1. **One viewer path:** drive every viewer mode through `nfsgba-game` (one camera: drop the viewer's `game::Chase`; closes R28).
-2. **Typed `World`:** move each subsystem off the GBA RAM image to typed state behind the replay tests (car, AI and traffic, camera and slots, HUD, `race_init`, menus); RAM images only in tests; ROM data parsed once into `GameData` with the BN7E offsets in one layout table; one racing-line model (D16).
+1. ~~**One viewer path**~~ (done 2026-09-29, R28 closed): every race mode runs through `nfsgba-game`; routes are built in Rust (`race_init::apply_setup` + `race_start`).
+2. **Typed `World`** (the IW4L / Skate 3 style the user wants): each subsystem off the GBA RAM image onto typed state behind the replay tests. Conventions and the order: `docs/engine/typed-state.md` (`layout!`, `state/`, `GameData`, adapters in `view/`). Done: the camera. In progress: the car step (with D16). Then AI and traffic, the matrix slots, `race_init` (also move its `RaceView` readers into `view/`), the rest of the HUD, the menus (their own RAM image `menu::Gba` lives in `nfsgba-formats`, below `layout!` in `nfsgba-sim`: plan where `Mem` and `layout!` live first). Last, `Game` holds the `World` and RAM images exist only in tests.
 
 ### 3. Milestones after that
 
@@ -74,7 +74,7 @@ Rules:
 - **Exact where it is observable** (the contract in `docs/DECISIONS.md`): gameplay state, rules, AI, physics, audio samples, save bytes, the 240×160 frame. Invisible internals (heap neighbour bytes, stale registers, mid-frame IRQ timing) are documented once as a ledger row and not chased further unless they change something observable.
 - **Minimal docs.** Code comments, one `docs/FIDELITY.md` row and address/symbol rows per finding (`docs/engine/notes/*.<agent>.csv` → `tools/notes_merge.py --write`). No prose write-ups, no "Integration notes" sections, no long reports.
 - **Better code, not just more.** New code on typed state, one copy of each helper (`nfsgba-fixed`, `nfsgba-testkit`), small modules; no new RAM-image code.
-- **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; worktrees share `CARGO_TARGET_DIR` and are removed after merging; an emulator session is stopped by its own PID.
+- **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; each worktree builds into its own `target/` (never a shared `CARGO_TARGET_DIR`: cargo then reuses another worktree's build of a crate and tests the wrong code) and is removed after merging; an emulator session is stopped by its own PID.
 
 ## Environment notes
 
