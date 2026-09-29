@@ -108,8 +108,12 @@ fn skipped(m: &Mem, len: usize) -> Vec<bool> {
     for (r, _) in scratch(m) {
         mark(r, true);
     }
-    for i in common::instances(m).iter().filter(|i| i.size > 0) {
+    // Structs can share bytes (the profile has several views): skip every extent first, then compare every field.
+    let all = common::instances(m);
+    for i in all.iter().filter(|i| i.size > 0) {
         mark(i.base..i.base + i.size, true);
+    }
+    for i in all.iter().filter(|i| i.size > 0) {
         for &(_, o, n) in i.fields {
             mark(i.base + o..i.base + o + n, false);
         }

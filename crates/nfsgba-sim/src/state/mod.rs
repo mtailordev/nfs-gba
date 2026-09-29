@@ -12,6 +12,9 @@ pub mod slots;
 pub use hud::*;
 pub use slots::*;
 
+pub mod menu;
+pub use menu::*;
+
 use nfsgba_formats::render::Piece;
 
 use crate::layout;
@@ -282,6 +285,8 @@ mod tests {
         assert_disjoint::<Screen>("Screen");
         assert_disjoint::<ViewPort>("ViewPort");
         assert_disjoint::<ListEntry>("ListEntry");
+        assert_disjoint::<MenuGlobals>("MenuGlobals");
+        assert_disjoint::<MenuProfile>("MenuProfile");
         assert_disjoint::<Profile>("Profile");
         assert_disjoint::<Piece>("Piece");
         assert_disjoint::<CarProfile>("CarProfile");

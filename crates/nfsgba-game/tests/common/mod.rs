@@ -5,9 +5,9 @@ use nfsgba_sim::{
     Mem,
     layout::{Field, Layout},
     state::{
-        Camera, Car, CarGlobals, CarProfile, CarRecord, Entity, HudMessages, HudVars, Input, ListEntry, Profile, Query,
-        Race, RaceSetup, Screen, SectionRec, SectorOffset, ShadowOam, SlotGlobals, Sprite, SpritePool, TrafficBlock,
-        ViewPort, WORLD, WaypointRec, WorldHeader,
+        Camera, Car, CarGlobals, CarProfile, CarRecord, Entity, HudMessages, HudVars, Input, ListEntry, MenuGlobals,
+        MenuProfile, Profile, Query, Race, RaceSetup, Screen, SectionRec, SectorOffset, ShadowOam, SlotGlobals, Sprite,
+        SpritePool, TrafficBlock, ViewPort, WORLD, WaypointRec, WorldHeader,
     },
 };
 
@@ -45,6 +45,8 @@ pub fn instances(m: &Mem) -> Vec<Instance> {
         at::<CarGlobals>(0),
         at::<Query>(0),
         at::<CarProfile>(m.u32(0x0300_56EC)),
+        at::<MenuGlobals>(0),
+        at::<MenuProfile>(m.u32(0x0300_56EC)),
         at::<ViewPort>(w.view.addr),
         at::<ListEntry>(w.visible.addr),
         at::<Profile>(race.profile.addr),
