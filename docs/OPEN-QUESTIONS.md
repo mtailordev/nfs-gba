@@ -43,6 +43,16 @@ Check each against the ROM during coverage:
 - **The Summary screen's four car bars** (acceleration, top speed, handling, visual): which values feed them?
 - **Fresh-profile defaults** (chase view, MPH, HUD on, automatic): confirm in `profile_reset`.
 
+## From external research (2026-09-30; notes in `data/reference/research.md`, not in git)
+
+Coverage targets to confirm from the ROM (text table, career tables, route and car tables):
+- **66 career events** in five crew sections (Lucky 7's, Eastsiders, Syrens, Corps, Krimson Crew) plus The Gauntlet (races in sequence); two bosses per section.
+- **15 player cars** and **4 traffic models**; car prices in points.
+- **30 named routes:** 12 circuits and 18 sprints (the ROM has more route records: which are the others?).
+- **Garage:** performance and body parts, paint, vinyls, window tint, a Style meter, a Drivetrain screen (clutch, gearing, traction control), a tuning-rate percentage.
+- **Link play:** reviews say there is no multiplayer, but the code has link-play paths (`0x03005624`, the key-packet functions in `read_keys`). Is it reachable from the menus?
+- **Cops, free roam:** reviews and the booklet say neither exists; none was seen in the code (D4).
+
 ## Answered
 
 - ~~The 65-entry function table at `0x7F38B8`~~ **Answered:** the entity handler table (`update_entities`; world `+0x78` by entity `+0x4E`) ([engine/physics.md](engine/physics.md)).
