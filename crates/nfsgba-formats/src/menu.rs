@@ -74,7 +74,13 @@ pub struct Gba {
     pub oam: Vec<u8>,
     pub calls: Vec<(u32, Vec<u32>)>,
     pub returns: std::collections::HashMap<u32, u32>,
+    /// C strings the game builds on its stack (numbers, times) and passes to unported text primitives by pointer:
+    /// the port passes `STACK_TEXT + index` instead, and the tests compare the contents.
+    pub texts: Vec<Vec<u8>>,
 }
+
+/// Where [`Gba::text_arg`] strings "live": pointer arguments from here up index `Gba::texts`.
+pub const STACK_TEXT: u32 = 0x0300_7400;
 
 impl Gba {
     /// An mGBA dump (`<prefix>.{wram,iwram,io,palette,vram,oam}.bin`, `tools/mgba_ctl.py dump`).
@@ -90,7 +96,14 @@ impl Gba {
             oam: read("oam")?,
             calls: Vec::new(),
             returns: Default::default(),
+            texts: Vec::new(),
         })
+    }
+
+    /// A stack string argument (see `texts`).
+    pub fn text_arg(&mut self, s: Vec<u8>) -> u32 {
+        self.texts.push(s);
+        STACK_TEXT + self.texts.len() as u32 - 1
     }
 
     fn at(&self, addr: u32) -> (&[u8], usize) {
@@ -247,13 +260,99 @@ pub fn enter_kind(screen: u32) -> Option<Kind> {
 
 /// Runs a screen handler (`phase`: 0 enter, 1 update, 2 draw, 3 exit): the ported ones in Rust, the others as
 /// `Gba::unported` calls.
-fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
+pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
+    let full = args.first().copied().unwrap_or(0);
     match (kind, phase) {
         (Kind::Intro, 0) => intro_enter(g),
         (Kind::Intro, 1) => intro_update(g),
         (Kind::Intro, 2) => intro_draw(g),
-        (Kind::Intro, 3) => g.unported(0x0813_72D8, &[WORLD]), // intro_exit (0x08132780) is only this call
+        (Kind::Kind7, 0) => kind7_enter(g),
+        (Kind::Kind7, 1) => kind7_update(g),
+        (Kind::Kind7, 2) => kind7_draw(g, full),
+        // Every kind's exit handler (`0x08132780`, `0x0812E850`, …) is only this call: the menu scene's teardown.
+        (_, 3) => g.unported(SCENE_EXIT, &[WORLD]),
         _ => g.unported(kind.handlers()[phase], args),
+    }
+}
+
+const SCENE_EXIT: u32 = 0x0813_72D8; // (world): FUN_08139B7C, the menu scene's teardown
+const LOAD_MENU_DESCRIPTOR: u32 = 0x0813_9C8C; // (world, descriptor)
+const UNPACK_TO_BUFFER: u32 = 0x0816_3D30; // (packed texels, destination): the ring decoder on the game's heap (U7)
+const SPRITE_SCREEN_SELECT: u32 = 0x0816_1EEC; // (sprite screen, index)
+const SPRITE_SCREEN_UPDATE: u32 = 0x0816_1C24; // (sprite screen, init)
+const MENU_DESCRIPTOR: u32 = 0x087F_2FE8;
+const MENU_MATERIALS: u32 = 0x0834_5114;
+const MENU_TEXELS: u32 = 0x0816_C244;
+const MENU_PALETTES: u32 = 0x0833_EF14;
+
+/// `menu_scene_setup_a` (`0x081370D4`, a screen entered from outside the menus: `SCREEN_ENTERED` 0) and `_b`
+/// (`0x081371A4`): the screen's background menu material (unpacked when packed), its menu palette
+/// (`0x33EF14 + palette·0x200` → world `+0x30`, the base palettes), OBJ palette 1 scaled to black, and its sprite
+/// screen (`0xFFFF`: none). `_a` first waits a VBlank, blacks out BG palette RAM, clears `MENU_EXIT` and loads
+/// the menu descriptor. This is where each screen's palette comes from (FIDELITY U4).
+pub fn menu_scene_setup(g: &mut Gba, material: u32, palette: u32, sprite: u32) {
+    if g.u32(SCREEN_ENTERED) == 0 {
+        g.unported(VBLANK_INTR_WAIT, &[]);
+        fill_bg_palette(g, 0, 0, 0x100);
+        g.set_u32(MENU_EXIT, 0);
+        g.unported(LOAD_MENU_DESCRIPTOR, &[WORLD, MENU_DESCRIPTOR]);
+    }
+    let m = MENU_MATERIALS.wrapping_add(material.wrapping_mul(0x24));
+    if g.u16(m + 2) & 0x40 != 0 {
+        let (src, dst) = (g.u32(m + 8).wrapping_add(MENU_TEXELS), g.u32(0x0300_57F0));
+        g.unported(UNPACK_TO_BUFFER, &[src, dst]);
+    }
+    g.set_u32(WORLD + 0x30, palette.wrapping_mul(0x200).wrapping_add(MENU_PALETTES));
+    g.set_u32(WORLD + 0x34, MENU_PALETTES + 0x200);
+    g.set_u32(WORLD + 0x20, MENU_MATERIALS);
+    g.set_u32(WORLD, MENU_TEXELS);
+    scale_obj_palette(g, MENU_PALETTES + 0x200, [0, 0, 0], 0, 0x100);
+    set_base_palette(g, g.u32(WORLD + 0x30));
+    if sprite != 0xFFFF {
+        g.unported(SPRITE_SCREEN_SELECT, &[WORLD + 0xA4, sprite]);
+        g.unported(SPRITE_SCREEN_UPDATE, &[WORLD + 0xA4, 1]);
+    }
+}
+
+/// `FUN_0815E04C` (start, colour, count): BG palette entries from `start` set to `colour`.
+fn fill_bg_palette(g: &mut Gba, start: u32, colour: u16, count: u16) {
+    let mut i = start;
+    for _ in 0..count {
+        g.set_u16(0x0500_0000 + 2 * (i & 0xFFFF), colour);
+        i = (i & 0xFFFF) + 1;
+    }
+}
+
+/// `FUN_08161754` (source, r, g, b, first, n): OBJ palette entries `first..first + n` from `source`, each channel
+/// times its factor / 256, capped at 31.
+fn scale_obj_palette(g: &mut Gba, src: u32, k: [u32; 3], first: u32, n: u32) {
+    for i in first..first + n {
+        let c = g.u16(src + 2 * i) as u32;
+        let [r, gr, b] = [0, 5, 10].map(|s| (((c >> s) & 0x1F) * k[s as usize / 5] >> 8).min(0x1F));
+        g.set_u16(0x0500_0200 + 2 * i, (b << 10 | gr << 5 | r) as u16);
+    }
+}
+
+/// `set_base_palette` (`0x0812B21C`): a 0x200-byte palette into both base palette buffers (`FUN_08160D18`, which
+/// copies nothing when either pointer is null), then marks the palette dirty.
+pub fn set_base_palette(g: &mut Gba, src: u32) {
+    for dst in [g.u32(SECOND_PALETTE), g.u32(0x0300_55F0)] {
+        copy_mem(g, dst, src, 0x200, 0x20);
+    }
+    g.set_u32(PALETTE_DIRTY, 1);
+}
+
+/// `FUN_08160D18` (dst, src, bytes, width): a forward copy in words (width 0x20), halfwords (0x10) or bytes (8);
+/// nothing when a pointer is null or the size is below one unit.
+pub fn copy_mem(g: &mut Gba, dst: u32, src: u32, n: u32, width: u32) {
+    if dst == 0 || src == 0 {
+        return;
+    }
+    match width {
+        0x20 => (0..n >> 2).for_each(|i| g.set_u32(dst + 4 * i, g.u32(src + 4 * i))),
+        0x10 => (0..n >> 1).for_each(|i| g.set_u16(dst + 2 * i, g.u16(src + 2 * i))),
+        8 => (0..n).for_each(|i| g.set_u8(dst + i, g.u8(src + i))),
+        _ => {}
     }
 }
 
@@ -315,7 +414,7 @@ pub fn goto_screen(g: &mut Gba, s: i32) {
         for _ in 0..15 {
             g.unported(VBLANK_INTR_WAIT, &[]);
         }
-        g.unported(0x0815_E04C, &[0, 0, 0x100]);
+        fill_bg_palette(g, 0, 0, 0x100);
         g.set_u32(GAME_STATE, 5);
         g.set_u32(0x0300_5398, 0);
         g.set_u32(FADE, 0x10);
@@ -329,7 +428,7 @@ pub fn goto_screen(g: &mut Gba, s: i32) {
         g.unported(0x0813_6054, &[music]); // carbon_play_music
         if g.u32(ROUTE) != 0 {
             let (a, b) = (g.u32(0x0300_55F0), g.u32(SECOND_PALETTE));
-            g.unported(0x0816_0D18, &[a, b, 0x200, 0x20]);
+            copy_mem(g, a, b, 0x200, 0x20);
             g.unported(0x0813_A514, &[WORLD]);
         }
         return;
@@ -363,12 +462,7 @@ pub fn intro_enter(g: &mut Gba) -> u32 {
             g.u16(page + 6) as i16 as i32 as u32,
             g.u16(page + 8) as i16 as i32 as u32,
         );
-        let setup = if g.u32(SCREEN_ENTERED) != 0 {
-            0x0813_71A4
-        } else {
-            0x0813_70D4
-        };
-        g.unported(setup, &[WORLD, a, b, 0xFFFF]); // menu_scene_setup_b / _a
+        menu_scene_setup(g, a, b, 0xFFFF);
     }
     let deadline = g.u32(PROFILE) + 0x3B0;
     if g.u32(SCREEN) == 0x2F {
@@ -877,6 +971,171 @@ fn language_select(g: &mut Gba) {
     pick(g);
 }
 
+// The map screens (Kind7: 7 Quick Play circuits, 8 Quick Play sprints, 0xE the career district map, 0x11 the
+// career map). Map state `0x03006230`: `+0`/`+4` view x/y (8.8), `+8` cursor (i8), `+9` moved.
+const MAP: u32 = 0x0300_6230;
+const MAP_PALETTES: u32 = 0x0814_3284; // (): the map's zone colours into the second base palette
+const MAP_DRAW: u32 = 0x0814_35C4; // (): scrolls the view towards the cursor and draws the map and its markers
+/// Page records of the map screens (`0x7E50A4`, 0x14 bytes: `+2`/`+4` button prompts).
+const MAP_PAGES: u32 = 0x087E_50A4;
+
+/// `kind7_enter` (`0x0812E80C`): background 0xDA, menu palette 7; the map state (`FUN_0814397C`).
+pub fn kind7_enter(g: &mut Gba) -> u32 {
+    menu_scene_setup(g, 0xDA, 7, 0xFFFF);
+    // FUN_0814397C: the cursor starts on the district of profile +0x1FB (×2) on screen 0xE, else 0; view (1, 0.75).
+    let cursor = if g.u32(SCREEN) == 0xE {
+        (g.u8(g.u32(PROFILE) + 0x1FB) as i8 as u8).wrapping_shl(1)
+    } else {
+        0
+    };
+    g.set_u8(MAP + 8, cursor);
+    g.set_u8(MAP + 9, 1);
+    g.set_u32(MAP, 0x100);
+    g.set_u32(MAP + 4, 0xC0);
+    g.unported(MAP_PALETTES, &[]);
+    1
+}
+
+/// `FUN_081439C0` (cursor): moves the map cursor and marks it moved.
+fn map_select(g: &mut Gba, cursor: u8) {
+    g.set_u8(MAP + 8, cursor);
+    g.set_u8(MAP + 9, 1);
+}
+
+/// `kind7_update` (`0x0812E3D4`). Left/right move the cursor over 12 entries (18 on screen 8, and on 0x11 in mode
+/// 2; step 2 on 0xE). A depends on profile `+0x404`: 0 picks a track (screen 7: slot `0x7E472C[cursor]`, route
+/// number `0x7E4A70`; 8: sprint `cursor + 0x18`) if its district (unlock `0x117 +` cursor/2 or /3) is open and goes to
+/// screen 0x2D; 1 picks the district on 0xE (profile `+0x1FB`); 2 sets mode 3; 3 goes back.
+pub fn kind7_update(g: &mut Gba) -> u32 {
+    let step = if g.u32(SCREEN) == 0xE {
+        g.set_u8(MAP + 8, g.u8(MAP + 8) & 0xFE);
+        2
+    } else {
+        1
+    };
+    let profile = g.u32(PROFILE);
+    let s = g.u32(SCREEN);
+    let count: i8 = if s == 8 || (s == 0x11 && g.u8(profile + 0x404) == 2) {
+        18
+    } else {
+        12
+    };
+    if g.u16(KEYS) == 1 {
+        let cursor = g.i8(MAP + 8) as i32;
+        match g.u8(profile + 0x404) {
+            0 => {
+                let open = if g.u32(SCREEN) == 7 {
+                    unlock_is_locked(g, (cursor >> 1) + 0x117) == 0
+                } else {
+                    unlock_is_locked(g, crate::div(cursor, 3) as i8 as i32 + 0x117) == 0
+                };
+                if !open {
+                    g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
+                    return 1; // the locked beep skips the left/right handling
+                }
+                let slot = if g.u32(SCREEN) == 7 {
+                    g.u16(0x087E_472C_u32.wrapping_add((cursor as u32).wrapping_mul(2))) as u32
+                } else {
+                    (cursor + 0x18) as u32
+                };
+                g.set_u32(ROUTE, g.u16(0x087E_4A72_u32.wrapping_add(slot.wrapping_mul(4))) as u32);
+                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                goto_screen(g, 0x2D);
+            }
+            1 => {
+                if unlock_is_locked(g, (cursor >> 1) + 0x117) == 0 {
+                    g.set_u8(g.u32(PROFILE) + 0x1FB, (cursor >> 1) as u8);
+                    g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                    menu_back(g);
+                } else {
+                    g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
+                }
+            }
+            2 => {
+                g.set_u8(g.u32(PROFILE) + 0x404, 3);
+                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                map_select(g, 0);
+            }
+            3 => {
+                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                menu_back(g);
+            }
+            _ => {}
+        }
+        mark_screen_changed(g);
+    }
+    if g.u16(KEYS) & 0x20 != 0 {
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+        let v = (g.u8(MAP + 8) as u32).wrapping_sub(step) as u8;
+        g.set_u8(MAP + 8, if (v as i8) < 0 { (count - 1) as u8 } else { v });
+        map_select(g, g.u8(MAP + 8));
+    }
+    if g.u16(KEYS) & 0x10 != 0 {
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+        let v = g.u8(MAP + 8).wrapping_add(step as u8);
+        g.set_u8(MAP + 8, if count <= v as i8 { 0 } else { v });
+        map_select(g, g.u8(MAP + 8));
+    }
+    1
+}
+
+/// `kind7_draw` (`0x0812E5AC`): the map (`FUN_081435C4`), the heading (500; 0x1F5 on 0xE; 0x2E4 and a mode text on
+/// 0x11), the arrows (lit while their key-repeat delay runs) and the prompts; A's prompt reads 0x15A over a
+/// locked district.
+pub fn kind7_draw(g: &mut Gba, _full: u32) -> u32 {
+    let early = g.i8(MAP + 8) as i32;
+    let page = MAP_PAGES
+        + 0x14
+            * match g.u32(SCREEN) {
+                8 => 1,
+                0xE => 2,
+                0x11 => 3,
+                _ => 0,
+            };
+    g.unported(MAP_DRAW, &[]);
+    let mut left = g.u16(page + 2) as i16 as i32 as u32;
+    let neg1 = u32::MAX;
+    let district = match g.u32(SCREEN) {
+        0xE => {
+            g.unported(TEXT_MENU, &[0xC, 0x1F5, 2, 2, 0, 0]);
+            Some((early >> 1) + 0x117)
+        }
+        0x11 => {
+            g.unported(TEXT_MENU, &[0xC, 0x2E4, 2, 2, 0, 0]);
+            let key = if g.u8(g.u32(PROFILE) + 0x404) == 2 { 0x209 } else { 0xD3 };
+            g.unported(TEXT_MENU, &[0xC, key, 0xE6, 2, neg1, 0]);
+            None
+        }
+        s @ (7 | 8) => {
+            g.unported(TEXT_MENU, &[0xC, 500, 2, 2, 0, 0]);
+            let cursor = g.i8(MAP + 8) as i32;
+            Some(
+                if s == 7 {
+                    cursor >> 1
+                } else {
+                    crate::div(cursor, 3) as i8 as i32
+                } + 0x117,
+            )
+        }
+        _ => None,
+    };
+    if let Some(id) = district
+        && unlock_is_locked(g, id) != 0
+    {
+        left = 0x15A;
+    }
+    if g.i32(MESSAGE_BOX) < 0 {
+        let profile = g.u32(PROFILE);
+        let lit = |g: &Gba, off: u32| g.i8(profile + off) >= 1;
+        let m = if lit(g, 0x33C) { 0xA8 } else { 0xA7 };
+        g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 1, 0x48]);
+        let m = if lit(g, 0x33D) { 0xAA } else { 0xA9 };
+        g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 0xDF, 0x48]);
+        g.unported(MENU_BUTTON_PROMPTS, &[left, g.u16(page + 4) as i16 as i32 as u32, neg1]);
+    }
+    0
+}
+
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
     let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
@@ -1057,7 +1316,7 @@ pub fn menu_frame(g: &mut Gba) -> u32 {
         let flag = g.u32(PROFILE) + 0x404;
         if g.u8(flag) == 3 && g.u32(SCREEN) == 0x11 {
             g.set_u8(flag, 2);
-            g.unported(0x0814_39C0, &[0]);
+            map_select(g, 0);
         } else {
             menu_back(g);
         }
@@ -1147,7 +1406,7 @@ pub fn game_state_step(g: &mut Gba) {
             g.unported(0x0815_E9E8, &[0x0879_7C5C, t]);
             if g.u32(ROUTE) != 0 {
                 let (a, b) = (g.u32(0x0300_55F0), g.u32(SECOND_PALETTE));
-                g.unported(0x0816_0D18, &[a, b, 0x200, 0x20]);
+                copy_mem(g, a, b, 0x200, 0x20);
                 g.unported(0x0813_A514, &[WORLD]); // apply_sector_light_to_palette
             }
             game_state_step(g);
@@ -1254,7 +1513,7 @@ mod tests {
 
     /// Oracle cases saved by `tools/ui_menu_oracle.py <name>`.
     fn cases(name: &str) -> Option<Vec<serde_json::Value>> {
-        let path = data_dir().join(format!("work/e5298b24/menus/{name}.jsonl"));
+        let path = data_dir().join(format!("work/e5298b24/menus2/{name}.jsonl"));
         let text = std::fs::read_to_string(&path)
             .map_err(|e| eprintln!("skipping: no oracle cases {} ({e})", path.display()))
             .ok()?;
@@ -1311,6 +1570,23 @@ mod tests {
         replay("intro");
     }
 
+    /// Kind7, the map screens, handler by handler: `tools/ui_menu_oracle.py kind7`.
+    #[test]
+    fn map_screens_match_the_game() {
+        replay("kind7");
+    }
+
+    const KINDS: [Kind; 8] = [
+        Kind::List,
+        Kind::Kind7,
+        Kind::Career,
+        Kind::Event,
+        Kind::Setup,
+        Kind::Kind18,
+        Kind::Intro,
+        Kind::Kind38,
+    ];
+
     fn replay(name: &str) {
         let Some(rom) = crate::paint::tests::rom() else { return };
         let Some(cases) = cases(name) else { return };
@@ -1350,7 +1626,16 @@ mod tests {
                     goto_screen(&mut g, c["arg"].as_u64().unwrap() as i32);
                     None
                 }
-                _ => panic!("{f}"),
+                _ => {
+                    // A kind's handler called directly: enter and update return 1 or 0; draw and exit nothing.
+                    let a = u32::from_str_radix(&f[2..], 16).unwrap();
+                    let (kind, phase) = KINDS
+                        .iter()
+                        .find_map(|&k| k.handlers().iter().position(|&h| h == a).map(|p| (k, p)))
+                        .unwrap_or_else(|| panic!("{f}"));
+                    let r = run_handler(&mut g, kind, phase, &[c["arg"].as_u64().unwrap() as u32]);
+                    (phase < 2).then_some(r)
+                }
             };
             let want: std::collections::BTreeMap<u32, u8> = c["writes"]
                 .as_array()
@@ -1364,12 +1649,23 @@ mod tests {
                         .map(move |(i, b)| (a + i as u32, b))
                 })
                 .collect();
+            // Stub arguments: words, or ["s", hex] for a string the game built on its stack, which the port passes
+            // as `STACK_TEXT + i` (`Gba::texts[i]`); compared by content.
             let calls: Vec<(u32, Vec<u32>)> = c["calls"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(|k| {
-                    let args = k[1].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32);
+                    let args = k[1].as_array().unwrap().iter().map(|v| match v.as_u64() {
+                        Some(w) => w as u32,
+                        None => {
+                            let s = bytes(&v[1]);
+                            g.texts
+                                .iter()
+                                .position(|t| *t == s)
+                                .map_or(u32::MAX, |i| STACK_TEXT + i as u32)
+                        }
+                    });
                     (k[0].as_u64().unwrap() as u32, args.collect())
                 })
                 .collect();
@@ -1380,7 +1676,8 @@ mod tests {
                 diff.is_empty() && missing.is_empty(),
                 "case {n} {f} {snap}: extra {diff:x?} missing {missing:x?}"
             );
-            assert_eq!(g.calls, calls, "case {n} {f} {snap}: calls");
+            let texts: Vec<_> = g.texts.iter().map(|t| String::from_utf8_lossy(t)).collect();
+            assert_eq!(g.calls, calls, "case {n} {f} {snap}: calls (texts {texts:?})");
             if let Some(r0) = r0 {
                 assert_eq!(r0 as u64, c["r0"].as_u64().unwrap(), "case {n} {f} {snap}: result");
             }

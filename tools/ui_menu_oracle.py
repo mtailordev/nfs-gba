@@ -16,7 +16,7 @@ from oracle import REGS, Gba, _r, _w  # noqa: E402
 
 from common import data_dir  # noqa: E402
 
-OUT = data_dir() / "work" / "e5298b24" / "menus"
+OUT = data_dir() / "work" / "e5298b24" / "menus2"  # menus-2 cases (menus/ keeps the first menu port's)
 BUF, TARGET = 0x0201_0000, 0x0201_0400  # scratch EWRAM for palette buffers (restored after every call)
 FADE_IN, FADE_OUT = 0x0815_E530, 0x0815_E4D4  # buffer variants: (buf, target, first, n, step) / (buf, first, n, step)
 FADE_IN_BG, FADE_OUT_BG = 0x0815_E2F0, 0x0815_E290  # palette RAM 0x05000000: (target, first, n, step) / (first, n, step)
@@ -81,20 +81,30 @@ KIND_HANDLERS = [
     (0x081328F4, 0x08132AB8, 0x08133074, 0x081336BC), (0x08133708, 0x081338E0, 0x08133F2C, 0x081348D8),
     (0x081315A0, 0x081318E4, 0x08131FE0, 0x08132780), (0x08134DF0, 0x08134EB8, 0x08135340, 0x081354FC),
 ]
-PORTED = {0x081315A0, 0x081318E4, 0x08131FE0, 0x08132780}  # intro enter, update, draw, exit
+KIND_SCREENS = {  # kind name -> (index in KIND_HANDLERS, screens)
+    "list": (0, [0, 1, 2, 3, 4, 5, 6, 9, 27, 28, 29, 30, 35, 36, 45, 46]), "kind7": (1, [7, 8, 14, 17]),
+    "career": (2, [11, 12]), "event": (3, [13]), "setup": (4, [10, 15, 16]), "kind18": (5, [18, 19, 20]),
+    "intro": (6, [21, 22, 23, 24, 25, 26, 37, 47, 48]), "kind38": (7, [38, 39, 40, 41, 42, 43]),
+}
+# Ported handlers: every exit (each is only `FUN_081372D8(world)`), the intro kind and those listed per kind.
+PORTED_KINDS = ["intro", "kind7"]
+PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
-    0x08135FDC: 2, 0x0813550C: 1, 0x081439C0: 1, 0x0812B320: 0,  # sound, message box draw, screen 0x11, screen 15
-    0x08160E74: 0, 0x0815E9E8: 2, 0x08139E34: 1, 0x08160D18: 4, 0x0813A514: 1, 0x0813A954: 1,  # game state step
+    0x08135FDC: 2, 0x0813550C: 1, 0x0812B320: 0,  # sound, message box draw, screen 15
+    0x08160E74: 0, 0x0815E9E8: 2, 0x08139E34: 1, 0x0813A514: 1, 0x0813A954: 1,  # game state step
     0x08135F38: 0, 0x0812EAAC: 1, 0x081396C4: 1, 0x08136054: 1,
     0x08162228: 1, 0x0816223C: 1, 0x081621F0: 4, 0x0812B084: 0, 0x08161F38: 1, 0x0816102C: 0,  # main_frame
     0x0815DFD8: 1, 0x0812B040: 0, 0x08142090: 0,
-    0x08151454: 0, 0x0815E04C: 3, 0x081372E4: 1, 0x08143010: 1, 0x08139E10: 1,  # vblank wait; goto_screen(0x82)
+    0x08151454: 0, 0x081372E4: 1, 0x08143010: 1, 0x08139E10: 1,  # vblank wait; goto_screen(0x82)
     0x081419C0: 7, 0x08149FD8: 1, 0x08149D84: 1,  # intro: title text, save write, save load
-    0x081371A4: 4, 0x081370D4: 4, 0x0813644C: 2, 0x081356DC: 0,  # intro enter: menu scene b/a, health image, profile_reset
+    0x0813644C: 2, 0x081356DC: 0,  # intro enter: health image, profile_reset
+    0x08139C8C: 2, 0x08163D30: 2, 0x08161EEC: 2, 0x08161C24: 2,  # menu scene: descriptor, unpack, sprite screen
     0x081364C4: 1, 0x08141578: 6, 0x08136E60: 4, 0x08136D74: 4, 0x08141B40: 7, 0x0812BD60: 3,  # drawing primitives
-    0x081372D8: 1,  # intro exit
+    0x081372D8: 1,  # scene teardown (every exit handler)
+    0x08143284: 0, 0x081435C4: 0,  # map screens: zone colours, map draw
 })
+STACK_TEXT = (0x0300_7000, 0x0300_7C00)  # stub pointer arguments in here are the game's stack strings
 MENU_FRAME, GAME_STATE_STEP, MAIN_FRAME, GOTO_SCREEN = 0x0812B5F0, 0x0812ACEC, 0x0812AE64, 0x0812BB5C
 DRAW_SCREEN = 0x0812D334
 PROFILE_AT = 0x0200_0808
@@ -104,11 +114,16 @@ def run(gba, fn, mem, ret, regs=None):
     """One oracle call with the stubs; returns the result, the writes and the stub calls."""
     calls = []
 
+    def cstring(uc, a):
+        s = bytes(uc.mem_read(a, 64))
+        return ["s", s[:s.index(0)].hex() if 0 in s else s.hex()]
+
     def stub(addr, n):
         def f(uc):
             sp = uc.reg_read(REGS["sp"])
             stack = [int.from_bytes(uc.mem_read(sp + 4 * i, 4), "little") for i in range(max(0, n - 4))]
-            calls.append([addr, [_r(uc, i) for i in range(min(n, 4))] + stack])
+            args = [_r(uc, i) for i in range(min(n, 4))] + stack
+            calls.append([addr, [cstring(uc, a) if STACK_TEXT[0] <= a < STACK_TEXT[1] else a for a in args]])
             _w(uc, 0, ret.get(addr, 0))
         return f
 
@@ -235,6 +250,69 @@ def intro(_gba, rng, n=2400):
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
                           writes=[[a, b.hex()] for a, b in writes], calls=calls))
     return cases
+
+
+MENU_SNAPS = ["ui-2d/lang", "ui-2d/n7", "ui-2d/n9", "race-rules/a4", "race-rules/v2"]
+
+
+def menu_state(rng, screens):
+    """The menu globals every kind reads, randomised."""
+    pick = rng.choice
+    return [
+        (0x030056EC, word(PROFILE_AT)),
+        (0x03005944, word(pick(screens))),
+        (0x03005780, word(pick([0] * 4 + [7]))),
+        (0x03005630, word(pick([0] * 4 + [16, -16]))),
+        (0x030059F0, word(pick([-1] * 4 + [0, 1, 2]))),
+        (0x030064C0, struct.pack("<H", pick([0, 1, 1, 2, 8, 0x10, 0x20, 0x30, 0x40, 0x80, 0x100, 0x200, 4,
+                                             rng.randrange(0x400)]))),
+        (0x0300593C, bytes([pick([0xFF, 0, 1, 2, 3])])),
+        (PROFILE_AT + 0x344, bytes(rng.randrange(0x31) for _ in range(8))),
+        (PROFILE_AT + 0x33C, bytes(pick([0, 1, 3, 0xFF]) for _ in range(8))),
+        (0x03005938, word(pick([0, 1]))),
+        (0x03005948, word(pick([0, 1]))),
+        (0x030000A0, word(pick([0, 1, 2]))),
+        (0x03005600, word(rng.randrange(5))),
+        (0x03005388, word(rng.randrange(44))),
+        (0x03005610, word(pick([0, 1]))),
+        (0x030064C8, word(rng.randrange(256))),
+        (PROFILE_AT + 0x42D, bytes(pick([0, 0xFF, rng.randrange(256)]) for _ in range(40))),  # unlock bits
+        (PROFILE_AT + 0x10, bytes([rng.randrange(15), rng.randrange(15), pick([0, 1]), 0])),
+    ]
+
+
+def kind_extra(rng, kind):
+    """The state a kind's handlers read beyond `menu_state`."""
+    pick = rng.choice
+    if kind == "kind7":
+        return [
+            (0x03006230, word(rng.randrange(1 << 16)) + word(rng.randrange(1 << 16))
+             + bytes([pick(list(range(-2, 20))) & 0xFF, pick([0, 1])])),
+            (PROFILE_AT + 0x404, bytes([pick([0, 0, 1, 2, 3, 4])])),
+            (PROFILE_AT + 0x1FB, bytes([rng.randrange(8)])),
+        ]
+    return []
+
+
+def kind_cases(rng, kind, n):
+    """Each handler of `kind` (enter, update, draw with `full`, exit) called directly on random menu states."""
+    gbas = {s: Gba(s) for s in MENU_SNAPS}
+    handlers = KIND_HANDLERS[KIND_SCREENS[kind][0]]
+    cases = []
+    for i in range(n):
+        snap = rng.choice(MENU_SNAPS)
+        mem = menu_state(rng, KIND_SCREENS[kind][1]) + kind_extra(rng, kind)
+        fn, arg = handlers[i % 4], rng.choice([0, 1])
+        ret = {0x08149FD8: rng.choice([0, 0, 1])}
+        r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
+        cases.append(dict(snap=snap, fn=hex(fn), arg=arg, mem=[[a, b.hex()] for a, b in mem],
+                          ret={hex(a): v for a, v in ret.items()}, r0=r0,
+                          writes=[[a, b.hex()] for a, b in writes], calls=calls))
+    return cases
+
+
+def kind7(_gba, rng, n=1600):
+    return kind_cases(rng, "kind7", n)
 
 
 def main(which):
