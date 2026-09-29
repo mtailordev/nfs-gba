@@ -163,6 +163,9 @@ def game_unpack(read, src):
 def run(gba, fn, mem, ret, regs=None, stack=()):
     """One oracle call with the stubs; returns the result, the writes and the stub calls."""
     calls = []
+    # NOT 1:1 (N1): a text key past the table (a garbage racer id) makes the game print BIOS bytes; the port reads
+    # zeros there, so the oracle's BIOS image is zeroed (its SWIs run in Python).
+    gba.poke(0, bytes(0x4000))
 
     def cstring(uc, a):
         s = bytes(uc.mem_read(a, 64))

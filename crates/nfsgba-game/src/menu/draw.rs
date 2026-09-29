@@ -35,12 +35,18 @@ impl Ctx<'_> {
         Some(ui::font(self.rom, f, ui::FONT_MATERIALS[f]))
     }
 
-    /// String `key` of the text table in the current language (a language above 4 reads the first row).
-    pub fn table_text(&self, key: u32) -> Vec<u8> {
+    /// The pointer in slot `key` of the text table for the current language (a language above 4 reads the first
+    /// row). A key past the row's 977 strings reads the next row's or other data, as the game does.
+    pub fn table_pointer(&self, key: u32) -> u32 {
         // The text functions' jump table: language 0..4 read rows 1, 2, 4, 3, 5 (the row order is not the language's).
         let row = [1, 2, 4, 3, 5].get(self.language as usize).copied().unwrap_or(0);
         let at = TEXT_TABLE + 4 * (977 * row + key as usize);
-        let s = u32::from_le_bytes(self.rom[at..at + 4].try_into().unwrap()) as usize & 0x1FF_FFFF;
+        u32::from_le_bytes(self.rom[at..at + 4].try_into().unwrap())
+    }
+
+    /// String `key` of the text table (in the ROM).
+    pub fn table_text(&self, key: u32) -> Vec<u8> {
+        let s = self.table_pointer(key) as usize & 0x1FF_FFFF;
         let n = self.rom[s..].iter().position(|&b| b == 0).unwrap();
         self.rom[s..s + n].to_vec()
     }

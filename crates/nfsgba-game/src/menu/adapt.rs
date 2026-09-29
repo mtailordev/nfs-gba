@@ -245,7 +245,11 @@ impl Gba {
             self.consumed.insert(i);
             return self.texts[i].clone();
         }
-        (addr..).map(|a| self.u8(a)).take_while(|&b| b != 0).collect()
+        // ponytail: the BIOS (below 0x02000000) reads as zeros, so a null text pointer is an empty string.
+        (addr..)
+            .map(|a| if a >> 24 < 2 { 0 } else { self.u8(a) })
+            .take_while(|&b| b != 0)
+            .collect()
     }
 
     fn draw_ctx(&self) -> draw::Ctx<'_> {
@@ -295,7 +299,8 @@ impl Gba {
             if arg > 0xFFFF {
                 g.cstring(arg)
             } else {
-                g.draw_ctx().table_text(arg)
+                let p = g.draw_ctx().table_pointer(arg); // may point outside the ROM for a key past the table
+                g.cstring(p)
             }
         };
         let drawn = [
