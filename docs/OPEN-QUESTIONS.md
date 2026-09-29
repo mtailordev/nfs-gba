@@ -11,7 +11,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Code
 
-10. **What are the tables at `0x794000–0x799B88`** (referenced 49 times from game code) **and the ~41 KiB at `0x7F5CC8–0x800000`?**
+10. **What is `0x78E714–0x799B88`** (46 KiB right after the last racing line; 49 code references into its `0x794000` part), **the 48-byte byte map at `0x7F5CC8`, and the 4 KiB table at `0x722DD4`** (level descriptor `+0x28`)? ROM attribution: 98.907% of the ROM is claimed ([engine/harness.md](engine/harness.md)).
 
 18. **Menu materials 6, 16–152 and most overlays:** what are they, and which palette does each screen use (FIDELITY U4)?
 19. **HUD details:** material kind bit 4 (materials 5–33), element bytes `+0x0F`/`+0x10`, and which race mode HUD screen 3 serves.

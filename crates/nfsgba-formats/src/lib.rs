@@ -405,7 +405,7 @@ pub fn light_factor(light: [u8; 3]) -> [f32; 3] {
 }
 
 /// libgcc `__divsi3` as the game calls it (`FUN_0816a708`): truncates toward zero, and x / 0 = 0.
-fn div(a: i32, b: i32) -> i32 {
+pub fn div(a: i32, b: i32) -> i32 {
     if b == 0 { 0 } else { a.wrapping_div(b) }
 }
 

@@ -23,6 +23,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x15CF2C` / `0x15CFD4` | | LZ77-packed ARM mixer, mode 0 / **mode 1** (→ IWRAM `0x03005A00`, 0x3EC bytes) | formats/audio |
 | `0x14FC38`, `0x165154`, `0x168264` | | ARM code copied to IWRAM for races (`0x03000000 + off − 0x164F14` etc.) | below |
 | `0x169208` | | ARM ring-buffer LZ77 decoder, the game's decompressor (IWRAM copy) | formats/ui |
+| `0x224EE0` | | data inside the image bank; Ghidra's `FUN_08224ee0` is a false function | engine/harness |
 | `0x16C244–0x402000` | 294 blobs | LZ77 image bank; `0x16C244` is the menu texel base (menu descriptor `+0x10`) | formats/lz77-images, formats/ui |
 | `0x33EF14` | 49 × 0x200 | menu palettes (menu descriptor `+0x04`) | formats/ui |
 | `0x345114` | 273 × 0x24 | menu materials (menu descriptor `+0x24`) | formats/ui |
@@ -50,11 +51,11 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x71F168` | 128 B | unexplained: zero apart from one word (the only unowned bytes of `0x4018C0–0x71F1E8`) | formats/ui |
 | `0x71F1E8` | 14 × 0x200 | city palettes (rec `+0x00`); an environment picks `+0x5A × 2` | formats/city-sectors |
 | `0x720DE8` | 227 × 0x24 | city materials (rec `+0x1C`) | formats/city-sectors |
-| `0x722DD4` | | unknown (rec `+0x28` → world `+0x2C`) | |
+| `0x722DD4` | 4 KiB | unknown table (rec `+0x28` → world `+0x2C`) | |
 | `0x723DD4` | 1,113 × 0x30 | sectors (rec `+0x18`) | formats/city-sectors |
 | `0x730E84` | 4,423 × 0x44 | walls (rec `+0x14`) | formats/city-sectors |
 | `0x77A000–0x78E000` | | route data: template entities, racing lines | formats/race-routes |
-| `0x794000–0x799B88` | ~22 KiB | **unknown tables**, referenced 49 times from game code (`0x12AD40…`) | |
+| `0x78E714–0x799B88` | 46,196 B | **unknown**, starting right after route 42's racing line; its `0x794000…` part is referenced 49 times from game code (`0x12AD40…`) | engine/harness |
 | `0x799B88–0x7BFC53` | | text strings (the text table's targets) | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
 | `0x7BFC68` | | camera probe vector (0, 0, 72) for the start-sector search | engine/renderer |
@@ -122,7 +123,8 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F4598` | 1 per route | minimap palette per route | formats/ui |
 | `0x7F5BA4` | | pointers to the linear-mode step tables | formats/audio |
 | `0x7F5BC8` | 256 | character → glyph map | formats/ui |
-| `0x7F5CC8–0x800000` | ~41 KiB | **unknown**; starts like another byte map (`e0 e1 e2 …`); about one plausible code reference (`0x169B20`); the ROM has no padding | |
+| `0x7F5CC8` | 48 B | unknown byte map (`e0 e1 e2 …`); one plausible code reference (`0x169B20`) | engine/harness |
+| `0x7F5CF8–0x800000` | | zero fill to the end of the ROM | engine/harness |
 | `0x7F0636` | i16 per `car·0x10 + rec[0]` | entity `+0x64` source (clamped at 0) | formats/car-paint |
 | `0x7F4344` | 12 × u32 | opponent 1's paint per wingman 1..12 (`pick_opponent_cars` reads `[wingman − 1]`; wingman 0 reads `0x7F4340` = 11) | formats/car-paint |
 

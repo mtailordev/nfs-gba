@@ -25,6 +25,8 @@ Done and committed:
 
 ## Working rules (from the user)
 
+- **Port against the oracle first** (`tools/oracle`, `docs/engine/harness.md`): run the game's function on generated inputs over a snapshot, save the cases as JSONL, and have a Rust test replay them. Use mGBA only for new snapshots and whole-frame traces. Agents write `docs/engine/notes/symbols.<agent>.csv` and `addresses.<agent>.csv`; the parent runs `tools/notes_merge.py`.
+
 - **Absolute 1:1 rewrite, no compromise.** Every approximation is marked `NOT 1:1` in code and listed in `docs/FIDELITY.md`, with the game function that holds the exact behaviour. Close entries only after checking them against the reference build.
 - **Never find anything twice.** Every ROM offset, RAM address or function goes into `docs/engine/address-map.md` and `docs/engine/symbols.csv` (applied to Ghidra by `tools/ghidra/ApplySymbols.java`).
 
@@ -47,7 +49,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **entity-draw:** done and merged. `render/entities.rs`: the car draw is exact, so `draw_world` reproduces whole frames pixel for pixel (17 captures); R12 closed. Matrix-slot building is still an input (R25).
 - **viewer-geometry:** R23 racers and atlas from `atlas`, R8, R10, R11, R14, R19, R22 in the viewer, plus an original-resolution mode from `render::draw_world`. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
 - **hud-logic:** U1/U2, the HUD element logic and the minimap, traced frame by frame against shadow OAM, tiles and OBJ palette. Owns `ui.rs` (+ `hud.rs`), `docs/formats/ui.md`, `tools/ui_*`.
-- **harness:** shared tooling so agents stop hand-driving mGBA: a unicorn function oracle (call any game function on a RAM snapshot, diff its writes), a function coverage map over real play, and a merge tool for machine-readable integration notes. Owns `tools/oracle/`, `tools/coverage*`, `tools/notes_merge.py`, `docs/engine/harness.md`.
+- **harness:** done and merged. `tools/oracle` (unicorn function oracle; `trace_oracle.py` runs on it; 93,169 cases vs the Rust ports, 0 mismatches), `coverage.py` (465 of 880 functions run in 4 scenarios; 200 of those unnamed), `rom_attribution.py` (98.907% of the ROM claimed), `notes_merge.py`. See `docs/engine/harness.md`.
 - **ai-traffic:** D4's AI part: opponent handler 0x29 and traffic handler 0x36, trace-exact. Owns new `nfsgba-sim` modules (`ai.rs`, `traffic_ai.rs`), `docs/engine/ai.md`.
 - **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
 
@@ -65,6 +67,7 @@ Next, driven by `docs/FIDELITY.md`:
 - Toolchains: Rust 1.98.1 (with clippy and rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10). The analysis venv is `.venv`.
 - `~/.cargo/bin` may be missing from PATH in the tool shells: prefix `export PATH="/c/Users/cyntrex/.cargo/bin:$PATH"`.
 - Agents: never kill `mGBA.exe` by image name (one agent did, ending the others' sessions); stop your own PID with `mgba_ctl.py stop`.
+- Tools that need unicorn, capstone or numpy run with `.venv/Scripts/python.exe`; Python tool tests: `cd tools && ../.venv/Scripts/python.exe -m unittest discover -p "test_*.py"` (22 tests).
 - In the Bash tool, `python` is a pyenv-win batch shim. **Multi-line `python -c` and `python - <<EOF` get mangled or hang**, so write a script file into the scratchpad instead.
 - In PowerShell, `@(118039/48, -30/48)` fails to parse; pass precomputed numbers.
 - The mGBA stable build from scoop creates `cheats/ patch/ savegame/ savestate/ screenshot/` in its current folder. The tools agent left such folders in the repo root. They are untracked, and the user was asked to delete them.

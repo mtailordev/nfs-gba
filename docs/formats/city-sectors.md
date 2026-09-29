@@ -49,9 +49,9 @@ The material table (level record `+0x1C`) holds **227 self-indexed records** of 
 
 There are 12 skies, each a pair of consecutive materials (`nfsgba_formats::skies`):
 - a **240×64 skyline panorama** (kind 0, row-major, city palette, colour 0 = sky): night city skylines, an industrial skyline, a quarry, snowy mountains, rocky hills;
-- a **1×128 material holding 64 BGR555 colours**: the sky gradient from top to bottom. The game probably writes it per scanline, which would also explain part of the odd runtime palette.
+- a **1×128 BGR555 gradient** (kind 1, 256 bytes), top to bottom. The game writes it into palette entry 0 every 2 scanlines; the chase view uses the first 64 colours and the bumper view reaches entry 76 ([engine/sky.md](../engine/sky.md)).
 
-Which sky belongs to which district or event, and the panorama's scroll factor, are not decoded; the viewer lets you cycle through them.
+Each environment (level descriptor `+0x5E`/`+0x60`) picks its sky, and each event picks its environment (`0x7F2588`, [career.md](career.md)); the skyline scrolls by yaw only, repeating 4 times per turn ([engine/sky.md](../engine/sky.md)).
 
 ## Sector (0x30 bytes)
 
@@ -106,7 +106,7 @@ Check: rendering from the race's chase-camera position (world `+0x54` translatio
 
 ## Open
 
-- The runtime palette transform (time of day or fog), and which sky and palette each event uses.
-- How the portal walls between sectors of different heights are drawn (upper and lower wall parts?). The viewer draws only solid walls.
+- ~~The runtime palette transform, and which sky and palette each event uses~~ Answered: the light tint (FIDELITY R2), environments and `0x7F2588`.
+- ~~Portal walls between sectors of different heights~~ Answered in [engine/renderer.md](../engine/renderer.md) (FIDELITY R8).
 - **Mapping to races:** which districts belong to which races, and how the per-event descriptor fields `+0x58…+0x64` (start sector?) and the route table at `0x7F2798` (44 × 0x14 bytes, read by `FUN_08139454`) are used.
 - The six portals without a matching reversed edge (T-junctions?).

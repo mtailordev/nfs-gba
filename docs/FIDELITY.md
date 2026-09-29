@@ -59,7 +59,7 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 | A1 | Implemented from the disassembly but never exercised by Carbon's data, so exact by reading only: effects 0–6, A, C, D, E6x, F; linear pitch mode; rate change; the first-voice carry; the mixer's zero-address checks; volumes ≥ 0xFF | — | `docs/formats/audio.md` |
 | A2 | Jingle system (second module state at engine `+0x83C`) not rewritten | Nothing in Carbon calls it | `FUN_081517e8`, `FUN_081522b8`, `FUN_08152310`, `FUN_0815236c` |
 | A3 | Mode-0 mixer and the flagged sound format not rewritten | Carbon uses mode 1 | `0x0815CF2C`, `FUN_08152ab8`, `FUN_08152b7c` |
-| A4 | Test tone not rewritten | Engine `+0x14` is never set | `FUN_08151aa8` |
+| A4 | Test tone not rewritten | Engine `+0x14` is never set; the function is still entered every frame (coverage) and returns early | `FUN_08151aa8` |
 | A5 | Division by zero returns mGBA's HLE result | The BIOS would hang; cannot happen with Carbon's data | `bios_div` |
 | A6 | Analogue output not modelled: two identical FIFOs, DAC, `SOUNDBIAS`; WAV files say 10512 Hz | Hardware runs at 10512.04 Hz | Hardware |
 

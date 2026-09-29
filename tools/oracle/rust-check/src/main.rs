@@ -17,11 +17,6 @@ fn int(v: &Value) -> i64 {
     v.as_i64().unwrap()
 }
 
-/// `nfsgba_formats`'s private `div` (lib.rs), copied verbatim: libgcc `__divsi3` as the game calls it.
-fn div(a: i32, b: i32) -> i32 {
-    if b == 0 { 0 } else { a.wrapping_div(b) }
-}
-
 fn report(name: &str, total: usize, bad: usize) -> bool {
     println!("{name}: {total} cases, {bad} mismatches");
     bad == 0
@@ -34,7 +29,7 @@ fn main() -> ExitCode {
     let c = cases("divsi3");
     let bad = c
         .iter()
-        .filter(|c| div(int(&c["a"]) as i32, int(&c["b"]) as i32) as i64 != int(&c["q"]))
+        .filter(|c| rom::div(int(&c["a"]) as i32, int(&c["b"]) as i32) as i64 != int(&c["q"]))
         .count();
     ok &= report("__divsi3 vs div", c.len(), bad);
 
