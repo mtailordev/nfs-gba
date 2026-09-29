@@ -4,25 +4,9 @@
 
 use crate::mem::Mem;
 
-/// Sine table: 0x2000 `i16` entries for a half turn (a full turn is 0x4000), 1.0 = 0x4000.
-const SIN_TABLE: u32 = 0x087C_05F0;
-/// Reciprocal table: entry k = 2^24 / (k + 1).
-const RECIP_TABLE: u32 = 0x087C_45F0;
-
-/// `__divsi3` (`FUN_0816a708`): truncates toward zero; x / 0 = 0.
-pub fn div(a: i32, b: i32) -> i32 {
-    if b == 0 { 0 } else { a.wrapping_div(b) }
-}
-
-/// `__udivsi3` (`FUN_0816a93c`): x / 0 = 0.
-pub fn udiv(a: u32, b: u32) -> u32 {
-    a.checked_div(b).unwrap_or(0)
-}
-
-/// `__umodsi3` (`FUN_0816a9b4`): x % 0 = 0.
-pub fn umod(a: u32, b: u32) -> u32 {
-    a.checked_rem(b).unwrap_or(0)
-}
+/// `atan2_q14` (`FUN_0815f9cc`); see `nfsgba_fixed::atan2_q14`.
+pub use nfsgba_fixed::atan2_q14 as atan2;
+pub use nfsgba_fixed::{angle_diff, div, isqrt, udiv, umod};
 
 /// `__muldi3` (`FUN_0816a8b4`) on two sign-extended words: the low 64 bits of the product.
 pub fn mul64(a: i32, b: i32) -> i64 {
@@ -44,91 +28,24 @@ pub fn mul12(a: i32, b: i32) -> i32 {
     a.wrapping_mul(b) >> 12
 }
 
-/// `FUN_0815f948`: sine of a 14-bit angle, 1.0 = 0x4000.
+/// `sin_q14` (`FUN_0815f948`) on the ROM in `mem`.
 pub fn sin(mem: &Mem, angle: i32) -> i32 {
-    let a = (angle & 0x3FFF) as u32;
-    if a > 0x1FFF {
-        -(mem.i16(SIN_TABLE + (a - 0x2000) * 2) as i32)
-    } else {
-        mem.i16(SIN_TABLE + a * 2) as i32
-    }
+    nfsgba_fixed::sin_q14(&mem.rom, angle)
 }
 
-/// `FUN_0815f988`: cosine, `sin(angle + 0x1000)`.
+/// `cos_q14` (`FUN_0815f988`) on the ROM in `mem`.
 pub fn cos(mem: &Mem, angle: i32) -> i32 {
-    sin(mem, angle.wrapping_add(0x1000))
+    nfsgba_fixed::cos_q14(&mem.rom, angle)
 }
 
-/// `FUN_0815f9cc`: the angle (0x4000 = full turn) of the direction (`x`, `z`), 0 along +z, positive towards +x.
-pub fn atan2(x: i32, z: i32) -> i32 {
-    let ax = x.wrapping_abs();
-    let (r, base) = if z < 0 {
-        let d = match ax.wrapping_sub(z) {
-            0 => 1,
-            d => d,
-        };
-        (div(z.wrapping_add(ax).wrapping_mul(0x8001), d), 0x12D9A)
-    } else {
-        let d = match z.wrapping_add(ax) {
-            0 => 1,
-            d => d,
-        };
-        (div(z.wrapping_sub(ax).wrapping_mul(0x8001), d), 0x6488)
-    };
-    let cube = (r.wrapping_mul(r.wrapping_mul(r) >> 15) >> 15).wrapping_mul(0x1920) >> 15;
-    let a = (base + cube - (r.wrapping_mul(0x7DA9) >> 15)).wrapping_mul(0x1460) >> 16;
-    if x < 0 { -a } else { a }
-}
-
-/// `FUN_0815fa54`: integer square root of an unsigned word, at least 1.
-pub fn isqrt(v: u32) -> i32 {
-    let (mut rem, mut root, mut v) = (0u32, 0u32, v);
-    for _ in 0..16 {
-        rem = rem.wrapping_mul(4).wrapping_add(v >> 30);
-        v <<= 2;
-        let trial = root << 2 | 1;
-        root <<= 1;
-        if trial <= rem {
-            rem -= trial;
-            root += 1;
-        }
-    }
-    root.max(1) as i32
-}
-
-/// `FUN_08149178` (also inlined in `FUN_08147a6c` and `FUN_08147ec4`): about 2^24 / x through the reciprocal
-/// table, keeping the table index at most 0x2000.
+/// `recip_q24` (`FUN_08149178`) on the ROM in `mem`.
 pub fn recip(mem: &Mem, x: i32) -> i32 {
-    let mut shift = 0u32;
-    if x < 0 {
-        let mut a = x.wrapping_neg();
-        if x != -0x2000 && a > 0x1FFF {
-            loop {
-                a >>= 1;
-                shift += 1;
-                if a <= 0x2000 {
-                    break;
-                }
-            }
-        }
-        -asr(mem.i32(RECIP_TABLE + (a >> 1) as u32 * 4), shift + 1)
-    } else {
-        let mut a = x;
-        loop {
-            let more = a > 0x2000;
-            a >>= 1;
-            if !more {
-                break;
-            }
-            shift += 1;
-        }
-        asr(mem.i32(RECIP_TABLE + a as u32 * 4), shift + 1)
-    }
+    nfsgba_fixed::recip_q24(&mem.rom, x)
 }
 
-/// Reciprocal table entry (`FUN_08147b18`, `FUN_0814ca84`).
+/// Reciprocal table entry (`FUN_08147b18`, `FUN_0814ca84`) on the ROM in `mem`.
 pub fn recip_entry(mem: &Mem, k: i32) -> i32 {
-    mem.i32(RECIP_TABLE.wrapping_add((k as u32).wrapping_mul(4)))
+    nfsgba_fixed::recip(&mem.rom, k)
 }
 
 pub type V3 = [i32; 3];
@@ -195,19 +112,6 @@ pub fn normalize14(v: &mut V3) {
         .wrapping_add(v[2].wrapping_mul(v[2]));
     let len = isqrt(sq as u32);
     *v = v.map(|c| div(c << 14, len));
-}
-
-/// `FUN_0815fc38`: signed difference `b - a` of two angles in (-0x2000, 0x2000].
-pub fn angle_diff(a: i32, b: i32) -> i32 {
-    if (a <= b && b < a + 0x2000) || (b <= a && a < b + 0x2000) {
-        b - a
-    } else if a + 0x2000 < b {
-        b - 0x4000 - a
-    } else if a - 0x2000 < b {
-        0
-    } else {
-        b - (a - 0x4000)
-    }
 }
 
 /// `FUN_08147618`: quaternion product `a * b` (x, y, z, w; 20.12).

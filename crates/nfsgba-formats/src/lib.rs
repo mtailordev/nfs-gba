@@ -381,15 +381,8 @@ pub fn light_factor(light: [u8; 3]) -> [f32; 3] {
     light.map(|b| ((b as f32 * 512.0 / 3.0 + 1024.0) / 4096.0).min(4095.0 / 4096.0))
 }
 
-/// libgcc `__divsi3` as the game calls it (`FUN_0816a708`): truncates toward zero, and x / 0 = 0.
-pub fn div(a: i32, b: i32) -> i32 {
-    if b == 0 { 0 } else { a.wrapping_div(b) }
-}
-
-/// The reciprocal table at `0x7C45F0`: entry k = 2^24 / (k + 1), 32,767 entries.
-fn recip(rom: &[u8], k: i32) -> i32 {
-    u32_at(rom, 0x7C_45F0 + 4 * k as usize) as i32
-}
+pub use nfsgba_fixed::div;
+use nfsgba_fixed::recip;
 
 /// Palette multipliers (4.12 fixed point: red, green, blue) for an observer at (`px`, `pz`) city units in
 /// `sector`, exactly as `apply_sector_light_to_palette` (`FUN_0813a514`) computes them. `None` when fewer

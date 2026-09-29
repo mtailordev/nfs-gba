@@ -9,6 +9,10 @@ use bevy::{
     math::Vec3A,
     prelude::*,
 };
+use nfsgba_fixed::cos_q14;
+/// `atan2_fast` (IWRAM `0x03004470`): 0 = +y, 0x1000 = +x; `atan(344, 0)` = 0xFFD, the reference race's
+/// camera yaw.
+pub use nfsgba_fixed::{angle_diff, atan2_fast as atan};
 use nfsgba_formats::{self as rom, atlas, paint, render};
 
 /// The race projection's focal length (view struct `0x03000080 +0x1C`); `camera_update` eases it back to 150 while
@@ -68,53 +72,6 @@ fn word(rom: &[u8], at: usize) -> i32 {
 
 fn half(rom: &[u8], at: usize) -> i16 {
     i16::from_le_bytes(rom[at..at + 2].try_into().unwrap())
-}
-
-fn cos_q14(rom: &[u8], a: i32) -> i32 {
-    paint::sin_q14(rom, a.wrapping_add(0x1000))
-}
-
-/// `FUN_03004470`: atan of (x, y) with 0x4000 per turn, the game's polynomial (0 = +y, 0x1000 = +x). It is not
-/// exact at the axes: `atan(344, 0)` = 0xFFD, which is the reference race's camera yaw.
-pub fn atan(rom: &[u8], x: i32, y: i32) -> i32 {
-    let div16 = |a: i32, b: i32| a.wrapping_mul(render::recip(rom, b)) >> 8; // FUN_03004d20
-    let ax = (x ^ (x >> 31)).wrapping_sub(x >> 31);
-    let (base, t): (i32, i32) = if y < 0 {
-        let d = match ax.wrapping_sub(y) {
-            0 => 1,
-            d if d > 0x7FFD => 0x7FFE,
-            d => d,
-        };
-        (0x12D9A, div16(y.wrapping_add(ax), d))
-    } else {
-        let d = match y.wrapping_add(ax) {
-            0 => 1,
-            d if d > 0x7FFD => 0x7FFE,
-            d => d,
-        };
-        (0x6488, div16(y.wrapping_sub(ax), d))
-    };
-    let t = t >> 1;
-    let cube = (t.wrapping_mul(t.wrapping_mul(t) >> 15) >> 15).wrapping_mul(0x1920) >> 15;
-    let a = base
-        .wrapping_add(cube)
-        .wrapping_sub(t.wrapping_mul(0x7DA9) >> 15)
-        .wrapping_mul(0x1460)
-        >> 16;
-    if x < 0 { -a } else { a }
-}
-
-/// `angle_diff` (`FUN_0815fc38`): `b − a` taken the short way round, 0x4000 per turn.
-pub fn angle_diff(a: i32, b: i32) -> i32 {
-    if (a <= b && b < a + 0x2000) || (b <= a && a < b + 0x2000) {
-        b - a
-    } else if a + 0x2000 < b {
-        b - 0x4000 - a
-    } else if a - 0x2000 < b {
-        0
-    } else {
-        b - (a - 0x4000)
-    }
 }
 
 /// `FUN_08160624`: the rotation about y by `yaw`, 2.14 fixed point, row-major, zero translation.

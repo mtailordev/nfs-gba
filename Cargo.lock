@@ -3533,9 +3533,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nfsgba-fixed"
+version = "0.1.0"
+
+[[package]]
 name = "nfsgba-formats"
 version = "0.1.0"
 dependencies = [
+ "nfsgba-fixed",
  "nfsgba-testkit",
  "serde_json",
 ]
@@ -3545,6 +3550,7 @@ name = "nfsgba-game"
 version = "0.1.0"
 dependencies = [
  "nfsgba-audio",
+ "nfsgba-fixed",
  "nfsgba-formats",
  "nfsgba-sim",
  "nfsgba-testkit",
@@ -3554,6 +3560,7 @@ dependencies = [
 name = "nfsgba-sim"
 version = "0.1.0"
 dependencies = [
+ "nfsgba-fixed",
  "nfsgba-formats",
  "nfsgba-testkit",
  "serde_json",
@@ -3572,6 +3579,7 @@ name = "nfsgba-viewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "nfsgba-fixed",
  "nfsgba-formats",
  "nfsgba-game",
  "nfsgba-testkit",

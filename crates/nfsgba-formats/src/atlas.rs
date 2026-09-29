@@ -9,7 +9,8 @@
 
 use std::ops::RangeInclusive;
 
-use crate::{Texture, i16_at, paint::remap_atlas, paint::sin_q14, u16_at, u32_at};
+use crate::{Texture, i16_at, paint::remap_atlas, u16_at, u32_at};
+use nfsgba_fixed::{cos_q14, rand_table, sin_q14};
 
 const CAR_TABLE: usize = 0x7F_0BD8;
 /// i16 overlay material per `car·7 + record[1]`; −1 = none.
@@ -26,12 +27,6 @@ const RIMS: usize = 0x7E_F816;
 const OPPONENT_LOOKS: usize = 0x7E_EA44;
 /// i32 per wingman (1..=12): opponent 1's paint.
 const WINGMAN_PAINTS: usize = 0x7F_4344;
-const RAND_TABLE: usize = 0x7C_03F0;
-
-/// `FUN_0815f988`: cosine, 0x4000 per turn.
-fn cos_q14(rom: &[u8], angle: i32) -> i32 {
-    sin_q14(rom, angle.wrapping_add(0x1000))
-}
 
 /// `blit_material_keyed` (`FUN_08163870`) and, with `only`, `FUN_08163bfc`: copies texture `t` into the 256-wide
 /// atlas at (x, y) without clipping, skipping texel 0 and adding `add`; `only` writes over atlas pixels in that range
@@ -152,13 +147,6 @@ pub fn draw_rim(rom: &[u8], atlas: &mut [u8], rim: &Rim, memory: &[u8], at: usiz
     }
 }
 
-/// `rand_table` (`FUN_0815fcfc`): `index = (index + 1) & 0xFF`, then `u16 0x7C03F0[index]`. The index lives at
-/// `0x030064C8`; `setup_race_cars` reseeds it with `*0x03000044 & 0xFF` (`FUN_0815fd1c`).
-pub fn rand_table(rom: &[u8], index: &mut u32) -> u16 {
-    *index = (*index + 1) & 0xFF;
-    u16_at(rom, RAND_TABLE + 2 * *index as usize)
-}
-
 /// `pick_opponent_cars` (`FUN_0813b634`) fills racers 1..=3 of `cars` (`0x0300611C`) and `paints` (`0x03005FEC`):
 /// `k = rand % 5`, then for each of the `opponents` (`0x03005784`) racer `i + 1` drives car `3k + i` in paint
 /// `rand % 15`; the other slots get 0. Opponent 1's paint is then replaced by `i32 0x7F4344[wingman − 1]`
@@ -171,12 +159,12 @@ pub fn pick_opponent_cars(
     cars: &mut [i8; 4],
     paints: &mut [i8; 4],
 ) {
-    let k = rand_table(rom, rand) as u32 % 5;
+    let k = rand_table(rom, rand) % 5;
     for i in 0..3u32 {
         let r = i as usize + 1;
         if i < opponents {
             cars[r] = (3 * k + i) as i8;
-            paints[r] = (rand_table(rom, rand) as u32 % 15) as i8;
+            paints[r] = (rand_table(rom, rand) % 15) as i8;
             if i == 0 {
                 let at = WINGMAN_PAINTS as isize + 4 * (wingman as i32 - 1) as isize;
                 paints[1] = u32_at(rom, at as usize) as i8; // strb: the word's low byte

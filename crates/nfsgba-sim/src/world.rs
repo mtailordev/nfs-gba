@@ -260,32 +260,12 @@ pub fn link_entity(mem: &mut Mem, index: u32) {
     }
 }
 
-/// The IWRAM division at 0x03000220 (ARM, called through `FUN_0816a2a4`): returns `a / b` truncated and stores
-/// `a - |a / b| * b` at `rem`. Reproduces the game's slip: for a negative `b` it divides by `|a|`, not `|b|`.
+/// The IWRAM division at 0x03000220 (`nfsgba_fixed::iwram_divmod`): returns `a / b` and stores the remainder
+/// at `rem`, as the game does.
 pub fn iwram_divmod(mem: &mut Mem, a: i32, b: i32, rem: u32) -> i32 {
-    let sign = a ^ b;
-    let n = a.unsigned_abs();
-    let d = if b < 0 { n.wrapping_neg() } else { b as u32 };
-    let (mut n, mut d, mut bit) = (n, d, 1u32);
-    while d < 0x8000_0000 && d < n {
-        assert!(d != 0, "the game's IWRAM division never ends for a zero divisor");
-        d <<= 1;
-        bit <<= 1;
-    }
-    let mut q = 0u32;
-    loop {
-        if n >= d {
-            n -= d;
-            q = q.wrapping_add(bit);
-        }
-        bit >>= 1;
-        if bit == 0 {
-            break;
-        }
-        d >>= 1;
-    }
-    mem.set_i32(rem, a.wrapping_sub((q as i32).wrapping_mul(b)));
-    if sign < 0 { (q as i32).wrapping_neg() } else { q as i32 }
+    let (q, r) = nfsgba_fixed::iwram_divmod(a, b);
+    mem.set_i32(rem, r);
+    q
 }
 
 #[cfg(test)]

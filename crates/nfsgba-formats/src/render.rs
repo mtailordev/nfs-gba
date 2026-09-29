@@ -9,13 +9,7 @@ use super::{LEVEL_TABLE, i16_at, ptr, u16_at, u32_at};
 mod entities;
 pub use entities::{Entity, Scene, draw_entities, project_model};
 
-/// Reciprocal table (ROM `0x7C45F0`, 32,767 entries): entry k = 2^24 / (k + 1).
-const RECIP: usize = 0x7C_45F0;
-
-/// Entry `k` of the reciprocal table. The game indexes it without bounds checks, so `k` is taken as is.
-pub fn recip(rom: &[u8], k: i32) -> i32 {
-    u32_at(rom, (RECIP as i64 + 4 * k as i64) as usize) as i32
-}
+pub use nfsgba_fixed::recip;
 
 /// `FUN_03004ca4`: `a / (b + 1)` as `(a * recip[b]) >> 24` in 64 bits.
 pub fn div_recip(rom: &[u8], a: i32, b: i32) -> i32 {

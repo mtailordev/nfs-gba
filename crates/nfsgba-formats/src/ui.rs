@@ -22,8 +22,6 @@ pub const HUD_TEXELS: usize = 0x34_7B74;
 pub const OBJ_PALETTES: usize = 0x36_C75C;
 /// HUD sprite materials, 280 × 0x24 (race descriptor `+0x24`).
 pub const HUD_MATERIALS: usize = 0x36_CF5C;
-/// Half-wave sine table: 0x2000 × i16 (2.14 fixed point), a full turn is 0x4000 (`FUN_0815f948`).
-pub const SINE: usize = 0x7C_05F0;
 /// Four font descriptors, 0x18 bytes each (`FUN_08141578` picks them for font ids 0xC..0xF).
 pub const FONTS: usize = 0x7E_E974;
 /// Menu materials holding the glyphs of fonts 0..3. The text functions map font ids 0xC..0xE to materials
@@ -366,21 +364,6 @@ pub struct Upload {
     pub len: usize,
 }
 
-/// `sin(a)` in 2.14 fixed point, a full turn = 0x4000 (`FUN_0815f948`).
-pub fn sin(rom: &[u8], a: u32) -> i32 {
-    let a = (a & 0x3FFF) as usize;
-    if a > 0x1FFF {
-        -(u16_at(rom, SINE + 2 * (a - 0x2000)) as i16 as i32)
-    } else {
-        u16_at(rom, SINE + 2 * a) as i16 as i32
-    }
-}
-
-/// `cos(a)` = `sin(a + 0x1000)` (`FUN_0815f988`).
-pub fn cos(rom: &[u8], a: u32) -> i32 {
-    sin(rom, a.wrapping_add(0x1000))
-}
-
 /// Shadow OAM as the game keeps it at `0x030064F0`: 128 entries of four u16 (attr0, attr1, attr2 and the
 /// interleaved affine parameter), copied to OAM each frame.
 pub type Oam = [[u16; 4]; 128];
@@ -452,7 +435,10 @@ pub fn update_sprites(
                 [o.scale[0] as i32, o.scale[1] as i32]
             };
             let angle = if o.angle != 0 { o.angle as u32 } else { 0 };
-            let (c, sn) = (cos(rom, angle), sin(rom, angle));
+            let (c, sn) = (
+                nfsgba_fixed::cos_q14(rom, angle as i32),
+                nfsgba_fixed::sin_q14(rom, angle as i32),
+            );
             // FUN_0816144c: pa = sx·cos, pb = sx·sin, pc = −sy·sin, pd = sy·cos (>> 14).
             for (j, v) in [(sx * c) >> 14, (sx * sn) >> 14, (sy * -sn) >> 14, (sy * c) >> 14]
                 .into_iter()

@@ -1,0 +1,7 @@
+[package]
+name = "nfsgba-fixed"
+version = "0.1.0"
+edition = "2024"
+description = "The game's integer maths, once: libgcc and IWRAM division, the ROM's sine, reciprocal and random tables, atan2, isqrt"
+license = "MIT OR Apache-2.0"
+publish = false

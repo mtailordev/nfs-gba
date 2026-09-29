@@ -13,15 +13,7 @@ pub const EXTRA_ROWS: usize = PAINT_BLOCK + 0x600;
 /// Bytes at `0x7EEA24`: the ramp of a special car (id 15 and up) and of a paint code of 20 and up.
 const SPECIAL_RAMPS: usize = 0x7E_EA24;
 const CAR_TABLE: usize = 0x7F_0BD8;
-/// 0x2000 `i16`: the first half of a sine wave, 0x4000 = 1.0.
-const SIN_TABLE: usize = 0x7C_05F0;
-
-/// `FUN_0815f948`: sine with 0x4000 per turn, result in ±0x4000.
-pub fn sin_q14(rom: &[u8], angle: i32) -> i32 {
-    let a = angle & 0x3FFF;
-    let v = i16_at(rom, SIN_TABLE + 2 * (a & 0x1FFF) as usize) as i32;
-    if a > 0x1FFF { -v } else { v }
-}
+pub use nfsgba_fixed::sin_q14;
 
 /// `FUN_0813b6d0`: copies the car ramps into the base palette (the game writes both base buffers,
 /// `*0x030055F0` and `*0x0300577C`, and flags them dirty). `cars` and `paints` are the per-racer arrays at

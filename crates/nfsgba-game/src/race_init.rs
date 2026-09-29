@@ -183,7 +183,7 @@ fn race_init(g: &mut Machine, io: &mut Io, level: u32, seed_vblanks: u32) -> Res
     m.set_u32(0x0300_5714, 0);
     m.set_u32(0x0300_5800, 0);
     let mut rand = m.u32(RAND);
-    let r = atlas::rand_table(&m.rom, &mut rand);
+    let r = nfsgba_fixed::rand_table(&m.rom, &mut rand);
     m.set_u32(RAND, rand);
     let profile = m.u32(PROFILE);
     m.set_u8(profile + 0x2EE, (r & 3) as u8);

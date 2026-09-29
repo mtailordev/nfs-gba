@@ -657,10 +657,12 @@ impl Game {
             let speed = racers[g.player].driver.map_or(0, |d| d.speed);
             let mut v = nfsgba_formats::div(speed, 0x163C);
             if g.units == 0 {
-                v = hud::divmod(v << 8, 0x19B).0;
+                v = nfsgba_fixed::iwram_divmod(v << 8, 0x19B).0;
             }
-            let rest = hud::divmod(v, 100).1;
-            self.sim.mem.set_i32(0x0300_6480, hud::divmod(rest, 10).1);
+            let rest = nfsgba_fixed::iwram_divmod(v, 100).1;
+            self.sim
+                .mem
+                .set_i32(0x0300_6480, nfsgba_fixed::iwram_divmod(rest, 10).1);
         }
         let m = &mut self.sim.mem;
         view::store_hud_globals(m, &g);
