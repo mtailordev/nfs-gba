@@ -3,7 +3,13 @@
 **End state.** `Game` owns `data: Arc<GameData>` (the ROM tables, parsed once) and a typed `World` (entities,
 cars, camera, race, HUD, menus). Subsystems are functions on typed state. The GBA RAM image (`Mem`) lives only in
 tests, loaded and stored through the layouts to compare with traces. The integer maths stays as it is
-(`nfsgba-fixed`). The camera (`nfsgba-game/src/camera.rs`) is the pilot.
+(`nfsgba-fixed`). The camera (`nfsgba-game/src/camera.rs`) is the pilot; the car step (`nfsgba-sim`, `CarWorld`)
+is typed too.
+
+**The contract (2026-09-29, `docs/DECISIONS.md`):** the mechanics, physics and calculations are exact, not the bytes.
+Typed state holds what the game logic uses; scratch, stale and unused bytes are left out. The replay test compares
+the whole machine except its scratch list, and inside a typed struct only the declared fields
+(`tests/common/mod.rs` lists every struct instance), so a byte left out of a struct is not compared.
 
 ## Where things live
 
@@ -25,9 +31,11 @@ tests, loaded and stored through the layouts to compare with traces. The integer
   field; this reuses the formats type instead of adding a second one.
 - Field names follow `physics.md` and `address-map.md`. An offset the code touches without a known meaning is
   `u_<offset>` (`u_4f4`).
-- Every byte the ported code reads or writes must be a field. Undeclared bytes are never touched by `store`.
-- Each new struct goes into `fields_do_not_overlap` (`state.rs`) and into `round_trip` (`tests/layout.rs`) at every
-  base where it lives.
+- Declare what the logic reads or writes as game state. Leave out bytes that only hold scratch the game rewrites
+  before reading, stale values, or nothing: the replay test then ignores them. Undeclared bytes are never touched by
+  `store`.
+- Each new struct goes into `fields_do_not_overlap` (`state.rs`) and into `instances` (`tests/common/mod.rs`) at
+  every base where it lives; that one list feeds the layout round trip and the replay comparison.
 
 ## Pointers and ROM data
 
@@ -45,13 +53,16 @@ tests, loaded and stored through the layouts to compare with traces. The integer
 
 1. List the RAM it reads and writes (its `m.` calls). Add the missing fields to `state.rs`.
 2. Define its frame struct: inputs plus in/out state (`CameraFrame`). Add the load and store adapters in `view.rs`.
-3. Port the logic line by line onto the frame: the same integer operations (`wrapping_*` exactly where the
-   original has them) and the same read/write order. RAM the game leaves behind that the traces see (the sector
-   search's query point) becomes an output of the frame.
+3. Rewrite the logic on the frame with the existing Rust port as the reference: the same integer operations
+   (`wrapping_*` exactly where the original has them) and the same results. The structure is free: indices instead
+   of pointers, enums, loops over `Vec`s, named fields; drop what only served the GBA (heap bookkeeping, scratch
+   copies, the order of invisible writes).
 4. At the call site in `Game::frame`: load, run, store. The replay tests stay unchanged and green.
 5. Shared helpers: one typed implementation. RAM-image callers reach it through an adapter (`world::geometry` runs
    the typed `Geometry` on `Mem`). A RAM-image twin may stay only while unmigrated callers need it, and it says so
    (`world::wall_flags`).
+6. If a byte stops matching and nothing reads it, remove it from the struct (it is not game state); if something
+   reads it, the rewrite is wrong.
 
 **Done** means: no `Mem` and no address in the logic module; replay and layout tests green; `tools/gate.py` 7/7.
 When a whole frame is typed, the per-subsystem adapters merge into `World::load` / `World::store` (tests only),
@@ -65,7 +76,8 @@ adapter at that point; the adapter stores the state, runs the RAM code, loads ag
 `nfsgba_sim::ram` (`route`, `car`, `init`, `contact`, `walls`, `body`) load the racers, run the typed function and
 store, for the AI and traffic until they are typed; they load the whole `CarWorld`, so they are slow.
 
-## Order after the camera
+## Order
 
-Car step and its helpers (walls, contacts, route), then AI and traffic, then the matrix slots and effects
-(`slots.rs`), then `race_init` (it builds the whole `World`), then the rest of the HUD, then the menus.
+Done: the camera, the car step. Next: AI and traffic (they remove the `ram` twins; D19), the matrix slots and
+effects (`slots.rs`) with the rest of the HUD, the menus, then `race_init` (it builds the whole `World`), then the
+flip: `Game` holds the `World`.

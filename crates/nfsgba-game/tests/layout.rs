@@ -1,14 +1,13 @@
 //! The typed state's RAM layouts (`nfsgba_sim::state`) against every replay-trace state: storing what was loaded
 //! changes no byte, and the globals and structs a subsystem stores together do not overlap.
 
+mod common;
+
 use nfsgba_game::trace::Trace;
 use nfsgba_sim::{
     Mem,
-    layout::{Field, Layout, Ptr},
-    state::{
-        Camera, Car, CarGlobals, CarProfile, Entity, Input, Query, Race, Screen, SectionRec, WORLD, WaypointRec,
-        WorldHeader,
-    },
+    layout::{Field, Layout},
+    state::{Camera, Car, CarGlobals, CarProfile, Input, Query, Race, Screen, WORLD, WorldHeader},
 };
 
 const TRACES: [(&str, &str); 5] = [
@@ -19,11 +18,6 @@ const TRACES: [(&str, &str); 5] = [
     ("live-race", "nitro"),
 ];
 
-/// Loads `T` at `at` from `m` and stores it into `into`.
-fn copy<T: Field>(m: &Mem, into: &mut Mem, at: u32) {
-    T::load(m, at).store(into, at);
-}
-
 /// Every field of `T` at `base`: (name, first address, end).
 fn spans<T: Layout>(base: u32) -> Vec<(&'static str, u32, u32)> {
     T::FIELDS.iter().map(|&(n, o, s)| (n, base + o, base + o + s)).collect()
@@ -32,46 +26,11 @@ fn spans<T: Layout>(base: u32) -> Vec<(&'static str, u32, u32)> {
 /// Stores each typed struct loaded from the state into a copy of it.
 fn round_trip(m: &Mem) -> Mem {
     let mut c = m.clone();
-    let (w, race) = (WorldHeader::load(m, WORLD), Race::load(m, 0));
-    w.store(&mut c, WORLD);
-    copy::<Race>(m, &mut c, 0);
-    copy::<Input>(m, &mut c, 0);
-    copy::<Camera>(m, &mut c, 0);
-    copy::<Screen>(m, &mut c, 0);
-    copy::<CarGlobals>(m, &mut c, 0);
-    copy::<Query>(m, &mut c, 0);
-    copy::<CarProfile>(m, &mut c, m.u32(0x0300_56EC));
-    for k in 0..10 {
-        copy::<SectionRec>(m, &mut c, w.sections + 8 * k);
+    let all = common::instances(m);
+    for i in &all {
+        (i.copy)(m, &mut c, i.base);
     }
-    for k in 0..0x100 {
-        copy::<WaypointRec>(m, &mut c, w.racing_line + 0x18 * k);
-    }
-    w.view.write(&mut c, &w.view.read(m));
-    w.visible.write(&mut c, &w.visible.read(m));
-    race.profile.write(&mut c, &race.profile.read(m));
-    for (k, p) in w.pieces.read_n(m, w.piece_count as u32).iter().enumerate() {
-        w.pieces.at(k as u32).write(&mut c, p);
-    }
-    for (k, o) in w
-        .sector_offsets
-        .read_n(m, w.sector_offset_count as u32)
-        .iter()
-        .enumerate()
-    {
-        w.sector_offsets.at(k as u32).write(&mut c, o);
-    }
-    let mut cars = 0;
-    for i in 0..(w.first_entity + w.entity_count) as u32 {
-        let e: Ptr<Entity> = w.entities.at(i);
-        let entity = e.read(m);
-        e.write(&mut c, &entity);
-        // Cars, opponents and the wingman have a physics struct (traffic uses the word otherwise).
-        if matches!(entity.handler, 0..=3 | 0x29) && !entity.driver.is_null() {
-            copy::<Car>(m, &mut c, entity.driver.addr);
-            cars += 1;
-        }
-    }
+    let cars = all.iter().filter(|i| i.size == Car::SIZE).count();
     assert!(cars >= 2, "the player and an opponent at least");
     c
 }

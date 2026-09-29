@@ -2,6 +2,12 @@
 //! frame k, one `Game::frame` with that frame's keys and timing must give the traced state at the entry of frame
 //! k + 1 (`tools/game_trace.py`, `docs/engine/game-loop.md`). Missing traces follow `nfsgba_testkit`'s rule
 //! (`NFSGBA_REQUIRE_DATA`). Every trace must run to its last frame: no stop is accepted.
+//!
+//! Compared is the game's state, not every byte (the contract, `docs/DECISIONS.md`): the whole machine except the
+//! scratch below, and inside a typed struct (`nfsgba_sim::state`) only its declared fields. A byte a rewritten
+//! subsystem no longer keeps is left out of its struct and is then not compared.
+
+mod common;
 
 use std::ops::Range;
 
@@ -85,16 +91,39 @@ fn traces() -> Vec<(&'static str, usize, Trace)> {
         .collect()
 }
 
+fn off(a: u32) -> usize {
+    match a >> 24 {
+        2 => EW + (a & 0x3_FFFF) as usize,
+        3 => IW + (a & 0x7FFF) as usize,
+        5 => PAL + (a & 0x3FF) as usize,
+        6 => VRAM + (a & 0x1_FFFF) as usize,
+        _ => OAM + (a & 0x3FF) as usize,
+    }
+}
+
+/// The state offsets not compared: the scratch, and the undeclared bytes inside each typed struct.
+fn skipped(m: &Mem, len: usize) -> Vec<bool> {
+    let mut skip = vec![false; len];
+    let mut mark = |r: Range<u32>, v: bool| r.for_each(|a| skip[off(a)] = v);
+    for (r, _) in scratch(m) {
+        mark(r, true);
+    }
+    for i in common::instances(m).iter().filter(|i| i.size > 0) {
+        mark(i.base..i.base + i.size, true);
+        for &(_, o, n) in i.fields {
+            mark(i.base + o..i.base + o + n, false);
+        }
+    }
+    skip
+}
+
 /// The addresses where the game's state differs from `want`, as runs of nearby bytes.
 fn differences(g: &Game, want: &[u8]) -> Vec<(u32, u32)> {
     let got = g.machine().state();
-    let skip = scratch(&g.sim.mem);
+    let skip = skipped(&g.sim.mem, got.len());
     let mut runs: Vec<(u32, u32)> = Vec::new();
-    for o in (0..got.len()).filter(|&o| got[o] != want[o]) {
+    for o in (0..got.len()).filter(|&o| got[o] != want[o] && !skip[o]) {
         let a = addr(o);
-        if skip.iter().any(|(r, _)| r.contains(&a)) {
-            continue;
-        }
         match runs.last_mut() {
             Some((_, end)) if a <= *end + 8 => *end = a,
             _ => runs.push((a, a)),
@@ -105,13 +134,6 @@ fn differences(g: &Game, want: &[u8]) -> Vec<(u32, u32)> {
 
 fn report(name: &str, k: usize, g: &Game, want: &[u8], runs: &[(u32, u32)]) {
     let got = g.machine().state();
-    let off = |a: u32| match a >> 24 {
-        2 => EW + (a & 0x3_FFFF) as usize,
-        3 => IW + (a & 0x7FFF) as usize,
-        5 => PAL + (a & 0x3FF) as usize,
-        6 => VRAM + (a & 0x1_FFFF) as usize,
-        _ => OAM + (a & 0x3FF) as usize,
-    };
     eprintln!("{name} frame {k}: {} runs differ:", runs.len());
     for (a, b) in runs.iter().take(8) {
         let (o, n) = (off(*a), ((b - a + 1) as usize).min(12));
