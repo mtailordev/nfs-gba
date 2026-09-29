@@ -1,16 +1,12 @@
-//! Game frames against the reference build: from the traced machine state at the entry of frame k, one
-//! `Game::frame` with that frame's keys and timing must give the traced state at the entry of frame k + 1
-//! (`tools/game_trace.py`, `docs/engine/game-loop.md`). Skipped when the trace is absent.
+//! Game frames against the reference build, with nothing stood in: from the traced machine state at the entry of
+//! frame k, one `Game::frame` with that frame's keys and timing must give the traced state at the entry of frame
+//! k + 1 (`tools/game_trace.py`, `docs/engine/game-loop.md`). Skipped when the traces are absent.
 
 use std::ops::Range;
 
 use nfsgba_formats as rom;
-use nfsgba_game::{Checkpoint, Game, trace::Trace, view::WORLD};
+use nfsgba_game::{Game, trace::Trace, view::WORLD};
 use nfsgba_sim::Mem;
-
-thread_local! {
-    static STANDIN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
 
 const EW: usize = 0;
 const IW: usize = 0x4_0000;
@@ -18,21 +14,9 @@ const PAL: usize = IW + 0x8000;
 const VRAM: usize = PAL + 0x400;
 const OAM: usize = VRAM + 0x1_8000;
 
-/// State offset of a GBA address (EWRAM, IWRAM, palette, VRAM, OAM).
-fn off(a: u32) -> usize {
-    match a >> 24 {
-        2 => EW + (a & 0x3_FFFF) as usize,
-        3 => IW + (a & 0x7FFF) as usize,
-        5 => PAL + (a & 0x3FF) as usize,
-        6 => VRAM + (a & 0x1_FFFF) as usize,
-        7 => OAM + (a & 0x3FF) as usize,
-        _ => panic!("{a:#x}"),
-    }
-}
-
 fn addr(o: usize) -> u32 {
     match o {
-        _ if o < IW => 0x0200_0000 + o as u32,
+        _ if o < IW => 0x0200_0000 + (o - EW) as u32,
         _ if o < PAL => 0x0300_0000 + (o - IW) as u32,
         _ if o < VRAM => 0x0500_0000 + (o - PAL) as u32,
         _ if o < OAM => 0x0600_0000 + (o - VRAM) as u32,
@@ -73,95 +57,87 @@ fn scratch(m: &Mem) -> Vec<(Range<u32>, &'static str)> {
     ]
 }
 
-/// Copies `range` of GBA addresses from the reference state into the game.
-fn take(g: &mut Game, next: &[u8], range: Range<u32>) {
-    g.sim
-        .mem
-        .set_bytes(range.start, &next[off(range.start)..off(range.end)]);
+/// The recorded runs (`tools/game_trace.py`): `drive` (150 frames from the reference race), `live` (700 frames from
+/// the start of a hard circuit with heavy traffic: opponents alongside, braking, a car-to-car contact at frame 387),
+/// `trail` (700 frames of a sprint behind the opponents through heavy traffic) and `views` (600 frames from the
+/// reference race: the bumper view, looking back in both views, the switch back behind the car, L and R held) and
+/// `nitro` (300 frames from the reference race with nitro poked into the tank before recording: the camera's speed
+/// effect and the nitro flames).
+const TRACES: [(&str, &str); 5] = [
+    ("game-loop", "drive"),
+    ("live-race", "live"),
+    ("live-race", "trail"),
+    ("live-race", "views"),
+    ("live-race", "nitro"),
+];
+
+/// Car code paths the physics-paths work owns (FIDELITY D9–D11): a frame that reaches one stops with `Unported`,
+/// which the replays accept and report; every frame before it must be exact.
+const EXPECTED_STOPS: [&str; 6] = [
+    "FUN_08144fa4",
+    "FUN_081484f0",
+    "FUN_0814efa8",
+    "FUN_0814de40",
+    "FUN_0814dbbc",
+    "0x0813DF98",
+];
+
+fn expected(e: &nfsgba_sim::Unported) -> bool {
+    EXPECTED_STOPS.iter().any(|s| e.0.contains(s))
 }
 
-/// Stand-ins for what is not ported yet, from the reference state after the frame (and, for the effect-sprite
-/// list, from the trace's record of it as `FUN_08161f38` found it).
-fn assist(next: &[u8], effects: &[u8], at: Checkpoint, g: &mut Game) -> bool {
-    let m = &g.sim.mem;
-    let ents = m.u32(WORLD + 0x3C);
-    match at {
-        Checkpoint::Entities => {
-            // D4: the opponents' and traffic handlers: their entity, driver struct and control word.
-            for (i, _) in g.skipped.clone() {
-                let e = ents + 0xA4 * i;
-                take(g, next, e..e + 0xA4);
-                let d = g.sim.mem.u32(e + 0x8C);
-                if d != 0 {
-                    take(g, next, d..d + 0x500);
-                }
-                take(g, next, 0x0300_57D8 + 2 * i..0x0300_57DA + 2 * i);
-            }
-            // They move cars between sector lists: the heads (world +0x0C) and every entity's link (+0x02).
-            if !g.skipped.is_empty() {
-                take(g, next, 0x0300_64C8..0x0300_64CC); // the RNG index (rand_table)
-                let heads = g.sim.mem.u32(WORLD + 0x0C);
-                take(g, next, heads..heads + 2 * 1113);
-                for i in 0..nfsgba_game::view::entity_count(&g.sim.mem) {
-                    let e = ents + 0xA4 * i;
-                    take(g, next, e + 2..e + 4);
+fn traces() -> Vec<(&'static str, Trace)> {
+    TRACES
+        .iter()
+        .filter_map(|&(session, name)| {
+            let dir = rom::data_dir().join("work/e5298b24").join(session);
+            match Trace::load(&dir, name) {
+                Ok(t) => Some((name, t)),
+                Err(_) => {
+                    eprintln!("skipping {name}: no trace in {}", dir.display());
+                    None
                 }
             }
+        })
+        .collect()
+}
+
+/// The addresses where the game's state differs from `want`, as runs of nearby bytes.
+fn differences(g: &Game, want: &[u8]) -> Vec<(u32, u32)> {
+    let got = g.machine().state();
+    let skip = scratch(&g.sim.mem);
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for o in (0..got.len()).filter(|&o| got[o] != want[o]) {
+        let a = addr(o);
+        if skip.iter().any(|(r, _)| r.contains(&a)) {
+            continue;
         }
-        Checkpoint::Camera => {
-            // camera_update (chase view): orbit and look yaw, position, sector, focal, matrix, list entry 0.
-            for r in [
-                0x0300_5F94..0x0300_5FA8,
-                0x0300_0210..0x0300_0218,
-                0x0300_56A0..0x0300_56A4,
-                0x0300_00A4..0x0300_00A8,
-                0x0300_5614..0x0300_5618,
-                0x0300_009C..0x0300_00A0,
-                0x0300_57A0..0x0300_57D0,
-                0x0300_5778..0x0300_577C,
-                0x0300_56B8..0x0300_56BC,
-                WORLD + 0xC0..WORLD + 0xCC, // the sector search point (find_camera_sector)
-            ] {
-                take(g, next, r);
-            }
-            let list = g.sim.mem.u32(WORLD + 0x60);
-            take(g, next, list..list + 16);
-        }
-        Checkpoint::Slots => {
-            // How often the live-play stand-in (`standin::slot_matrix`) gives the player's slot as the game did.
-            let player = ents + 0xA4 * g.sim.mem.u32(0x0300_0060);
-            let slot = next[off(player + 0x88)] as u32;
-            let at = off(g.sim.mem.u32(WORLD + 0xFC) + 0x30 * slot);
-            let want: Vec<i32> = (0..12)
-                .map(|k| i32::from_le_bytes(next[at + 4 * k..at + 4 * k + 4].try_into().unwrap()))
-                .collect();
-            let got = nfsgba_game::standin::slot_matrix(&g.sim.mem, player);
-            STANDIN.with(|c| c.set(c.get() + (got.map(Vec::from) == Some(want)) as usize));
-            // R25: matrix slots, entity slot bytes and flags, the slot counter, the effect-sprite list.
-            let slots = g.sim.mem.u32(WORLD + 0xFC);
-            take(g, next, slots..slots + 64 * 0x30);
-            for i in 0..nfsgba_game::view::entity_count(&g.sim.mem) {
-                let e = ents + 0xA4 * i;
-                take(g, next, e + 0x88..e + 0x89);
-                take(g, next, e + 0x0A..e + 0x0C);
-            }
-            take(g, next, 0x0300_5394..0x0300_5398);
-            let fx = g.sim.mem.u32(0x0300_0058);
-            g.sim.mem.set_bytes(fx, effects);
-            // The player's contact effects spawn entities (FUN_0814c37c: sparks, handler 0x34) into free slots and
-            // link them into sector lists; the rand index moves with them.
-            let player = g.sim.mem.u32(0x0300_0060);
-            for i in (0..nfsgba_game::view::entity_count(&g.sim.mem)).filter(|&i| i != player) {
-                let e = ents + 0xA4 * i;
-                take(g, next, e..e + 0xA4);
-            }
-            let heads = g.sim.mem.u32(WORLD + 0x0C);
-            take(g, next, heads..heads + 2 * 1113);
-            take(g, next, ents + 0xA4 * player + 2..ents + 0xA4 * player + 4);
-            take(g, next, 0x0300_64C8..0x0300_64CC);
+        match runs.last_mut() {
+            Some((_, end)) if a <= *end + 8 => *end = a,
+            _ => runs.push((a, a)),
         }
     }
-    true
+    runs
+}
+
+fn report(name: &str, k: usize, g: &Game, want: &[u8], runs: &[(u32, u32)]) {
+    let got = g.machine().state();
+    let off = |a: u32| match a >> 24 {
+        2 => EW + (a & 0x3_FFFF) as usize,
+        3 => IW + (a & 0x7FFF) as usize,
+        5 => PAL + (a & 0x3FF) as usize,
+        6 => VRAM + (a & 0x1_FFFF) as usize,
+        _ => OAM + (a & 0x3FF) as usize,
+    };
+    eprintln!("{name} frame {k}: {} runs differ:", runs.len());
+    for (a, b) in runs.iter().take(8) {
+        let (o, n) = (off(*a), ((b - a + 1) as usize).min(12));
+        eprintln!(
+            "  {a:#010x}..={b:#010x}: got {:02x?} want {:02x?}",
+            &got[o..o + n],
+            &want[o..o + n]
+        );
+    }
 }
 
 #[test]
@@ -171,61 +147,40 @@ fn frames_match_the_trace() {
         eprintln!("skipping: no ROM vault");
         return;
     };
-    let dir = rom::data_dir().join("work/e5298b24/game-loop");
-    let Ok(trace) = Trace::load(&dir, "drive") else {
-        eprintln!("skipping: no trace in {}", dir.display());
-        return;
-    };
-    let mut failed = 0;
-    for k in 0..trace.timing.len() {
-        let next = &trace.states[k + 1];
-        let mut g = Game::new(trace.machine(&rom, k));
-        let effects = &trace.effects[k];
-        let r = g.frame_with(trace.keys(k), &trace.timing[k], &mut |at, g| {
-            assist(next, effects, at, g)
-        });
-        if let Err(e) = r {
-            panic!("frame {k}: {e}");
-        }
-        let got = g.machine().state();
-        let skip = scratch(&g.sim.mem);
-        let differs: Vec<usize> = (0..got.len())
-            .filter(|&o| got[o] != next[o] && !skip.iter().any(|(r, _)| r.contains(&addr(o))))
-            .collect();
-        if !differs.is_empty() {
-            failed += 1;
-            if failed <= 12 {
-                let mut runs: Vec<(u32, u32)> = Vec::new();
-                for &o in &differs {
-                    let a = addr(o);
-                    match runs.last_mut() {
-                        Some((_, end)) if a <= *end + 8 => *end = a,
-                        _ => runs.push((a, a)),
-                    }
+    for (name, trace) in traces() {
+        let (mut failed, mut stopped) = (0, Vec::new());
+        for k in 0..trace.timing.len() {
+            let want = &trace.states[k + 1];
+            let mut g = Game::new(trace.machine(&rom, k));
+            match g.frame(trace.keys(k), &trace.timing[k]) {
+                Err(e) if expected(&e) => {
+                    stopped.push(k);
+                    continue;
                 }
-                eprintln!("frame {k}: {} bytes differ in {} runs:", differs.len(), runs.len());
-                for (a, b) in runs.iter().take(6) {
-                    let (o, n) = (off(*a), (b - a + 1) as usize);
-                    eprintln!(
-                        "  {a:#010x}..={b:#010x}: got {:02x?} want {:02x?}",
-                        &got[o..o + n.min(12)],
-                        &next[o..o + n.min(12)]
-                    );
+                Err(e) => panic!("{name} frame {k}: {e}"),
+                Ok(()) => {}
+            }
+            let runs = differences(&g, want);
+            if !runs.is_empty() {
+                failed += 1;
+                if failed <= 6 {
+                    report(name, k, &g, want, &runs);
                 }
             }
         }
+        eprintln!(
+            "{name}: {} of {} frames exact; {} stopped in D9–D11 code: {stopped:?}",
+            trace.timing.len() - failed - stopped.len(),
+            trace.timing.len(),
+            stopped.len()
+        );
+        assert_eq!(failed, 0, "{name}: {failed} of {} frames differ", trace.timing.len());
     }
-    eprintln!(
-        "{} frames exact; the slot stand-in gave the player's matrix in {} of them",
-        trace.timing.len() - failed,
-        STANDIN.with(|c| c.get())
-    );
-    assert_eq!(failed, 0, "{failed} of {} frames differ", trace.timing.len());
 }
 
-/// The same trace as one run: the game keeps its own state from the first traced state on (the player's car, the
-/// audio engine, HUD, palette and frame buffer carry over); only what is not ported (the opponents' AI, the camera,
-/// the matrix slots and effect sprites) is taken from the reference at its checkpoint. Every frame must match.
+/// Each trace as one run: the game keeps its own state from the first traced state on (every car, the camera, the
+/// matrix slots and effects, the sound engine, HUD, palette and frame buffers); only the keys and the frame timing
+/// (T1) come from the trace. Every frame must match.
 #[test]
 fn free_run_matches_the_trace() {
     std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
@@ -233,70 +188,51 @@ fn free_run_matches_the_trace() {
         eprintln!("skipping: no ROM vault");
         return;
     };
-    let dir = rom::data_dir().join("work/e5298b24/game-loop");
-    let Ok(trace) = Trace::load(&dir, "drive") else {
-        eprintln!("skipping: no trace in {}", dir.display());
-        return;
-    };
-    let mut g = Game::new(trace.machine(&rom, 0));
-    for k in 0..trace.timing.len() {
-        let (next, effects) = (&trace.states[k + 1], &trace.effects[k]);
-        g.frame_with(trace.keys(k), &trace.timing[k], &mut |at, g| {
-            assist(next, effects, at, g)
-        })
-        .unwrap_or_else(|e| panic!("frame {k}: {e}"));
-        let got = g.machine().state();
-        let skip = scratch(&g.sim.mem);
-        let first = (0..got.len()).find(|&o| got[o] != next[o] && !skip.iter().any(|(r, _)| r.contains(&addr(o))));
-        if let Some(o) = first {
-            panic!(
-                "frame {k}: first difference at {:#010x}: got {:#04x}, want {:#04x}",
-                addr(o),
-                got[o],
-                next[o]
-            );
+    for (name, trace) in traces() {
+        let mut g = Game::new(trace.machine(&rom, 0));
+        let mut exact = 0;
+        for k in 0..trace.timing.len() {
+            let want = &trace.states[k + 1];
+            match g.frame(trace.keys(k), &trace.timing[k]) {
+                Err(e) if expected(&e) => {
+                    eprintln!("{name}: the free run stops in frame {k}: {e}");
+                    break;
+                }
+                Err(e) => panic!("{name} frame {k}: {e}"),
+                Ok(()) => {}
+            }
+            let runs = differences(&g, want);
+            if !runs.is_empty() {
+                report(name, k, &g, want, &runs);
+                panic!("{name}: the free run leaves the trace in frame {k}");
+            }
+            exact += 1;
         }
+        eprintln!(
+            "{name}: {exact} of {} frames free-running, all exact",
+            trace.timing.len()
+        );
     }
-    eprintln!("{} frames free-running, all exact", trace.timing.len());
 }
 
-/// Where live play leaves the reference (`cargo test -p nfsgba-game -- --ignored --nocapture`): a free run with
-/// the opponents frozen (D4), then one with `standin::slots` for the matrix slots (R25); prints each run's first
-/// differing frame and address.
+/// One frame of one trace with its differences (`NFSGBA_TRACE=live NFSGBA_FRAME=193 cargo test -p nfsgba-game
+/// one_frame -- --ignored --nocapture`).
 #[test]
 #[ignore]
-fn live_play_divergence() {
+fn one_frame() {
     std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-    let (Ok(rom), Ok(trace)) = (
-        rom::canonical_rom(),
-        Trace::load(&rom::data_dir().join("work/e5298b24/game-loop"), "drive"),
-    ) else {
-        return;
-    };
-    for variant in ["opponents frozen", "slot stand-in"] {
-        let mut g = Game::new(trace.machine(&rom, 0));
-        for k in 0..trace.timing.len() {
-            let (next, effects) = (&trace.states[k + 1], &trace.effects[k]);
-            let r = g.frame_with(trace.keys(k), &trace.timing[k], &mut |at, g| match (variant, at) {
-                ("opponents frozen", Checkpoint::Entities) => true,
-                ("slot stand-in", Checkpoint::Slots) => {
-                    nfsgba_game::standin::slots(&mut g.sim.mem);
-                    true
-                }
-                _ => assist(next, effects, at, g),
-            });
-            if let Err(e) = r {
-                eprintln!("{variant}: frame {k}: {e}");
-                break;
-            }
-            let got = g.machine().state();
-            let skip = scratch(&g.sim.mem);
-            if let Some(o) =
-                (0..got.len()).find(|&o| got[o] != next[o] && !skip.iter().any(|(r, _)| r.contains(&addr(o))))
-            {
-                eprintln!("{variant}: first difference in frame {k} at {:#010x}", addr(o));
-                break;
-            }
-        }
-    }
+    let rom = rom::canonical_rom().unwrap();
+    let name = std::env::var("NFSGBA_TRACE").unwrap();
+    let k: usize = std::env::var("NFSGBA_FRAME").unwrap().parse().unwrap();
+    let (_, trace) = traces().into_iter().find(|(n, _)| *n == name).unwrap();
+    let mut g = Game::new(trace.machine(&rom, k));
+    eprintln!("timing {:?}", trace.timing[k]);
+    g.frame(trace.keys(k), &trace.timing[k]).unwrap();
+    report(
+        &name,
+        k,
+        &g,
+        &trace.states[k + 1],
+        &differences(&g, &trace.states[k + 1]),
+    );
 }

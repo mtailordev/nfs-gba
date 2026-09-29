@@ -6,9 +6,16 @@
 -- main_frame's entry, at update_entities' entry (0x0813765C) and at hud_update's entry (0x08142F84), plus the
 -- timer-3 ticks main_frame stored at 0x03005934 (read at update_entities). One extra state is written after the
 -- last frame, so FRAMES frames give FRAMES + 1 states. tools/game_trace.py turns NAME.frames.bin into deltas.
+-- `NAME FRAMES racing` waits for the first main_frame entry of a race frame the game loop runs from start to end
+-- (game state 5, race phase 2, no palette fade, the race-start set-up 0x03005714 done) before recording.
 local dir = os.getenv("NFSGBA_MGBA_DIR")
 local name, left, csv, bin, row = nil, 0, nil, nil, nil
-local inEntities = false
+local inEntities, waitRacing = false, false
+
+local function racing()
+  return emu:read32(0x03005808) == 5 and emu:read32(0x03000048) == 2 and emu:read32(0x03005630) == 0
+    and emu:read32(0x03005714) ~= 3
+end
 
 local function log(msg)
   local f = assert(io.open(dir .. "/gtrace_log.txt", "a"))
@@ -32,6 +39,11 @@ end
 
 emu:setBreakpoint(function()
   if not name then return end
+  if waitRacing then
+    if not racing() then return end
+    waitRacing = false
+    log("racing from video frame " .. emu:currentFrame())
+  end
   finishRow()
   state()
   if left == 0 then
@@ -42,7 +54,7 @@ emu:setBreakpoint(function()
     return
   end
   left = left - 1
-  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", ""}
+  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", ""}
 end, 0x0812AE64)
 
 emu:setBreakpoint(function()
@@ -59,17 +71,32 @@ emu:setBreakpoint(function()
 end, 0x08142F84)
 
 -- Finer IRQ placement (the game has no fixed points where the VBlank IRQ lands): the counter at every sound
--- call during update_entities (column 7, `;`-separated), at route_gap (8, reads the race time) and at hud_timer
--- (9, reads it too).
+-- call during update_entities (column 7, `;`-separated `entry-return` pairs: an IRQ can land inside a call, e.g.
+-- during snd_set_sfx_rate's division, before the call changes the voice), at route_gap (8, reads the race time)
+-- and at hud_timer (9, reads it too).
 local function vb() return emu:read32(0x030053B4) end
+local direct = false
 local function sound()
   if row and inEntities then row[7] = row[7] .. (row[7] == "" and "" or ";") .. vb() end
 end
+local function returned()
+  if row and inEntities then row[7] = row[7] .. "-" .. vb() end
+end
+-- carbon_play_sound, carbon_stop_sound, carbon_set_sound_rate: entries, then their returns.
 for _, a in ipairs({0x08135FDC, 0x08136028, 0x081360B4}) do emu:setBreakpoint(sound, a) end
+for _, a in ipairs({0x08136020, 0x08136048, 0x081360CA}) do emu:setBreakpoint(returned, a) end
+-- snd_play_sfx when called directly (carbon_play_sound calls it too).
 emu:setBreakpoint(function()
   local lr = emu:readRegister("lr")
-  if lr < 0x08135FDC or lr >= 0x08136028 then sound() end -- carbon_play_sound calls it too
+  if lr < 0x08135FDC or lr >= 0x08136028 then direct = true; sound() end
 end, 0x08152E40)
+emu:setBreakpoint(function() if direct then direct = false; returned() end end, 0x08152F2E)
+-- route_gap reads the race time twice around a division (0x0813ECB6/0x0813ECC0, 0x0813EDAC/0x0813EDB8):
+-- column 12, the counter at each read, `;`-separated.
+local function gapRead()
+  if row then row[12] = row[12] .. (row[12] == "" and "" or ";") .. vb() end
+end
+for _, a in ipairs({0x0813ECB6, 0x0813ECC0, 0x0813EDAC, 0x0813EDB8}) do emu:setBreakpoint(gapRead, a) end
 emu:setBreakpoint(function() if row and row[8] == "" then row[8] = vb() end end, 0x0813EBAC)
 -- The effect-sprite list as FUN_08161f38 (0x08161F38) gets it, before it clears one-shot sprites (column 10, hex):
 -- what the matrix-slot code left, for replays that stand in for that code.
@@ -81,6 +108,13 @@ emu:setBreakpoint(function()
   end
 end, 0x08161F38)
 emu:setBreakpoint(function() if row and row[9] == "" then row[9] = vb() end end, 0x081428C0)
+-- The opponents' lane-change timer restarts at the race time the AI reads at 0x0813C95C (FUN_0813c5a8, driver
+-- struct in r7): column 11, `driver:counter` pairs (driver in hex), `;`-separated.
+emu:setBreakpoint(function()
+  if row then
+    row[11] = row[11] .. (row[11] == "" and "" or ";") .. string.format("%x:%d", emu:readRegister("r7"), vb())
+  end
+end, 0x0813C95C)
 
 callbacks:add("frame", function()
   local f = io.open(dir .. "/gtrace.txt", "r")
@@ -89,10 +123,10 @@ callbacks:add("frame", function()
   f:close()
   if not line then return end
   os.remove(dir .. "/gtrace.txt")
-  local n, count = line:match("^(%S+)%s+(%d+)")
-  name, left = n, tonumber(count)
+  local n, count, cond = line:match("^(%S+)%s+(%d+)%s*(%S*)")
+  name, left, waitRacing = n, tonumber(count), cond == "racing"
   csv = assert(io.open(dir .. "/" .. name .. ".csv", "w"))
-  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects\n")
+  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads\n")
   bin = assert(io.open(dir .. "/" .. name .. ".frames.bin", "wb"))
   log("armed " .. line)
 end)

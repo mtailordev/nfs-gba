@@ -6,18 +6,27 @@
 //! Keys: arrows = D-pad, X = A (accelerate), Z = B (brake), A = L, S = R, Enter = START, Backspace = SELECT.
 //! `NFSGBA_PLAY_KEYS=A*40,A+LEFT*12,...` plays a script instead (GBA key names, counts in game frames).
 //!
-//! NOT 1:1 (live play): each game frame gets the steady timing of the reference race (`Timing::steady`); the
-//! camera is the viewer's `Chase` (R11 gaps), the matrix slots `standin::slots` (R25); opponents and traffic keep
-//! their state (D4); the sound is not played yet.
+//! NOT 1:1 (live play, T1): each game frame gets the steady timing of the reference race (`Timing::steady`); the
+//! game's frame itself is the exact `Game::frame`.
 
-use std::io;
+use std::{
+    collections::VecDeque,
+    io,
+    num::NonZero,
+    sync::{Arc, Mutex},
+};
 
-use bevy::{asset::RenderAssetUsages, image::ImageSampler, prelude::*};
+use bevy::{
+    asset::RenderAssetUsages,
+    audio::{ChannelCount, Decodable, Sample, SampleRate, Source},
+    image::ImageSampler,
+    prelude::*,
+};
 use nfsgba_formats as rom;
-use nfsgba_game::{Checkpoint, Game, Machine, Timing, standin, view};
+use nfsgba_game::{Game, Machine, Timing, view};
 
 use crate::{
-    Race, Tint,
+    Race,
     game::{Dump, RaceSetup},
     texture_2d,
 };
@@ -34,6 +43,50 @@ pub struct Play {
     pub stopped: Option<String>,
     script: Option<Vec<u16>>,
     pub hud: Handle<Image>,
+    /// The samples the game's sound hardware played, waiting for the audio device.
+    pub sound: Arc<Mutex<VecDeque<Sample>>>,
+}
+
+/// The GBA's sound output (Direct Sound A and B play the same buffer: mono, signed 8-bit, 10,512 Hz) as a Bevy
+/// audio source that plays whatever `play` queued, and silence when the queue runs dry.
+/// NOT 1:1 (A6): the hardware rate is 10,512.04 Hz; the DAC and `SOUNDBIAS` are not modelled.
+#[derive(Asset, TypePath)]
+pub struct GbaSound(Arc<Mutex<VecDeque<Sample>>>);
+
+pub struct GbaStream(Arc<Mutex<VecDeque<Sample>>>);
+
+impl Iterator for GbaStream {
+    type Item = Sample;
+    fn next(&mut self) -> Option<Sample> {
+        Some(self.0.lock().map_or(0.0, |mut q| q.pop_front().unwrap_or(0.0)))
+    }
+}
+
+impl Source for GbaStream {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> ChannelCount {
+        NonZero::new(1).unwrap()
+    }
+    fn sample_rate(&self) -> SampleRate {
+        NonZero::new(10_512).unwrap()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+impl Decodable for GbaSound {
+    type Decoder = GbaStream;
+    fn decoder(&self) -> GbaStream {
+        GbaStream(self.0.clone())
+    }
+}
+
+/// Starts the game's sound stream (play mode).
+pub fn start_sound(mut commands: Commands, play: Res<Play>, mut sounds: ResMut<Assets<GbaSound>>) {
+    commands.spawn(AudioPlayer(sounds.add(GbaSound(play.sound.clone()))));
 }
 
 impl Play {
@@ -58,6 +111,7 @@ impl Play {
             stopped: None,
             script,
             hud,
+            sound: Arc::default(),
         })
     }
 }
@@ -92,40 +146,8 @@ fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
         .fold(0, |m, (_, b)| m | 1 << b)
 }
 
-/// NOT 1:1 (R11), standing in for `camera_update`: the viewer's `Chase` (chase view) for the player, written where
-/// the game keeps the camera: orbit and look yaw, position, sector, focal, the matrix `0x030057A0` and list entry 0.
-fn camera(g: &mut Game, rom_bytes: &[u8], rt: &rom::render::Runtime) {
-    let m = &g.sim.mem;
-    let setup = RaceSetup::from_dump(&Dump::from_ram(m.iwram.clone(), m.ewram.clone()));
-    let mut chase = setup.chase;
-    let (frame, root) = chase.step(rom_bytes, rt, &setup.racers[0]);
-    let m = &mut g.sim.mem;
-    m.set_i32(0x0300_5F94, chase.yaw);
-    m.set_i32(0x0300_0214, chase.look);
-    m.set_i32(0x0300_5F9C, -chase.look & 0x3FFF);
-    m.set_i32(0x0300_56A0, chase.x);
-    m.set_i32(0x0300_00A4, chase.z);
-    m.set_u32(0x0300_5614, chase.sector as u32);
-    m.set_i32(0x0300_0080 + 0x1C, chase.focal);
-    let cam = m.u32(view::WORLD + 0x54);
-    for (k, v) in frame.camera.iter().enumerate() {
-        m.set_i32(cam + 4 * k as u32, *v);
-    }
-    let list = m.u32(view::WORLD + 0x60);
-    m.set_u16(list, root.sector);
-    for (k, v) in [root.left, root.right, root.top, root.bottom].into_iter().enumerate() {
-        m.set_i16(list + 2 + 2 * k as u32, v);
-    }
-}
-
 /// Runs the game frames that are due and reads the race back from the game's RAM.
-pub fn play(
-    time: Res<Time>,
-    input: Res<ButtonInput<KeyCode>>,
-    mut play: ResMut<Play>,
-    mut race: ResMut<Race>,
-    tint: Res<Tint>,
-) {
+pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<Play>, mut race: ResMut<Race>) {
     if play.stopped.is_some() {
         return;
     }
@@ -138,19 +160,16 @@ pub fn play(
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
             None => keyboard(&input),
         };
-        let (rom_bytes, rt) = (&tint.rom, &tint.rt);
-        let r = play.game.frame_with(keys, &Timing::steady(), &mut |at, g| {
-            match at {
-                Checkpoint::Entities => {}
-                Checkpoint::Camera => camera(g, rom_bytes, rt),
-                Checkpoint::Slots => standin::slots(&mut g.sim.mem),
-            }
-            true
-        });
-        if let Err(e) = r {
+        if let Err(e) = play.game.frame(keys, &Timing::steady()) {
             warn!("play stopped at game frame {}: {e}", play.frames);
             play.stopped = Some(e.to_string());
             break;
+        }
+        if let Ok(mut q) = play.sound.lock() {
+            q.extend(play.game.sound.iter().map(|&s| s as i8 as Sample / 128.0));
+            // Keep at most a quarter of a second queued, so the sound stays with the picture.
+            let excess = q.len().saturating_sub(10_512 / 4);
+            q.drain(..excess);
         }
         play.frames += 1;
         ran = true;

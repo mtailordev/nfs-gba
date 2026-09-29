@@ -48,11 +48,26 @@ impl Trace {
                 Timing {
                     timer3: num(r[5]).unwrap() as u16,
                     entities: at(r[3]).unwrap(),
-                    sounds: r[6].split(';').filter_map(at).collect(),
+                    // `entry-return` pairs (older traces: the entry only).
+                    sounds: r[6]
+                        .split(';')
+                        .filter_map(|s| {
+                            let (e, ret) = s.split_once('-').unwrap_or((s, s));
+                            Some((at(e)?, at(ret)?))
+                        })
+                        .collect(),
                     gap: at(r[7]),
+                    gap_reads: r.get(11).unwrap_or(&"").split(';').filter_map(at).collect(),
                     hud: at(r[4]).unwrap(),
                     timer: at(r[8]),
                     end: num(w[1][2]).unwrap() - start,
+                    lanes: r
+                        .get(10)
+                        .unwrap_or(&"")
+                        .split(';')
+                        .filter_map(|p| p.split_once(':'))
+                        .map(|(d, n)| (u32::from_str_radix(d, 16).unwrap(), num(n).unwrap() - start))
+                        .collect(),
                 }
             })
             .collect();

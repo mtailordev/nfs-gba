@@ -3,8 +3,9 @@
     .venv/Scripts/python.exe tools/game_trace.py record drive        # mGBA running with mgba_game_trace.lua
     .venv/Scripts/python.exe tools/game_trace.py pack drive          # NAME.frames.bin -> NAME.base.bin + NAME.delta
 
-`record` loads race.ss (copy it into the session directory first), arms tools/mgba_game_trace.lua for the
-scenario's game frames and plays its keys. `pack` keeps the first machine state as NAME.base.bin and every later
+`record` loads the scenario's savestate (copy it into the session directory first), arms
+tools/mgba_game_trace.lua for the scenario's game frames (`racing`: from the first race frame the game loop runs
+whole, i.e. after the countdown) and plays its keys. `pack` keeps the first machine state as NAME.base.bin and every later
 state as the byte runs that differ from the one before (NAME.delta: per state a u32 run count, then per run u32
 offset, u32 length and the bytes), then deletes NAME.frames.bin. A state is EWRAM, IWRAM, palette, VRAM and OAM
 (0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400 bytes). Rerunning gives identical files (the emulator is
@@ -22,9 +23,34 @@ from common import data_dir
 
 STATE = 0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400
 SCENARIOS = {
+    # name: (savestate, arming, game frames, keys[, commands before recording, e.g. RAM pokes]).
     # From the reference race (race.ss): accelerate, steer both ways, brake, accelerate again.
-    "drive": (150, ["wait 2", "hold A 200", "hold A,LEFT 40", "hold A 100", "hold A,RIGHT 40", "hold B 40",
-                    "hold A 400"]),
+    "drive": ("race", "", 150, ["wait 2", "hold A 200", "hold A,LEFT 40", "hold A 100", "hold A,RIGHT 40",
+                                "hold B 40", "hold A 400"]),
+    # From the race-info screen of LONGPOINT (circuitinfo.ss of the ai-traffic session: hard, 3 opponents, heavy
+    # traffic): start, then from the first racing frame bump the neighbours on the grid, brake twice (brake smoke),
+    # swerve, and keep going with the opponents and traffic around.
+    "live": ("circuitinfo", "racing", 700, ["hold A 10", "wait 100", "hold A 200", "hold A,LEFT 25",
+                                            "hold A,RIGHT 50", "hold A,LEFT 25", "hold A 300", "hold B 60",
+                                            "hold A 300", "hold A,RIGHT 40", "hold A 300", "hold B,LEFT 40",
+                                            "hold A 600", "hold A,LEFT 30", "hold A 900"]),
+    # From the race-info screen of JUNKPOINT (sprintinfo.ss of the ai-traffic session: normal, 3 opponents, heavy
+    # traffic): brake at the start so the opponents pull away (no car-to-car contact), then follow them through the
+    # traffic with swerves, braking and handbrake turns.
+    "trail": ("sprintinfo", "racing", 700, ["hold A 10", "wait 100", "hold B 250", "hold A 400", "hold A,LEFT 30",
+                                             "hold A 300", "hold B 60", "hold A,RIGHT 30", "hold A 400",
+                                             "hold B,LEFT 40", "hold A 1500"]),
+    # From the reference race: the camera's other branches. SELECT to the bumper view, DOWN alone looks back,
+    # SELECT back to the chase view (the reset behind the car), DOWN in the chase view, then L and R held with A
+    # (nitro, if the car has it: the focal length's speed effect and the flames).
+    "views": ("race", "", 600, ["wait 2", "hold A 200", "hold A,SELECT 6", "hold A 200", "hold DOWN 60",
+                                "hold A 150", "hold A,SELECT 6", "hold A 150", "hold DOWN 60", "hold A 100",
+                                "hold A,L 120", "hold A,R 120", "hold A,LEFT 60", "hold A 1200"]),
+    # From the reference race with nitro in the tank (the Quick Play car has none: before recording, one byte of
+    # the player's tank, driver +0x4C8 = 0x0202CAEC, is poked to make it 0x10000; +0x4CC is 0, so it never drains):
+    # A+L (nitro in binding set 0) for the camera's speed effect on the focal length and the nitro flames.
+    "nitro": ("race", "", 300, ["wait 2", "hold A 200", "hold A,L 150", "hold A 100", "hold A,L 60",
+                                "hold A,L,LEFT 40", "hold A,L,RIGHT 40", "hold A 600"], ["poke 0x0202CAEE 1"]),
 }
 
 
@@ -33,14 +59,14 @@ def session():
 
 
 def record(name):
-    frames, keys = SCENARIOS[name]
+    state, arming, frames, keys, *pre = SCENARIOS[name]
     work = session()
-    mgba_ctl.main(["load race"])
-    (work / "gtrace.tmp").write_text(f"{name} {frames}\n")
+    mgba_ctl.main([f"load {state}", *(pre[0] if pre else [])])
+    (work / "gtrace.tmp").write_text(f"{name} {frames} {arming}\n")
     (work / "gtrace.tmp").replace(work / "gtrace.txt")
     mgba_ctl.main(keys)
     log = work / "gtrace_log.txt"
-    for _ in range(600):
+    for _ in range(1200):
         if log.exists() and f"recorded {name}" in log.read_text():
             return
         time.sleep(0.5)
