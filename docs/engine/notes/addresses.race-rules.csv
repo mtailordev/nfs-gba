@@ -1,0 +1,31 @@
+region,address,size,what,doc
+rom,0x7BFCD4,3 × 0x4,AI shortcut chance per difficulty: 255 / 192 / 100 (a roll of rand & 0xFF must beat it),formats/career
+rom,0x7F37D8,44 × 0x4,per route: pointer to its branch count (null = 0) → 0x03006108,formats/career
+rom,0x7F3DD0,3 × 0x4,words a knocked-out racer's driver +0xF8.. gets (all 0),formats/career
+ram,0x03005FB4,4,pointer to the plane table (malloc 0x2000; 0x20 per waypoint),formats/career
+ram,0x03005FB8,4,pointer to the back table (256 × i32: lap index where a branch leaves; −1 none),formats/career
+ram,0x03006108,4,branch count of the race's route,formats/career
+ram,0x03006160,4,scratch: waypoints in sections 0..=N (link rebuild),formats/career
+ram,0x03006120,4 per section,branch distance scale onto the lap ×256 ([0] = 0x100),formats/career
+ram,0x03005384,4,the player has gone the wrong way for over 27 frames,formats/career
+ram,0x03005650,0x40,results per car id: +8 knockout bytes (8) · +0x10 best lap · +0x20 finish time · +0x30 hunter life,formats/career
+ram,0x03005730,0x40,ranked results (same arrays; +4 = entity id at each rank),formats/career
+ram,0x030060C0,4 per section,AI may take this branch as a shortcut (non-zero),formats/career
+ram,0x03000048,4,state value; 9 = places kept in entity order,formats/career
+ram,0x030061B0,5 × 0x4,hunter life gain by place (0 · 200 · 150 · 100 · 0),formats/career
+ram,0x030061D0,4,hunter: wrong-way frames before the drain (27),formats/career
+ram,0x030061E0,4,hunter: wall frames before the drain (50),formats/career
+ram,0x030061F4,4,hunter: wrong-way drain per frame (1000),formats/career
+ram,0x030061A8,4,hunter: wall drain per frame (100),formats/career
+ram,0x0300617C,4,hunter: hit damage factor ×256 (0x440),formats/career
+ram,0x03006184,4,hunter: drain factor of hunter_wall_hit ×256 (0x240),formats/career
+ram,0x030061A0,4,hunter: drain factor of hunter_drain_b ×256 (0x240),formats/career
+driver,+0x11C,3 × 0x4,vector (x y z 2.12) dotted with the racing-line direction for the wrong-way test,formats/career
+driver,+0x140,3 × 0x4,second vector for the wrong-way test (used when the first is near 0),formats/career
+driver,+0x444,4,AI: side of its next crossing line,formats/career
+driver,+0x4D6,2,AI: 2 when it changed section,formats/career
+driver,+0x4D8,2,race flags: bit 0 backwards past the start · bit 1 lap armed · bit 3 knocked out,formats/career
+driver,+0x4EC,2,wrong-way frames,formats/career
+driver,+0x4EE,2,wall frames,formats/career
+driver,+0x4F0,2,cleared by hunter hits and drains,formats/career
+driver,+0x4B0,4,AI stuck counter (0x32: FUN_0813F530; over 0x96/0xFA: FUN_0814EFA8),formats/career

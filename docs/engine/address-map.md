@@ -61,6 +61,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x799B88–0x7BFC53` | | text strings (the text table's targets) | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
 | `0x7BFC68` | | camera probe vector (0, 0, 72) for the start-sector search | engine/renderer |
+| `0x7BFCD4` | 3 × 4 | AI shortcut chance per difficulty: 255 / 192 / 100 (a roll of `rand & 0xFF` must beat it) | formats/career |
 | `0x7BFD0C` / `0x7BFD18` | | EEPROM 4 Kbit / 64 Kbit descriptors (`eeprom_select_type`) | formats/career |
 | `0x7BFD40` | 32 B | vibrato half sine | formats/audio |
 | `0x7BFD60` | 768 × u16 | frequency table, one octave (period mode) | formats/audio |
@@ -104,7 +105,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments; the **menu descriptor** at `0x7F2FE8` has the same layout | formats/city-sectors, formats/ui |
 | `0x7F1100` | 15 × 0x158 | handling records | engine/physics |
 | `0x7F3050` | per route | race-start byte | engine/physics |
-| `0x7F37D8` | per route | side-segment sector lists | engine/physics |
+| `0x7F37D8` | 44 × 4 | per route: pointer (null = none) to its branch count (→ `0x03006108`) and side-segment sector lists | engine/physics, formats/career |
 | `0x7F3CDA` | | breakable-wall partners | engine/physics |
 | `0x7F3DD0` | 12 | the zero vector (also driver `+0xF8` init) | engine/physics |
 | `0x7F40D0` | per (setting, reverse) | race-start word | engine/physics |
@@ -165,25 +166,28 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03000060` | u32 player entity index (0) |
 | `0x0300006C` | environment index (**11** in the reference race) |
 | `0x0300003C` | current music id (−1 none) |
-| `0x03000048` | race phase (9 intro, 2 racing, 3 over; 1 and 4 skip the dynamics; `hud_timer` sets 8 past 59:59.98, the countdown timer 7 at zero) |
+| `0x03000048` | race phase (9 intro, in which places stay in entity order; 2 racing, 3 over; 1 and 4 skip the dynamics; `hud_timer` sets 8 past 59:59.98, the countdown timer 7 at zero) |
 | `0x030000AC` | race-state changed flag |
 | `0x03000298` | IWRAM 32-byte block copy (used by `obj_upload_tiles`) |
 | `0x03004B98` | IWRAM minimap window copy |
 | `0x03000220` | IWRAM image start; `iwram_divmod` (signed divide storing a remainder in `0x03006480`) |
-| `0x03005384` | wrong way (more than 27 steps against the route) |
+| `0x03005384` | the player has gone the wrong way for over 27 frames |
 | `0x03005628` | counter that picks the traffic type (hypothesis: a frame counter) |
 | `0x03005640` | frame time (25,500 / timer-3 ticks, 10..100; 15 if `0x03005624` is 2), written by `main_frame` |
 | `0x030057D8` | u16 control word per entity (`0xFC00 \| keys` for the player) |
-| `0x03005FB4` | pointer to the waypoint lines (0x20 each: direction, widening, crossing plane, length) |
+| `0x03005FB4` | pointer to the plane table (malloc 0x2000; 0x20 per waypoint: direction, widening, crossing plane, length); built with the lapped flag the previous scene left, so skipped rows keep old contents |
+| `0x03005FB8` | pointer to the back table (256 × i32: lap index where a branch leaves; −1 none) |
+| `0x03006108` | branch count of the race's route |
+| `0x03006160` | scratch: waypoints in sections 0..=N (link rebuild) |
 | `0x03006000` | 5 words: the player's upgrade totals; `+0x10` nitro level × 10 |
 | `0x0300601C` | off-route warning (−1/0/1), written by `car_dynamics`; the HUD arrow shows it |
 | `0x03006030` | gravity (0x4F0, set by `car_init`) |
 | `0x03006074` | manual gearbox state |
 | `0x03006078`, `0x03006084`, `0x03006088`, `0x03006028`, `0x03006090`, `0x03006158`, `0x03006190` | race-start globals (`race_start_setup`) |
 | `0x030060A4` | the player's final drive |
-| `0x030060C0` | 16 words: route segments visited |
+| `0x030060C0` | per section (16 words): non-zero = the AI may take this branch as a shortcut |
 | `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step; non-zero lets `build_entity_matrix` take the physics orientation (entity `+0x0A` bit 5) |
-| `0x03006120` | per route segment: distance scale (0x100 for the main route) |
+| `0x03006120` | per section: branch distance scale onto the lap ×256 (`[0]` = 0x100) |
 | `0x03006150`, `0x0300614C` | nitro full-tank flag; grip-doubling flag |
 | `0x03006154` | time limit (0x4650; 0x2328 in career); `hud_countdown_timer` counts it down against the race time |
 | `0x0300615C` | split time in frames: gap to the car ahead/behind (`route_gap`; `hud_split` clamps it to 0) |
@@ -217,7 +221,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030056E0` | race mode (also selects the HUD screen and messages) |
 | `0x030056E4` | laps |
 | `0x03005718` | player car |
-| `0x03005730` | finishing order bytes |
+| `0x03005730` | ranked results, 0x40 bytes (same arrays as `0x03005650`; `+4` = entity id at each rank) |
 | `0x0300578C` | music option (volume = option × 4, at most 63) |
 | `0x03005798` | transmission |
 | `0x030057EC` | AI car count (opponents, + 1 with a wingman) |
@@ -225,7 +229,11 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005FB8` | pointer to the backward-step table for branch starts (`racing_line_step`) |
 | `0x0300608C` | lapped race (0 = sprint) |
 | `0x030061A4` | someone finished |
-| `0x030061B0…0x030061F4`, `0x0300617C` | hunter tuning; `0x03006184` = hunter wall-hit factor (0x240) |
+| `0x030061B0` | hunter life gain by place, 5 × 4 (0, 200, 150, 100, 0) |
+| `0x030061D0` / `0x030061E0` | hunter: wrong-way frames (27) / wall frames (50) before the drain |
+| `0x030061F4` / `0x030061A8` | hunter: wrong-way drain per frame (1000) / wall drain per frame (100) |
+| `0x0300617C` | hunter: hit damage factor ×256 (0x440) |
+| `0x03006184` / `0x030061A0` | hunter: drain factor ×256 of `hunter_wall_hit` / `hunter_drain_b` (0x240 each) |
 | `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
 | `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre (120, 79), `+0x0C` pitch 240, `+0x10` near 64, `+0x1C` focal 150 |
 | `0x03000214` | camera look yaw (0x4000 per turn; the skyline scrolls by it) = `atan(player − camera)` from the previous frame's camera position (`atan2_fast`); 0xFFD in the reference race, the atan's value at (344, 0) |
@@ -234,7 +242,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005778` | smoothed floor height at the camera (`floor_height`): the height limit for flag-0x4000 walls in the camera wall push |
 | `0x03005F9C` | camera yaw, 14-bit (renderer camera; the rim redraw test uses it) |
 | `0x03005624` | flag: no atlases, all racers dressed from `0x7EEA44` |
-| `0x03005650` | 4 bytes: per-racer copy of entity `+0x89` |
+| `0x03005650` | 0x40-byte results block per racer: `+0` car id copy (entity `+0x89`), `+8` knockout bytes, `+0x10` best lap, `+0x20` finish time, `+0x30` hunter life (`0x0300565C` is inside it) |
 | `0x0300565C` | 4 bytes: per-racer byte, 0xFF = empty slot |
 | `0x030064CC` / `0x030064D0` | heap descriptor table (8 bytes per block) / arena (`heap_alloc`) |
 | `0x03005FA4` | camera height offset (8.8) = the view's height table entry (chase −150·256) |
@@ -368,16 +376,22 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0xAC` | distance |
 | `+0x00` | heading the chase camera follows (0x1000 in the reference race) |
 | `+0x3C` / `+0x40` / `+0x44` | revs / gear / speed (read by the HUD) |
-| `+0x11C` / `+0x124` | travel vector (speed effect on the focal; hypothesis) |
+| `+0x11C` | vector (x, y, z, 2.12) dotted with the racing-line direction for the wrong-way test; also read by the speed effect on the focal (hypothesis) |
+| `+0x140` | second vector for the wrong-way test (used when the first is near 0) |
 | `+0x90` | wheel angle (`>> 8`; the rim redraw rotates by it) |
 | `+0xB4` | best lap |
 | `+0xB8` | lap start |
 | `+0xBC` | finish time |
 | `+0xC5` | laps left |
-| `+0x4D8` | race flags (bit 1: lap armed) |
+| `+0x444` | AI: side of its next crossing line |
+| `+0x4B0` | AI stuck counter (0x32: `FUN_0813F530`; over 0x96/0xFA: `car_put_back_on_road`) |
+| `+0x4D6` | AI: 2 when it changed section |
+| `+0x4D8` | race flags: bit 0 backwards past the start, bit 1 lap armed, bit 3 knocked out |
 | `+0x454` | needle rev scale |
 | `+0x4C8` | nitro tank (`car_nitro_drain`; the HUD dial shows it) |
-| `+0x4E8` | hunter life |
+| `+0x4E8` | hunter life (clamped at 0; nothing else happens at 0) |
+| `+0x4EC` / `+0x4EE` | wrong-way frames / wall frames |
+| `+0x4F0` | cleared by hunter hits and drains |
 
 ### Profile (`*0x030056EC` = `0x02000808`)
 
