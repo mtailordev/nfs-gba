@@ -40,6 +40,12 @@ SCENARIOS = {
     "trail": ("sprintinfo", "racing", 700, ["hold A 10", "wait 100", "hold B 250", "hold A 400", "hold A,LEFT 30",
                                              "hold A 300", "hold B 60", "hold A,RIGHT 30", "hold A 400",
                                              "hold B,LEFT 40", "hold A 1500"]),
+    # From the reference race: the camera's other branches. SELECT to the bumper view, DOWN alone looks back,
+    # SELECT back to the chase view (the reset behind the car), DOWN in the chase view, then L and R held with A
+    # (nitro, if the car has it: the focal length's speed effect and the flames).
+    "views": ("race", "", 600, ["wait 2", "hold A 200", "hold A,SELECT 2", "hold A 200", "hold DOWN 60",
+                                "hold A 150", "hold A,SELECT 2", "hold A 150", "hold DOWN 60", "hold A 100",
+                                "hold A,L 120", "hold A,R 120", "hold A,LEFT 60", "hold A 1200"]),
 }
 
 

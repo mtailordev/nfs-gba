@@ -1,0 +1,21 @@
+address,name,kind,comment
+0x0814f8ac,next_matrix_slot,function,next matrix slot from counter 0x03005394; 0xFF past 0x3F
+0x0814fa6c,wheel_ground_points,function,four wheel points around a car (heading only) on the floor of the sector found for each; leaves the last query in world +0xC0..+0xEA
+0x0814e050,build_car_matrix,function,car slot from the wheel planes (0x0300610C == 0) or the physics orientation; spawns contact sparks (profile +0x318); spoiler slot
+0x0814e8b4,exhaust_flames,function,player's exhaust/nitro flame sprites (table 0x087F3E00; driver +0x434/+0x436 animation)
+0x0814fb60,seen_from_behind,function,abs(angle_diff(a; b)) > 0x13FF
+0x0814e414,light_sprite,function,projects a car point through its slot and adds a light sprite (materials 0x0836CF5C; 0x1BC rear / 0x1FC brake)
+0x0814e52c,traffic_light_sprite,function,as light_sprite for traffic (material 0x0836F698)
+0x08162048,effect_sprite_alloc,function,first free object of the effect-sprite pool (header 0x03000058; +4 used)
+0x0814eca4,billboard_sprite,function,sprite at a slot's origin centred on (0x70; 0x50); scale from the reciprocal table
+0x08160708,copy_rotation,function,copies 9 words (a 3x3 rotation)
+0x08160434,mat_mul_34,function,3x3 product plus the sum of the translations (2.14)
+0x08160d18,copy_units,function,copies n bytes as words / halfwords / bytes (width 0x20/0x10/8); -1 on a null pointer
+0x08140224,raised_camera_orientation,function,(not ported) orientation for the raised camera (0x03006148)
+0x08144c98,traffic_slots,function,matrix slots of the live traffic cars (0x03006270) and their rear lights seen from behind
+0x0814c37c,spawn_spark,function,spark entity (handler 0x34) at a car's corner flying off with its velocity / 0xC4 plus spread
+0x081694b0,rotation_x_rom,function,ROM copy of the IWRAM x rotation (2.14)
+0x08169508,rotation_y_rom,function,ROM copy of the IWRAM y rotation (2.14)
+0x081695b8,mat_mul_33_rom,function,ROM copy of the IWRAM 3x3 product (2.14; translation untouched)
+0x081694a0,cos_rom,function,ROM copy of the IWRAM cosine (table 0x087C05F0)
+0x08169464,sin_rom,function,ROM copy of the IWRAM sine (table 0x087C05F0)

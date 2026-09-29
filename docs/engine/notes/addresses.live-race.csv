@@ -1,0 +1,19 @@
+region,address,size,what,doc
+ram,0x030053E4,4,camera setting: 0 chase / 1 bumper (SELECT toggles it in camera_update),engine/game-loop
+ram,0x03005804,4,set while the bumper view is on; back in the chase view camera_update resets the camera behind the car,engine/game-loop
+ram,0x030053E8,4,effect sprites on (light_sprite draws nothing while 0),engine/game-loop
+ram,0x03005F94,4,chase orbit yaw (eases to the driver's heading by clamp(diff; ±0x600) >> 3 unless 0x03006148),engine/game-loop
+ram,0x03005F9C,4,-look yaw & 0x3FFF: the camera matrix's yaw; the effects and the rim test use 0x4000 − it,engine/game-loop
+ram,0x03006148,4,raised camera: 0x82 above the car instead of 0x10 (and the orbit does not follow),engine/game-loop
+ram,0x03006090,4,traffic slots on (traffic_slots does nothing while 0),engine/game-loop
+ram,0x03000058,8,effect-sprite pool header: +0 objects (20 bytes each: +0 x; +2 y; +4 used; +8 frame; +A/+C scale; +10 size; +12 kind; +13 palette); +6 count,engine/game-loop
+rom,0x7BFC68,12,camera probe (0; 0; 72): the camera sector is the one 72 units ahead along the look direction,engine/game-loop
+rom,0x7F3E00,6 × 2 per row,exhaust flame points per (car·8 + record[3]·2)·3: two pairs of (x; y; z); z = 0 none,engine/game-loop
+rom,0x36D304,0x24,material of the exhaust flames (+0x10 low byte: frame count),engine/game-loop
+rom,0x36D010,0x24,material of the sparks (+0x10: lifetime in frames; +0x20 palette),engine/game-loop
+rom,0x36F698,0x24,material of the traffic rear lights,engine/game-loop
+driver,+0x28,4,brake lights on (opponent_effects draws them for entity 0),engine/game-loop
+driver,+0x434,2,exhaust flame animation (−1 off),engine/game-loop
+driver,+0x436,2,nitro flame animation (−1 while nitro is off),engine/game-loop
+profile,+0x318,4 per racer,sparks: the car's matrix code spawns two sparks while it is > 0,engine/game-loop
+profile,+0x400,1,the camera sector has a ceiling (camera_update; +0x401 last frame's),engine/game-loop
