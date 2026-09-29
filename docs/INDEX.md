@@ -12,5 +12,6 @@
 | [formats/lz77-images.md](formats/lz77-images.md) | BIOS-LZ77 image bank: 294 blobs, full-screen bitmaps, car texture atlases, textures |
 | [formats/vehicle-models.md](formats/vehicle-models.md) | 3D vehicle model bank: 102 models (cars in 3 LODs, spoilers, traffic), decoded from the renderer |
 | [formats/city-sectors.md](formats/city-sectors.md) | The city: a 2.5D portal/sector engine, with 1,113 sectors and 4,423 walls |
+| [formats/race-routes.md](formats/race-routes.md) | Race routes: 44 routes with a start grid (4 cars) and racing-line waypoints |
 
 `engine/` (one file per engine area) starts when the first subsystem is understood.

@@ -3,15 +3,15 @@
 //! Run from the repo root: `cargo run --release -p nfsgba-viewer`.
 //!
 //! Controls (Bevy `FreeCamera`): hold right mouse to look (M toggles), WASD move, Q/E down/up, Shift run,
-//! scroll wheel changes speed; K switches sky.
-//! `NFSGBA_CAM=x,y,z,tx,ty,tz` sets the start eye and target (metres); `NFSGBA_SHOT=<file.png>` saves one frame
-//! and quits, for checking renders without anyone at the screen.
+//! scroll wheel changes speed; K switches sky; R moves to the next race route (grid and chase camera).
+//! `NFSGBA_ROUTE=<n>` starts behind route n's grid; `NFSGBA_CAM=x,y,z,tx,ty,tz` sets the start eye and target
+//! (metres); `NFSGBA_SHOT=<file.png>` saves one frame and quits, for checking renders without anyone at the screen.
 
 use std::collections::BTreeMap;
 
 use bevy::{
     asset::RenderAssetUsages,
-    camera_controller::free_camera::{FreeCamera, FreeCameraPlugin},
+    camera_controller::free_camera::{FreeCamera, FreeCameraPlugin, FreeCameraState},
     image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     prelude::*,
     render::{
@@ -124,7 +124,7 @@ fn main() {
         }))
         .add_plugins(FreeCameraPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, (shot, sky))
+        .add_systems(Update, (shot, sky, race))
         .run();
 }
 
@@ -243,6 +243,48 @@ fn setup(
         ));
     }
 
+    // Race: one route's racing line and four cars on its start grid (the player's Chevy Cobalt SS first, as in
+    // the reference race). R cycles the 44 routes; NFSGBA_ROUTE picks the first one and starts behind the grid.
+    let floors = rom::city(&data)
+        .iter()
+        .map(|s| {
+            s.walls
+                .iter()
+                .map(|w| world(0.0_f32, w.bottom[0], 0.0_f32).y)
+                .sum::<f32>()
+                / s.walls.len().max(1) as f32
+        })
+        .collect();
+    let start_route: Option<usize> = std::env::var("NFSGBA_ROUTE").ok().and_then(|s| s.parse().ok());
+    let race = Race {
+        routes: rom::routes(&data),
+        floors,
+        current: start_route.unwrap_or(23),
+    };
+    let cars = rom::cars(&data);
+    // Paint: the reference race's red for the player, then blue, black and silver (BGR555 channel scale).
+    let colours = [[30, 0, 1], [4, 10, 28], [3, 3, 4], [22, 22, 23]];
+    for (slot, c) in [2, 3, 7, 11].into_iter().enumerate() {
+        let atlas = &vehicle_textures[cars[c].first_material];
+        let tris = model_tris(&models[cars[c].models[0]], Some(atlas), Color::WHITE);
+        let lift = on_ground(&tris);
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(images.add(image(atlas, &rom::car_palette(&data, colours[slot], 0)))),
+            unlit: true,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(meshes.add(tris.mesh())),
+            MeshMaterial3d(material),
+            race.grid(slot, lift),
+            GridSlot { slot, lift },
+        ));
+    }
+    let chase = (std::env::var("NFSGBA_CAM").is_err() && start_route.is_some()).then(|| race.chase());
+    commands.insert_resource(race);
+
     // Sky: the gradient on a far ring and the skyline panorama on a band at the horizon, both centred on the
     // camera every frame. K cycles through the 12 ROM skies (which sky belongs to which district is not decoded).
     let mut skies = Skies::default();
@@ -309,11 +351,88 @@ fn setup(
             run_speed: 600.0,
             ..default()
         },
-        Transform::from_translation(eye).looking_at(target, Vec3::Y),
+        chase.unwrap_or_else(|| Transform::from_translation(eye).looking_at(target, Vec3::Y)),
     ));
     info!(
         "city bounds {min:.0} .. {max:.0} m; controls: right mouse look, WASD/QE move, Shift run, wheel speed, K sky"
     );
+}
+
+#[derive(Resource)]
+struct Race {
+    routes: Vec<rom::Route>,
+    /// Mean floor height (m) of every sector.
+    floors: Vec<f32>,
+    current: usize,
+}
+
+#[derive(Component)]
+struct GridSlot {
+    slot: usize,
+    /// Raises the model so its lowest point sits on the floor.
+    lift: f32,
+}
+
+impl Race {
+    fn route(&self) -> &rom::Route {
+        &self.routes[self.current]
+    }
+
+    fn at(&self, w: &rom::Waypoint) -> Vec3 {
+        world(w.x as f32, 0.0_f32, w.z as f32).with_y(self.floors[w.sector])
+    }
+
+    /// Driving direction at the start: first waypoint towards the second, on the ground plane.
+    fn heading(&self) -> Vec3 {
+        match &self.route().waypoints[..] {
+            [a, b, ..] => ((self.at(b) - self.at(a)) * Vec3::new(1.0, 0.0, 1.0)).normalize_or(Vec3::X),
+            _ => Vec3::X,
+        }
+    }
+
+    /// A car on grid slot `slot`, standing on the start sector's floor and facing along the route.
+    fn grid(&self, slot: usize, lift: f32) -> Transform {
+        let [x, _, z] = self.route().grid[slot];
+        let floor = self.route().waypoints.first().map_or(0.0, |w| self.floors[w.sector]);
+        let at = world(x as f32, 0.0_f32, z as f32).with_y(floor + lift);
+        Transform::from_translation(at).looking_to(self.heading(), Vec3::Y)
+    }
+
+    /// The reference race's chase camera: 343 units behind the player's car and 134 above it.
+    fn chase(&self) -> Transform {
+        let car = self.grid(0, 0.0).translation;
+        let eye = car - self.heading() * 343.0 * SCALE + Vec3::Y * 134.0 * SCALE;
+        Transform::from_translation(eye).looking_at(car + self.heading() * 20.0, Vec3::Y)
+    }
+}
+
+/// Draw the current racing line; R moves to the next route (cars onto its grid, camera behind them).
+fn race(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut race: ResMut<Race>,
+    mut cars: Query<(&GridSlot, &mut Transform), Without<Camera3d>>,
+    camera: Single<(&mut Transform, &mut FreeCameraState), With<Camera3d>>,
+    mut gizmos: Gizmos,
+) {
+    if keys.just_pressed(KeyCode::KeyR) {
+        race.current = (race.current + 1) % race.routes.len();
+        for (g, mut t) in &mut cars {
+            *t = race.grid(g.slot, g.lift);
+        }
+        let (mut t, mut state) = camera.into_inner();
+        *t = race.chase();
+        (state.yaw, state.pitch, _) = t.rotation.to_euler(EulerRot::YXZ);
+        state.velocity = Vec3::ZERO;
+        let r = race.route();
+        let length = r.waypoints.last().map_or(0, |w| w.distance);
+        info!(
+            "route {}: {} waypoints, {length} units",
+            race.current,
+            r.waypoints.len()
+        );
+    }
+    let line: Vec<Vec3> = race.route().waypoints.iter().map(|w| race.at(w) + Vec3::Y).collect();
+    gizmos.linestrip(line, Color::srgb(1.0, 0.2, 0.1));
 }
 
 #[derive(Resource, Default)]

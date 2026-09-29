@@ -170,6 +170,83 @@ pub fn paint_palettes(rom: &[u8]) -> Vec<Vec<[u8; 4]>> {
         .collect()
 }
 
+/// A race route from the route table at `0x7F2798` (0x14-byte records, read by `FUN_08139454`):
+/// `+0x00` four template entities (0xA4 bytes each; `+0x0C/+0x10/+0x14` = 8.8 position) and `+0x08` the
+/// racing line: 24-byte waypoints `(x, z, ?, -1, cumulative distance, sector)`.
+#[derive(Debug, Clone)]
+pub struct Route {
+    /// Start grid, city units: the player first, then three opponents.
+    pub grid: Vec<[i32; 3]>,
+    pub waypoints: Vec<Waypoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Waypoint {
+    pub x: i32,
+    pub z: i32,
+    /// Distance along the route from the first waypoint.
+    pub distance: i32,
+    pub sector: usize,
+}
+
+pub fn routes(rom: &[u8]) -> Vec<Route> {
+    const TABLE: usize = 0x7F_2798;
+    let sectors = city(rom).len();
+    // Records end where `+0x10` stops being zero (the level descriptors follow).
+    (0..)
+        .map(|i| TABLE + 0x14 * i)
+        .take_while(|&r| u32_at(rom, r + 0x10) == 0)
+        .map(|r| {
+            let entities = ptr(rom, r);
+            let grid = (0..4)
+                .map(|e| [0, 4, 8].map(|k| u32_at(rom, entities + 0xA4 * e + 0x0C + k) as i32 >> 8))
+                .collect();
+            let mut waypoints: Vec<Waypoint> = Vec::new();
+            if u32_at(rom, r + 8) != 0 {
+                let line = ptr(rom, r + 8);
+                for w in (0..0x1800 / 24).map(|k| line + 24 * k) {
+                    let wp = Waypoint {
+                        x: u32_at(rom, w) as i32,
+                        z: u32_at(rom, w + 4) as i32,
+                        distance: u32_at(rom, w + 16) as i32,
+                        sector: u32_at(rom, w + 20) as usize,
+                    };
+                    let ordered = waypoints.last().is_none_or(|p| wp.distance >= p.distance);
+                    if u32_at(rom, w + 12) != u32::MAX || !ordered || wp.sector >= sectors {
+                        break;
+                    }
+                    waypoints.push(wp);
+                }
+            }
+            Route { grid, waypoints }
+        })
+        .collect()
+}
+
+/// A car palette for atlas pixels 0..31: the body ramp generated from `paint` (0..31 per channel, BGR555 scale)
+/// and the trim (glass, lights) from paint preset `trim_preset`.
+///
+/// The game builds the body ramp at runtime from the chosen colour. This reconstruction reproduces the ramp in
+/// the reference race's RAM (red Cobalt): pixel 0 dark grey, 1..8 highlights blending from ~52% towards white
+/// down to ~16%, 9 the paint itself, 10..15 fading to black. The generator itself is not decoded.
+pub fn car_palette(rom: &[u8], paint: [u8; 3], trim_preset: usize) -> Vec<[u8; 4]> {
+    let shade = |c: [f32; 3]| {
+        let [r, g, b] = c.map(|v| (v.clamp(0.0, 31.0).round() as u16).min(31));
+        bgr555(r | g << 5 | b << 10)
+    };
+    let base = paint.map(f32::from);
+    let body = (0..16).map(|i| match i {
+        0 => shade([4.0; 3]),
+        1..=8 => {
+            let t = 0.52 - (i - 1) as f32 * 0.052;
+            shade(base.map(|c| c + (31.0 - c) * t))
+        }
+        _ => shade(base.map(|c| c * (15 - i) as f32 / 6.0)),
+    });
+    let trim = paint_palettes(rom)[trim_preset][16..].to_vec();
+    body.chain(trim).collect()
+}
+
 /// One edge of a sector: from this wall's point to the next wall's point (the last wraps to the first).
 #[derive(Debug, Clone)]
 pub struct Wall {
@@ -486,6 +563,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn routes_match_the_reference_race() {
+        let Some(rom) = rom() else { return };
+        let routes = routes(&rom);
+        assert_eq!(routes.len(), 44);
+        // Quick Play race in the reference run: route 23, player start (118400, 0, -64320) city units.
+        let r = &routes[23];
+        assert_eq!(r.grid[0], [118_400, 0, -64_320]);
+        assert_eq!(
+            (
+                r.waypoints.len(),
+                r.waypoints[0].sector,
+                r.waypoints.last().unwrap().distance
+            ),
+            (19, 760, 58_231)
+        );
+        let sectors = city(&rom).len();
+        assert!(routes.iter().flat_map(|r| &r.waypoints).all(|w| w.sector < sectors));
     }
 
     #[test]
