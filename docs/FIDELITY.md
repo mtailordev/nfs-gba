@@ -35,6 +35,17 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 | D6 | Not located: the code that arms a lap (driver `+0x4D8` bit 1), and what happens when hunter life reaches zero | — | Race rule code (`docs/formats/career.md`) |
 | D7 | No save encoder (the decoder is exact) | `save_encode` (`FUN_081492c0`) | `docs/formats/career.md` |
 
+## Audio
+
+| # | Now | Game | Exact source |
+|---|---|---|---|
+| A1 | Implemented from the disassembly but never exercised by Carbon's data, so exact by reading only: effects 0–6, A, C, D, E6x, F; linear pitch mode; rate change; the first-voice carry; the mixer's zero-address checks; volumes ≥ 0xFF | — | `docs/formats/audio.md` |
+| A2 | Jingle system (second module state at engine `+0x83C`) not rewritten | Nothing in Carbon calls it | `FUN_081517e8`, `FUN_081522b8`, `FUN_08152310`, `FUN_0815236c` |
+| A3 | Mode-0 mixer and the flagged sound format not rewritten | Carbon uses mode 1 | `0x0815CF2C`, `FUN_08152ab8`, `FUN_08152b7c` |
+| A4 | Test tone not rewritten | Engine `+0x14` is never set | `FUN_08151aa8` |
+| A5 | Division by zero returns mGBA's HLE result | The BIOS would hang; cannot happen with Carbon's data | `bios_div` |
+| A6 | Analogue output not modelled: two identical FIFOs, DAC, `SOUNDBIAS`; WAV files say 10512 Hz | Hardware runs at 10512.04 Hz | Hardware |
+
 ## Closed
 
 - **R1, indexed colour:** exact. Index textures plus a 256-entry palette texture (`Indexed` material, `indexed.wgsl`), nearest texel with mask-equivalent wrap, BGR555 expansion `c << 3 | c >> 2`, no filtering, MSAA, tonemapping or dither. Checked: every city pixel of the route-23 chase shot is an exact palette colour; region colour sets match s15 (`docs/engine/viewer-rendering.md`).
@@ -42,6 +53,7 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 - **R4, car trim:** slots 193–207 are the city palette's own colours; nothing car-specific writes them. 192 and 208 are the glass shades (R3).
 - **Environment palette and sky selection:** exact (`race_load_palettes`: palette `+0x00 + (+0x5A)·2`, sky from `+0x5E`/`+0x60`). Checked: the race's base palette equals city palette 13 (environment 11, the reference race; byte-identical to palette 3) in every non-runtime slot.
 - **D1, racing line length:** exact. Section 0 of the route `+0x04` table is the lap (its last waypoint repeats the first); sections 1.. are branches, joined by waypoint links (`routes()`; route 23: 36 waypoints, 108,219 units, one branch from 19 to 27).
+- **LS_Play music, sound effects and mixer:** exact (`nfsgba-audio`: 13,800 traced frames bit-exact in mix buffers and the whole engine work area, including 12,000 free-running frames driven only by the game's API calls).
 - **Wall textures and wall UVs:** exact (column maps, `u >> 7`, v 16,384 = one texture), from `raster_wall_columns` and `setup_wall_spans`.
 - **World scale and axes:** exact (one unit for cars and city; the chase-camera view matches the game's screenshot).
 - **Vehicle UVs:** exact (1.15 fixed point, overlaid on the atlas).

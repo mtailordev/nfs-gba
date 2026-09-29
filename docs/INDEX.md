@@ -16,6 +16,7 @@
 | [formats/vehicle-models.md](formats/vehicle-models.md) | 3D vehicle model bank: 102 models (cars in 3 LODs, spoilers, traffic), decoded from the renderer |
 | [formats/city-sectors.md](formats/city-sectors.md) | The city: a 2.5D portal/sector engine, with 1,113 sectors and 4,423 walls |
 | [formats/race-routes.md](formats/race-routes.md) | Race routes: 44 routes with a start grid (4 cars) and a racing line (lap plus shortcut branches) |
+| [formats/audio.md](formats/audio.md) | Audio: Logik State LS_Play modules (`GBAMOD30`), sample bank, sound effects, sequencer and mixer (`crates/nfsgba-audio`) |
 | [formats/car-paint.md](formats/car-paint.md) | Car colours: palette slots 160–255, paint ramps, glass shades, atlas remap, decals |
 | [formats/career.md](formats/career.md) | Career (zones, events, unlocks, wingmen), race setup, race rules and the EEPROM save |
 | [engine/sky.md](engine/sky.md) | Sky: per-scanline gradient (VCount IRQ on palette entry 0) and the skyline blit |

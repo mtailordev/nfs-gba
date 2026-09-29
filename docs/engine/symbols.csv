@@ -58,7 +58,7 @@ address,name,kind,comment
 0x0812bfa4,garage_draw_car,function,tentative: garage turntable, shade_car_paint(.., 1, angle)
 0x0812beec,garage_load_car_atlas,function,tentative: sets the car, unpacks atlas and decal
 0x0812bf48,garage_load_car_palette,function,tentative: sets the car and paint, FUN_0813b6d0(0)
-0x0812ac14,vblank_irq,function,VBlank IRQ: counters; gradient pointer = base + 2*start; LYC = 0
+0x0812ac14,vblank_irq,function,game VBlank IRQ: sound DMA restart, mix, swap; counters; sky gradient pointer = base + 2*start; LYC = 0
 0x030001c0,vcount_irq_sky_gradient,function,VCount IRQ (ARM): PAL[0] = *grad++; LYC += 2; lines 0-78
 0x03005810,irq_dispatch,function,ARM IRQ dispatcher; handler table 0x030056D0
 0x0813a318,draw_skyline,function,skyline panorama blit into the mode-4 back buffer (256-byte rows; 32-byte fill)
@@ -112,3 +112,50 @@ address,name,kind,comment
 0x081412ec,hunter_tuning_init,function,hunter life gain/drain constants
 0x08142f74,frames_to_centiseconds,function,frames*100/60
 0x0816a93c,__udivsi3,function,libgcc unsigned divide
+0x08151b10,snd_frame_update,function,LS_Play per-frame update: rate check, pending music, mix next buffer (docs/formats/audio.md)
+0x08151928,snd_dma_restart,function,VBlank: restart DMA1/DMA2 on the current mix buffer (ARM 0x0815ccc4)
+0x08151c48,snd_swap_buffers,function,after mixing: previous = current; current ^= 1
+0x08151f78,snd_init,function,LS_Play init(config, rate index, max sfx channels)
+0x08151554,snd_hw_setup,function,Direct Sound A+B, DMA1/2 to FIFO A/B, timer 0 reload per rate
+0x081519d0,snd_apply_rate,function,rate change (unused in Carbon) and music fade-in +3/frame
+0x0815176c,snd_start_requested_music,function,loads and starts the module requested by snd_play_module
+0x081517e8,snd_jingle_switch,function,second module state for jingles (unreachable in Carbon)
+0x08151e04,snd_load_module,function,GBAMOD30 header into the module state
+0x081521b4,snd_start_module,function,start the loaded module at an order
+0x0815240c,snd_stop_music,function,stop music, zero music channel volumes
+0x08152660,snd_mix,function,mixer driver: rows/ticks, voice list, segment cuts, loop wraps
+0x08152550,snd_row,function,decode and trigger one row, advance order
+0x0815248c,snd_read_cell,function,pattern stream decode for one channel
+0x08151d8c,snd_stream2,function,run-length stream, 2-byte values
+0x08151d60,snd_stream1,function,run-length stream, 1-byte values
+0x08153654,snd_trigger,function,note, instrument, volume column and effect of one row
+0x08153354,snd_tick,function,per-tick effects of the music channels
+0x081514a0,snd_note_period,function,note -> period and step (period mode)
+0x08151500,snd_update_step,function,step from period + slide + vibrato
+0x0815145c,snd_period_freq,function,period -> Hz through the 768-entry octave table
+0x081530b0,snd_tone_porta,function,tone portamento tick
+0x081531dc,snd_vibrato,function,vibrato tick
+0x08153068,snd_volume_slide,function,volume slide tick
+0x0815327c,snd_slide_down,function,portamento down (period +)
+0x081532e0,snd_slide_up,function,portamento up (period -)
+0x08153344,snd_volume_column,function,volume column overrides the volume every row and tick
+0x08151758,snd_play_module,function,request a module for the next update
+0x08152e40,snd_play_sfx,function,play sound effect(id, rate, slot, volume)
+0x08152f44,snd_set_sfx,function,set a sound slot's volume and rate
+0x08152f88,snd_stop_sfx,function,zero a sound slot's volume
+0x08152fb8,snd_set_sfx_volume,function,set a sound slot's volume
+0x08152fec,snd_set_sfx_rate,function,set a sound slot's rate in Hz
+0x08153034,snd_sfx_playing,function,sound slot end > 2
+0x081518d0,snd_set_master_volume,function,engine +0x1428
+0x081518e4,snd_set_music_volume,function,engine +0x142c
+0x081518f8,snd_set_sound_volume,function,engine +0x1430
+0x0815264c,snd_set_loop,function,engine +0x1440
+0x081516bc,snd_shutdown,function,stop DMA/timer, clear buffers, stop music, not running
+0x0815cca0,bios_div,function,Thumb stub: swi 6 (quotient)
+0x0815cca8,bios_mod,function,Thumb stub: swi 6, returns the remainder
+0x03005a00,snd_mix_voices,function,ARM mixing loop (LZ77 from 0x0815cfd4)
+0x08135df8,carbon_sound_init,function,allocates the sound work area and inits LS_Play at 10512 Hz
+0x08135fdc,carbon_play_sound,function,sound id -> slot (0x087ee24c) and option volume
+0x08136028,carbon_stop_sound,function,stop a sound id
+0x08136054,carbon_play_music,function,music id -> module (0x087ee238)
+0x081360b4,carbon_set_sound_rate,function,rate = x*8 Hz on the sound's slot

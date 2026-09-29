@@ -11,9 +11,16 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | Offset | Size | What | Doc |
 |---|---|---|---|
 | `0x000000` | 0xC0 | cartridge header; entry `b 0x080000C0` | recon/ROM-INVENTORY |
-| `0x02C000–0x128000` | | PCM-like audio bank (samples, unverified) | recon/FIRST-LOOK |
-| `0x04EA14…0x0507FC` | 5 | `GBAMOD30` music modules (Logik State `LS_Play`) | formats/text-table |
-| `0x128000–0x16C244` | | Thumb game code (ends with `memset`) | recon/FIRST-LOOK |
+| `0x000210` | 4 + 40 × 24 | sound-effect table (u32 count, then entries) | formats/audio |
+| `0x0005D4–0x04EA11` | | sound-effect sample data (signed 8-bit PCM) | formats/audio |
+| `0x04EA14`, `0x04F134`, `0x04F8DC`, `0x050034`, `0x0507FC` | 5 | `GBAMOD30` music modules, music ids 0–4 (Logik State `LS_Play`) | formats/audio |
+| `0x050FD4` | 256 × 16 | sample bank headers (26 used) | formats/audio |
+| `0x051FD4–0x12A84B` | | sample bank data (signed 8-bit PCM), in header order | formats/audio |
+| `0x12A84C–0x16C244` | | Thumb game code (starts at `FUN_0812a84c`, ends with `memset`) | recon/FIRST-LOOK |
+| `0x151E34` | | the loader's `"GBAMOD30"` literal (not a module) | formats/audio |
+| `0x153BB4` | | note → period table, linear pitch mode (unused by Carbon) | formats/audio |
+| `0x154354…` | | per-rate note → step tables, linear mode (pointers at `0x7F5BA4`) | formats/audio |
+| `0x15CF2C` / `0x15CFD4` | | LZ77-packed ARM mixer, mode 0 / **mode 1** (→ IWRAM `0x03005A00`, 0x3EC bytes) | formats/audio |
 | `0x14FC38`, `0x165154`, `0x168264` | | ARM code copied to IWRAM for races (`0x03000000 + off − 0x164F14` etc.) | below |
 | `0x16C244–0x402000` | 294 blobs | BIOS-LZ77 image bank | formats/lz77-images |
 | `0x33EF14` | | menu palettes | |
@@ -41,6 +48,9 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x797D10–0x7E53EC` | | text strings | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
 | `0x7BFD0C` / `0x7BFD18` | | EEPROM 4 Kbit / 64 Kbit descriptors (`eeprom_select_type`) | formats/career |
+| `0x7BFD40` | 32 B | vibrato half sine | formats/audio |
+| `0x7BFD60` | 768 × u16 | frequency table, one octave (period mode) | formats/audio |
+| `0x7C0390` / `0x7C03A2` / `0x7C03B4` | 8 × u16 / 8 × u16 / 8 × u32 | mixing rates: timer 0 reload / samples per frame / Hz (index 0: 10512 Hz, 176) | formats/audio |
 | `0x7C03F0` | 256 × u16 | random table (`rand_table`, index `0x030064C8`) | formats/car-paint |
 | `0x7C05F0` | 0x2000 × i16 | sine table, half wave, 0x4000 = 1.0 (`sin_q14`) | formats/car-paint |
 | `0x7C45F0` | 32,767 × 4 | reciprocal table: entry k = 2^24/(k+1) (light interpolation, likely more) | FIDELITY R2 |
@@ -59,6 +69,8 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7E6260` | 6 × 0x10 | setup screens (items 0x18 each) | formats/career |
 | `0x7E6EEC` | 20 × 0x80 | paint presets, used only by a menu function (race colours come from `0x36C95C`) | formats/vehicle-models |
 | `0x7E86A0` | 5,867 × 4 | text table: 977 keys, 5 × 977 strings, 5 module pointers | formats/text-table |
+| `0x7EE238` | 5 × 4 | music table: module pointers | formats/audio |
+| `0x7EE24C` | 40 B | Carbon sound id → sound-effect slot | formats/audio |
 | `0x7EEA24` | bytes | special ramp numbers: by `cars[1] − 15` (slot 160) or `cars[0]` (slot 208, paint ≥ 20) | formats/car-paint |
 | `0x7EEA33` | per car | new-profile per-car record `[6]` defaults | formats/career |
 | `0x7EEB70` | 0x9C per car | i16 (x, y) of decal-set materials in the atlas | formats/car-paint |
@@ -71,6 +83,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F2798` | 44 × 0x14 | route table | formats/race-routes |
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments (plus variant at `0x7F2FE8`) | formats/city-sectors |
 | `0x7F38B8` | 65 × 4 | Thumb function table (states or menus?) | |
+| `0x7F5BA4` | | pointers to the linear-mode step tables | formats/audio |
 | `0x7F4344` | 12 × u32 | opponent 1's paint per wingman 1..12 (`pick_opponent_cars` reads `[wingman − 1]`; wingman 0 reads `0x7F4340` = 11) | formats/car-paint |
 
 ### Level descriptor (0x68 bytes, `0x7F2B08`)
@@ -105,12 +118,18 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030000C0` | **world struct** (below) |
 | `0x03000060` | u32 player entity index (0) |
 | `0x0300006C` | environment index (**11** in the reference race) |
+| `0x0300003C` | current music id (−1 none) |
+| `0x03005A00` | IWRAM block (0x54C): mode-1 mixer code, then mix buffers `0x03005DEC` / `0x03005E9C` (176 samples each) |
+| `0x03005F4C` / `0x03005F50` | sound work-area pointer (0x26AC allocated) / 28-byte engine config |
+| `0x03006370` | LS_Play engine pointer (`0x0200EE28` in the reference runs; layout in formats/audio) |
+| `0x03006378` | mixer-driver call counter |
+| `0x0300637C` | current module state (engine `+0x5C`) |
 | `0x03000040` | units setting |
 | `0x03000050` | catch-up |
 | `0x03000070` | mode flags |
 | `0x030000A0` | career flag |
 | `0x030000BC` | event AI skill |
-| `0x030053A4` | SFX setting |
+| `0x030053A4` | sound option (volume = option × 4, at most 63) |
 | `0x030053AC` | pointer to the player entity |
 | `0x030053E4` | camera setting |
 | `0x03005388` | route number (menu numbering; `0x7F2588` maps it) |
@@ -123,7 +142,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030056E4` | laps |
 | `0x03005718` | player car |
 | `0x03005730` | finishing order bytes |
-| `0x0300578C` | music setting |
+| `0x0300578C` | music option (volume = option × 4, at most 63) |
 | `0x03005798` | transmission |
 | `0x030057EC` | AI car count (opponents, + 1 with a wingman) |
 | `0x03005800` | race frame counter |
