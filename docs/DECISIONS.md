@@ -9,8 +9,10 @@ Newest first. Each entry: what, why, alternatives.
   - `crates/nfsgba-viewer` is the Bevy app.
   - **Bevy is pinned to `=0.19.1`**, the latest stable. We skipped 0.20.0-rc.2 because it's a release candidate. The camera uses Bevy's built-in `FreeCamera` rather than our own controller.
 - **Viewer units and axes:**
-  - **`SCALE = 1/192`.** This replaces the first guess of 1/256, which was based on the road width. All 15 car models measure about 48 model units per metre, checked against real car dimensions on every axis. With the likely engine factor for models (×4, `CAR_SCALE`), that makes the city 192 units per metre: streets about 10 m wide, facades about 13 m tall.
-  - The ×4 itself is still a hypothesis (`ponytail:` in the code) until the matrix setup confirms it.
+  - **`SCALE = 1/48`, one unit for cars and city.** This replaces 1/256 (a road-width guess) and then 1/192 (which assumed a ×4 model factor).
+  - The race dump shows the vehicle matrices are pure rotations, with translations in city units, so there is no model factor.
+  - The cars measure about 48 units per metre, so the city is exaggerated (streets about 40 m).
+  - Rendering from the game's chase camera reproduces the game's screenshot layout.
   - Raw space (x right, y down, z forward) maps to Bevy as `(x, -y, -z)`: a rotation, not a mirror.
 - **Car paint in the viewer uses the 20 ROM paint presets.** The game generates the real paint ramp at runtime from the player's colour choice.
 

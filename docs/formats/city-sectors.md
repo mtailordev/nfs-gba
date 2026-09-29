@@ -26,14 +26,32 @@ These come from the level descriptor at `0x7F2B08` (see [vehicle-models.md](vehi
 | `+0x08` | `+0x00` | `0x47BC6C` | **city texel base**: material `+0x08` is an offset from here |
 | `+0x00` | | `0x71F1E8` | **city palette**: 256 × BGR555. Colour 0 is magenta `0x7C1F` (transparent) |
 
-## Materials and textures (verified by rendering)
+## Materials and textures (verified)
 
-- **Texels:** 8bpp, row-major, at `texel base + material +0x08`.
-- **Size:** material `+0x0C`/`+0x0E` hold width and height (8 … 512), and `+0x1E`/`+0x1F` their log2.
-- **Palette:** textures render correctly with the palette at record `+0x00`, and index 0 is transparent (for example above facade cut-outs).
-- **Own palettes:** materials whose `+0x02` field is 2 point at their own 512-byte palette through `+0x04`, stored just before their texels (not yet verified).
-- **Runtime palette:** during a race the BG palette in RAM is not a raw copy. It's roughly `0.6 × ROM colour + haze` (a fade or fog effect, unverified).
-- **Contents:** large road-surface textures (a 512×512 roundabout quarter, straights with lane markings), 512×64 building-facade strips, and 64×64 paving and tiles.
+The material table (level record `+0x1C`) holds **227 self-indexed records** of 0x24 bytes, filling the space up to the next table at `0x722DD4`. Everything below was checked by rendering; `nfsgba_formats::city_textures` decodes all of it.
+
+| Offset | Meaning |
+|---|---|
+| `+0x00` | u16 index (records are self-indexed) |
+| `+0x02` | u16 kind. **0 = plain:** row-major texels. **2 = column-mapped:** the building facades. **1:** a sky gradient (see below) |
+| `+0x04` | kind 2: offset (from the texel base) of the **column map**, one byte per u |
+| `+0x08` | offset of the texels, from the texel base (level record `+0x08`) |
+| `+0x0C`, `+0x0E` | u16 width, height |
+| `+0x1E`, `+0x1F` | log2 width, log2 height (the rasteriser's masks and shifts) |
+
+- **Column-mapped textures:** wall texture u picks a column through `map[u]`. That column's `height` texels are stored contiguously at `texels + column × height` (column-major), and repeated columns are stored only once. For example, material 5 (512×128) has 51 unique columns. `FUN_03000304` (the wall rasteriser) reads textures exactly this way.
+- **Kinds in use:** 107 facades of 512×128 and 30 of 512×64 (kind 2); floor textures of 64×64, 128×128, 512×128 and 512×512 (kind 0); 8×8 flat textures.
+- **Palette:** level record `+0x00` (`0x71F1E8`, 256 × BGR555). Index 0 (magenta `0x7C1F`) is transparent (rooflines, cut-outs).
+- **Runtime palette:** in a race the palette in RAM is *computed*. No 32-colour run of it exists anywhere in the ROM, and the reference race looks night-tinted (for instance, blue-white kerbs where the ROM palette has red-white). It is probably time of day or fog; not decoded.
+- **Material 0 means "not drawn".** `FUN_0300224c` runs a sector's floor/ceiling passes only if `+0x08` or `+0x04` is non-zero. The 91 solid walls with material 0 are assumed to be invisible collision walls; drawn, they appear as blank slabs.
+
+## Skies (verified)
+
+There are 12 skies, each a pair of consecutive materials (`nfsgba_formats::skies`):
+- a **240×64 skyline panorama** (kind 0, row-major, city palette, colour 0 = sky): night city skylines, an industrial skyline, a quarry, snowy mountains, rocky hills;
+- a **1×128 material holding 64 BGR555 colours**: the sky gradient from top to bottom. The game probably writes it per scanline, which would also explain part of the odd runtime palette.
+
+Which sky belongs to which district or event, and the panorama's scroll factor, are not decoded; the viewer lets you cycle through them.
 
 ## Sector (0x30 bytes)
 
@@ -41,9 +59,10 @@ These come from the level descriptor at `0x7F2B08` (see [vehicle-models.md](vehi
 |---|---|---|
 | `+0x00` | u16 | first wall. Sectors tile the wall array in order |
 | `+0x02` | u16 | wall count |
-| `+0x04`, `+0x08` | u16 | when non-zero, extra draw passes (`FUN_03002da0`/`FUN_03003180`); probably floor/ceiling or road-surface materials |
+| `+0x04` | u16 | **ceiling** material (tunnels and overpasses), 0 = none. Drawn by `FUN_03002da0` pass 1, or filled with colour `+0x0D` by `FUN_03003180` |
+| `+0x08` | u16 | **floor** material, 0 = none. Pass 0, or filled with colour `+0x0C` |
 | `+0x0A` | u16 | index into a 0x14-byte table (world `+0x1C`); `0xFFFF` = none. Flag `0x40` there hides the sector |
-| `+0x0C`, `+0x0D` | u8 | per-pass options |
+| `+0x0C`, `+0x0D` | u8 | solid fill colour (palette index) for the floor/ceiling pass; 0 = textured |
 | `+0x12` | u8 | flags (bit 3: container, draw the linked list at `+0x24` instead) |
 | `+0x24` | u16 | next sector in a list, `0xFFFF` ends it |
 | rest | | unknown |
@@ -56,25 +75,36 @@ A wall is the edge from its point to the next wall's point in the same sector; t
 |---|---|---|
 | `+0x00` | i32 | x of the start point (world units) |
 | `+0x04` | i32 | z of the start point |
-| `+0x08` | i16, i16 | top, bottom height at the start (`-y` is up; roads sit around 0 to -320, buildings reach about -2,560 to -3,136) |
+| `+0x08` | i16, i16 | top, bottom height at the start (`-y` is up) |
 | `+0x0C` | i16, i16 | top, bottom height at the end |
-| `+0x10…+0x1C` | 4 × i32 | copied into the draw entry. **Hypothesis:** texture u/v setup |
-| `+0x20`, `+0x24` | i32 | texture coordinates at this end, interpolated when the wall is clipped at the near plane |
-| `+0x28` | u16 | texture offset (× 0x80) |
+| `+0x10`, `+0x14` | i32 | texture v at the top, start and end (16,384 = one texture height) |
+| `+0x18`, `+0x1C` | i32 | texture v at the bottom, start and end |
+| `+0x20`, `+0x24` | i32 | **floor** texture u, v at this corner (16,384 = one texture) |
+| `+0x28` | u16 | wall texture u start, in texels (`u0 = +0x28 << 7`) |
 | `+0x2A` | i16 | index into a 0x20-byte table (world `+0x18`) of position and height offsets, or `-1`. **Hypothesis:** moving or animated pieces |
-| `+0x2C` | u16 | material (0x24-byte record: `+0x08` texel offset, `+0x1E`/`+0x1F` used as shifts, probably log2 texture width and height (hypothesis)) |
-| `+0x2E` | u16 | flags. Bit 1 swaps the texture direction; bit `0x2000` is also used |
+| `+0x2C` | u16 | material |
+| `+0x2E` | u16 | flags. Bit 1 runs u the other way; bit `0x2000` is also used |
 | `+0x30` | i16 | **portal link**: neighbouring sector, or `-1` for a solid wall |
 | `+0x32` | i16 | usually the same as `+0x30` |
 | `+0x38`, `+0x3A` | i16 | offsets used when drawing the road surface |
-| `+0x40` | u16 | texture repeat length |
+| `+0x40` | u16 | wall texture u span, in 1/256 textures (`u1 = u0 + (+0x40 << (log2w − 1))`, texel = `u >> 7`) |
+| `+0x42` | i16 | v offset (× 0x80), usually 0 |
+
+**Texture mapping (verified).**
+- **Walls:** u in texels is `u >> 7`, and v runs from the top values to the bottom values, with 16,384 = one texture. Wall 0 comes out at 20 units per texel both ways (square texels), and facades render straight.
+- **Floors:** the corner u and v divided by 16,384. Every 512×512 floor gives 8.53 units per world unit on both axes, and straight roads land their kerbs exactly on the road edges. Both are implemented in `Wall::uv` and in the viewer.
 
 Screen projection (`FUN_03000978`): rotate (x, z) by the camera matrix (2.14 fixed point), give up past depth `0x5FFF`, then map both ends and both heights through the same reciprocal table the vehicles use.
 
+## Scale (verified in the reference race)
+
+**Cars and city share one unit:** vehicle matrices are pure rotations, and their translations are city positions. All cars measure about 48 units per metre, so the city is exaggerated (streets about 40 m wide, blocks about 50 m tall).
+
+Check: rendering from the race's chase-camera position (world `+0x54` translation) reproduces the game's screenshot layout, with the kerb and wall on the left, the road ahead, and facades on the right. That also confirms the axis conversion (x right, y down, z forward → `(x, −y, −z)`, not mirrored).
+
 ## Open
 
-- **Wall texture mapping.** From `FUN_030013ac`: u starts at `+0x28 × 0x80` and spans `+0x40 << (log2w − 1)`, and v uses `+0x42`. The viewer still uses a square-texel guess.
-- **Floor texture mapping is known in practice.** The per-corner `+0x20`/`+0x24` pairs are floor UVs, and **16,384 = one texture**. Every 512×512 floor gives 8.53 UV units per world unit on both axes (= 16,384 / 1,920, one road width). Straight roads then render with their kerbs exactly at the road edges. Road textures (512×128) are stretched along the road (texel aspect about 1.8); that may be deliberate. Why the renderer's shifts produce this scale is not yet derived.
-- **The road surface:** how floors are drawn (`FUN_03000b44`, `FUN_03002da0`) and what the sector `+0x04`/`+0x08` passes mean.
-- **Mapping to races:** which districts belong to which races, and how the per-event descriptor fields `+0x58…+0x64` (start sector?) are used.
-- **The six portals without a matching reversed edge** (T-junctions?).
+- The runtime palette transform (time of day or fog), and which sky and palette each event uses.
+- How the portal walls between sectors of different heights are drawn (upper and lower wall parts?). The viewer draws only solid walls.
+- **Mapping to races:** which districts belong to which races, and how the per-event descriptor fields `+0x58…+0x64` (start sector?) and the route table at `0x7F2798` (44 × 0x14 bytes, read by `FUN_08139454`) are used.
+- The six portals without a matching reversed edge (T-junctions?).

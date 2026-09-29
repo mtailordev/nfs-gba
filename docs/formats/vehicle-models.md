@@ -86,9 +86,11 @@
 
 Models between and after the car triplets (3–4, 11–12, 19–20, …, 61–82) are spoilers. 83–88 are traffic vehicles, and 89–101 are small markers and effects.
 
-## Scale
+## Scale (verified)
 
-All 15 high-detail models measure about 48 model units per real-world metre on all three axes (checked against manufacturer lengths, widths and heights). **Hypothesis:** the engine scales models by ×4, a 2-bit shift, which makes the city 192 units per metre. The matrix setup that fills world `+0xFC` (`FUN_0814e8b4` and others) would confirm it.
+- **Units:** model vertices are in **the same units as the city**. In the reference race, the vehicle matrices in the world `+0xFC` buffer are pure rotations (row lengths 16,391, i.e. 1.0 in 2.14). The player's translation `(0, 134, 343)` equals the camera-to-player offset in city units, and the projection code is the same as for walls.
+- **Metres:** all 15 high-detail models measure about 48 units per real-world metre on every axis (checked against manufacturer dimensions), so the world is about 48 units per metre. The chase camera then sits 7.1 m behind and 2.8 m above the car.
+- **Consequence:** the city itself is exaggerated compared with the cars.
 
 ## Open
 

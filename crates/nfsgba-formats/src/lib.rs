@@ -27,7 +27,12 @@ pub fn data_dir() -> PathBuf {
     }
     fs::read_to_string(".env")
         .ok()
-        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("NFSGBA_DATA=").map(|v| v.trim().trim_matches('"').to_owned())))
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.strip_prefix("NFSGBA_DATA=")
+                    .map(|v| v.trim().trim_matches('"').to_owned())
+            })
+        })
         .map_or_else(|| "data".into(), PathBuf::from)
 }
 
@@ -57,7 +62,10 @@ pub fn lz77(rom: &[u8], at: usize) -> Vec<u8> {
                 break;
             }
             if flags & (0x80 >> bit) != 0 {
-                let (n, back) = ((rom[i] >> 4) as usize + 3, ((rom[i] as usize & 0xF) << 8 | rom[i + 1] as usize) + 1);
+                let (n, back) = (
+                    (rom[i] >> 4) as usize + 3,
+                    ((rom[i] as usize & 0xF) << 8 | rom[i + 1] as usize) + 1,
+                );
                 i += 2;
                 for _ in 0..n {
                     out.push(out[out.len() - back]);
@@ -102,7 +110,11 @@ pub fn cars(rom: &[u8]) -> Vec<Car> {
     (0..n)
         .map(|i| {
             let first = u16_at(rom, rec(i) + 0x0C) as usize;
-            let next = if i + 1 < n { u16_at(rom, rec(i + 1) + 0x0C) as usize } else { vehicle_material_count(rom) };
+            let next = if i + 1 < n {
+                u16_at(rom, rec(i + 1) + 0x0C) as usize
+            } else {
+                vehicle_material_count(rom)
+            };
             // The last car's variants end where the atlas size changes (small 40×40 textures follow).
             let variants = (first..next).take_while(|&m| size(m) == size(first)).count();
             let mid = u16_at(rom, rec(i) + 0x14) as usize;
@@ -118,7 +130,9 @@ pub fn cars(rom: &[u8]) -> Vec<Car> {
 
 fn vehicle_material_count(rom: &[u8]) -> usize {
     let materials = ptr(rom, LEVEL_TABLE + 0x20);
-    (0..).take_while(|&i| u16_at(rom, materials + 0x24 * i) as usize == i).count()
+    (0..)
+        .take_while(|&i| u16_at(rom, materials + 0x24 * i) as usize == i)
+        .count()
 }
 
 /// Vehicle materials (level record `+0x20`, same layout as city materials). Texels are BIOS-LZ77 blobs at
@@ -150,11 +164,7 @@ pub fn paint_palettes(rom: &[u8]) -> Vec<Vec<[u8; 4]>> {
     (0..20)
         .map(|k| {
             (0..32)
-                .map(|i| {
-                    let c = u16_at(rom, 0x7E_6EEC + 0x80 * k + 2 * (i ^ 16));
-                    let channel = |shift: u16| (((c >> shift) & 31) * 255 / 31) as u8;
-                    [channel(0), channel(5), channel(10), 255]
-                })
+                .map(|i| bgr555(u16_at(rom, 0x7E_6EEC + 0x80 * k + 2 * (i ^ 16))))
                 .collect()
         })
         .collect()
@@ -174,14 +184,69 @@ pub struct Wall {
     /// Floor texture coordinates at this corner; 16,384 = one texture width/height (hypothesis: one 512×512
     /// roundabout texture spans exactly one road width).
     pub floor_uv: [i32; 2],
+    /// Wall texture: u start in texels (`+0x28`), u span in 1/256 textures (`+0x40`), v at the top and bottom
+    /// of both ends (`+0x10`/`+0x18` start, `+0x14`/`+0x1C` end; 16,384 = one texture), flags (`+0x2E`).
+    pub tex_u: u16,
+    pub tex_span: u16,
+    pub tex_v: [i32; 4],
+    pub flags: u16,
+}
+
+impl Wall {
+    /// Normalised (u, v) for the start-top, end-top, end-bottom and start-bottom corners of a solid wall,
+    /// following `FUN_030013ac` / `FUN_03000304`: u in texels is `u >> 7` with `u0 = +0x28 << 7`,
+    /// `u1 = u0 + (+0x40 << (log2 width - 1))`; flag bit 1 runs u the other way.
+    pub fn uv(&self, texture_width: usize) -> [[f32; 2]; 4] {
+        let w = texture_width as f32;
+        let (mut u0, mut u1) = (
+            self.tex_u as f32 / w,
+            self.tex_u as f32 / w + self.tex_span as f32 / 256.0,
+        );
+        if self.flags & 2 != 0 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        let v = self.tex_v.map(|v| v as f32 / 16384.0);
+        [[u0, v[0]], [u1, v[1]], [u1, v[3]], [u0, v[2]]]
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Sector {
     pub first: usize,
-    /// Floor material (index into `city_textures`).
+    /// Floor and ceiling materials (indices into `city_textures`); 0 = not drawn (`FUN_0300224c` skips the pass).
     pub floor: u16,
+    pub ceiling: u16,
     pub walls: Vec<Wall>,
+}
+
+/// A sky: 64 BGR555 gradient colours (top to bottom, drawn per scanline) and a 240×64 skyline panorama
+/// (8bpp through the city palette, colour 0 = sky). Stored as consecutive city materials: a 240-wide
+/// row-major one followed by a 1×128 one holding the gradient.
+#[derive(Debug, Clone)]
+pub struct Sky {
+    pub gradient: Vec<[u8; 4]>,
+    pub skyline: Texture,
+}
+
+pub fn skies(rom: &[u8]) -> Vec<Sky> {
+    let (materials, texels) = (ptr(rom, LEVEL_TABLE + 0x1C), ptr(rom, LEVEL_TABLE + 0x08));
+    let textures = city_textures(rom);
+    (0..textures.len().saturating_sub(1))
+        .filter(|&i| textures[i].width == 240 && (textures[i + 1].width, textures[i + 1].height) == (1, 128))
+        .map(|i| {
+            let at = texels + u32_at(rom, materials + 0x24 * (i + 1) + 8) as usize;
+            let gradient = (0..64).map(|k| bgr555(u16_at(rom, at + 2 * k))).collect();
+            Sky {
+                gradient,
+                skyline: textures[i].clone(),
+            }
+        })
+        .collect()
+}
+
+fn bgr555(c: u16) -> [u8; 4] {
+    let channel = |shift: u16| (((c >> shift) & 31) * 255 / 31) as u8;
+    [channel(0), channel(5), channel(10), 255]
 }
 
 /// A city texture: 8bpp palette indices, row-major.
@@ -197,14 +262,15 @@ pub fn city_palette(rom: &[u8]) -> Vec<[u8; 4]> {
     let at = ptr(rom, LEVEL_TABLE);
     (0..256)
         .map(|i| {
-            let c = u16_at(rom, at + 2 * i);
-            let channel = |shift: u16| (((c >> shift) & 31) * 255 / 31) as u8;
-            [channel(0), channel(5), channel(10), if i == 0 { 0 } else { 255 }]
+            let [r, g, b, _] = bgr555(u16_at(rom, at + 2 * i));
+            [r, g, b, if i == 0 { 0 } else { 255 }]
         })
         .collect()
 }
 
-/// City materials (level record `+0x1C`, 0x24 bytes, self-indexed) and their texels (record `+0x08` + offset).
+/// City materials (level record `+0x1C`, 0x24 bytes, self-indexed) and their texels (record `+0x08` + offset),
+/// returned row-major. Materials with `+0x02 == 2` (building walls) are column-mapped: one map byte per u at
+/// `+0x04` picks a unique column, stored column-major (`height` texels each) at `+0x08`.
 pub fn city_textures(rom: &[u8]) -> Vec<Texture> {
     let (materials, texels) = (ptr(rom, LEVEL_TABLE + 0x1C), ptr(rom, LEVEL_TABLE + 0x08));
     (0..)
@@ -213,7 +279,15 @@ pub fn city_textures(rom: &[u8]) -> Vec<Texture> {
         .map(|(_, m)| {
             let (width, height) = (u16_at(rom, m + 0x0C) as usize, u16_at(rom, m + 0x0E) as usize);
             let at = texels + u32_at(rom, m + 8) as usize;
-            Texture { width, height, pixels: rom[at..at + width * height].to_vec() }
+            let pixels = if u16_at(rom, m + 2) == 2 {
+                let map = texels + u32_at(rom, m + 4) as usize;
+                (0..width * height)
+                    .map(|i| rom[at + rom[map + i % width] as usize * height + i / width])
+                    .collect()
+            } else {
+                rom[at..at + width * height].to_vec()
+            };
+            Texture { width, height, pixels }
         })
         .collect()
 }
@@ -237,10 +311,19 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                         link: i16_at(rom, w + 0x30),
                         material: u16_at(rom, w + 0x2C),
                         floor_uv: [u32_at(rom, w + 0x20) as i32, u32_at(rom, w + 0x24) as i32],
+                        tex_u: u16_at(rom, w + 0x28),
+                        tex_span: u16_at(rom, w + 0x40),
+                        tex_v: [0x10, 0x14, 0x18, 0x1C].map(|k| u32_at(rom, w + k) as i32),
+                        flags: u16_at(rom, w + 0x2E),
                     }
                 })
                 .collect();
-            Sector { first, floor: u16_at(rom, o + 8), walls }
+            Sector {
+                first,
+                floor: u16_at(rom, o + 8),
+                ceiling: u16_at(rom, o + 4),
+                walls,
+            }
         })
         .collect()
 }
@@ -265,15 +348,25 @@ pub struct Model {
 /// The vehicle model bank: 102 models (`docs/formats/vehicle-models.md`).
 pub fn models(rom: &[u8]) -> Vec<Model> {
     let t = LEVEL_TABLE;
-    let (models_at, verts_at, idx_at, uvidx_at) = (ptr(rom, t + 0x34), ptr(rom, t + 0x38), ptr(rom, t + 0x3C), ptr(rom, t + 0x40));
+    let (models_at, verts_at, idx_at, uvidx_at) = (
+        ptr(rom, t + 0x34),
+        ptr(rom, t + 0x38),
+        ptr(rom, t + 0x3C),
+        ptr(rom, t + 0x40),
+    );
     let (uvs_at, sizes_at) = (ptr(rom, t + 0x48), ptr(rom, t + 0x54));
     (0..(verts_at - models_at) / 40)
         .map(|i| {
             let o = models_at + 40 * i;
             let field = |k: usize| u32_at(rom, o + 4 * k) as usize;
-            let (vstart, mut istart, uvstart, mut uvistart, sstart) = (field(0), field(1), field(2), field(6), field(7));
-            let (flags, npoly, nvert, nuv) =
-                (u16_at(rom, o + 0x20), u16_at(rom, o + 0x22) as usize, u16_at(rom, o + 0x24) as usize, u16_at(rom, o + 0x26) as usize);
+            let (vstart, mut istart, uvstart, mut uvistart, sstart) =
+                (field(0), field(1), field(2), field(6), field(7));
+            let (flags, npoly, nvert, nuv) = (
+                u16_at(rom, o + 0x20),
+                u16_at(rom, o + 0x22) as usize,
+                u16_at(rom, o + 0x24) as usize,
+                u16_at(rom, o + 0x26) as usize,
+            );
             let verts = (0..nvert)
                 .map(|k| {
                     let v = verts_at + 6 * (vstart + k);
@@ -284,14 +377,29 @@ pub fn models(rom: &[u8]) -> Vec<Model> {
                 .map(|k| {
                     let n = rom[sizes_at + sstart + k] as usize;
                     let read = |at: usize, start: usize| (0..n).map(|j| u16_at(rom, at + 2 * (start + j))).collect();
-                    let p = Polygon { verts: read(idx_at, istart), uvs: read(uvidx_at, uvistart) };
+                    let p = Polygon {
+                        verts: read(idx_at, istart),
+                        uvs: read(uvidx_at, uvistart),
+                    };
                     istart += n;
                     uvistart += n;
                     p
                 })
                 .collect();
-            let uvs = (0..nuv).map(|k| [u16_at(rom, uvs_at + 4 * (uvstart + k)), u16_at(rom, uvs_at + 4 * (uvstart + k) + 2)]).collect();
-            Model { flags, verts, polys, uvs }
+            let uvs = (0..nuv)
+                .map(|k| {
+                    [
+                        u16_at(rom, uvs_at + 4 * (uvstart + k)),
+                        u16_at(rom, uvs_at + 4 * (uvstart + k) + 2),
+                    ]
+                })
+                .collect();
+            Model {
+                flags,
+                verts,
+                polys,
+                uvs,
+            }
         })
         .collect()
 }
@@ -303,7 +411,9 @@ mod tests {
     /// Tests against the user's ROM; skipped (with a note) when no vault exists.
     fn rom() -> Option<Vec<u8>> {
         std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom().map_err(|e| eprintln!("skipping: no ROM vault ({e})")).ok()
+        canonical_rom()
+            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
+            .ok()
     }
 
     #[test]
@@ -316,7 +426,9 @@ mod tests {
         }
         let edges = |s: &Sector| -> Vec<((i32, i32), (i32, i32))> {
             let w = &s.walls;
-            (0..w.len()).map(|k| ((w[k].x, w[k].z), (w[(k + 1) % w.len()].x, w[(k + 1) % w.len()].z))).collect()
+            (0..w.len())
+                .map(|k| ((w[k].x, w[k].z), (w[(k + 1) % w.len()].x, w[(k + 1) % w.len()].z)))
+                .collect()
         };
         let (mut portals, mut matched) = (0, 0);
         for s in &sectors {
@@ -335,12 +447,23 @@ mod tests {
         let Some(rom) = rom() else { return };
         let textures = city_textures(&rom);
         assert_eq!(textures.len(), 227); // fills the table up to the next array (0x722DD4)
-        assert!(textures.iter().all(|t| t.width > 0 && t.height > 0 && t.pixels.len() == t.width * t.height));
+        assert!(
+            textures
+                .iter()
+                .all(|t| t.width > 0 && t.height > 0 && t.pixels.len() == t.width * t.height)
+        );
         for s in city(&rom) {
             assert!((s.floor as usize) < textures.len());
             assert!(s.walls.iter().all(|w| (w.material as usize) < textures.len()));
         }
         assert_eq!(city_palette(&rom)[0][3], 0);
+        let skies = skies(&rom);
+        assert_eq!(skies.len(), 12);
+        assert!(
+            skies
+                .iter()
+                .all(|s| s.gradient.len() == 64 && (s.skyline.width, s.skyline.height) == (240, 64))
+        );
     }
 
     #[test]
@@ -356,7 +479,11 @@ mod tests {
             for m in c.first_material..c.first_material + c.paint_variants {
                 let t = &textures[m];
                 assert_eq!((t.width, t.height), (256, 200), "{}", c.name);
-                assert!(t.pixels.iter().all(|&p| p < 32), "{}: atlas uses more than 32 colours", c.name);
+                assert!(
+                    t.pixels.iter().all(|&p| p < 32),
+                    "{}: atlas uses more than 32 colours",
+                    c.name
+                );
             }
         }
     }
