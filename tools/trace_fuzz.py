@@ -2,11 +2,15 @@
 
     .venv/Scripts/python.exe tools/trace_fuzz.py [COUNT]    # default 2000 cases
 
-Takes steps of the recorded car traces (vehicle-physics/<name>.ramdelta), gives the player's car a random body
-velocity (+0x11C, log-uniform magnitude, any direction in x/z, sometimes y) and sometimes a random angular velocity
-(+0x158), and runs the game's car handler FUN_0814bd4c on it in the function oracle (as tools/trace_oracle.py).
-Such speeds carry the car two portals in a step (`find_sector_far`, FUN_0814dbbc) or out of every sector (the
-push-back loop in FUN_0813d1f0), which no recording does. Writes vehicle-physics/fuzz.jsonl for
+Takes steps of the recorded car traces (vehicle-physics/<name>.ramdelta) and runs the game's car handler
+FUN_0814bd4c (or, outside hunter races, an opponent's handler FUN_0814a2a0) on them in the function oracle (as
+tools/trace_oracle.py), after one of two perturbations:
+  - speeds: a random body velocity (+0x11C, log-uniform magnitude, any direction in x/z, sometimes y), sometimes a
+    random angular velocity (+0x158). They carry the car two portals in a step (`find_sector_far`, FUN_0814dbbc)
+    or out of every sector (the push-back loops in FUN_0813d1f0 and FUN_0813c5a8), which no recording does;
+  - controls (player only): automatic or manual gearbox with a random shift state, random keys (A, B, L, R, left,
+    right and combinations: the manual shifts, nitro on A+L, the wingman command on R+L), gear, nitro tank, state,
+    state, the full-tank flag. The recordings never use the manual gearbox or nitro. Writes vehicle-physics/fuzz.jsonl for
 crates/nfsgba-sim/tests/fuzz.rs: per case the trace, step, patch, every RAM byte the step changed, its sound calls,
 and which of those two paths ran. Seeded: reruns give the same file.
 """
@@ -28,6 +32,22 @@ AI_TRACES = {"wall", "drive", "long", "reverse", "start"}
 OPPONENT = 0x0814A2A0
 # The player's push-back loop, and the opponent's (in FUN_0813c5a8).
 PATHS = {0x0814DBBC: "far", 0x0813DF98: "pushback", 0x0813CFBC: "ai-pushback"}
+
+
+KEYS = [0x001, 0x002, 0x201, 0x301, 0x100, 0x200, 0x300, 0x011, 0x021, 0x111, 0x221, 0x003, 0x101, 0x000]
+
+
+def controls(rng: random.Random, e: int, index: int, p: int) -> list[tuple[int, bytes]]:
+    """The player's inputs and the gearbox and nitro state the step reads: automatic or manual transmission
+    (0x03005798) with its shift state (0x03006074), the control word (0x030057D8 + 2·index, 0xFC00 | keys) and the
+    previous one (+0x4AE), gear (+0x40), nitro tank (+0x4C8), nitro on (+0x4D1), full-tank flag (0x03006150)."""
+    s32 = lambda v: struct.pack("<i", v)  # noqa: E731
+    return [(0x03005798, s32(rng.choice([0, 1]))), (0x03006074, struct.pack("<h", rng.randrange(4))),
+            (0x030057D8 + 2 * index, struct.pack("<H", 0xFC00 | rng.choice(KEYS))),
+            (p + 0x4AE, struct.pack("<H", 0xFC00 | rng.choice(KEYS))), (p + 0x40, s32(rng.randrange(8))),
+            (p + 0x4C8, s32(rng.choice([0, 1, 2, rng.randrange(0x40000)]))), (p + 0x4D1, bytes([rng.randrange(2)])),
+            (p + 0x4CC, struct.pack("<HH", rng.choice([0, rng.randrange(0x10000)]), rng.randrange(0x1000, 0x2000))),
+            (0x03006150, s32(rng.choice([0, 0, 1])))]
 
 
 def perturb(rng: random.Random, p: int) -> list[tuple[int, bytes]]:
@@ -69,7 +89,8 @@ def main(count: int) -> None:
                 if not 0x02000000 <= p < 0x02040000:
                     index, e = 0, entity
                     p = struct.unpack("<I", gba.read_base(e + 0x8C, 4))[0]
-                patch = perturb(rng_case, p)
+                # Player cases: half get extreme speeds, half random controls, gearbox and nitro state.
+                patch = perturb(rng_case, p) if index or rng_case.random() < 0.5 else controls(rng_case, e, 0, p)
                 for addr, data in patch:
                     gba.poke(addr, data)
                 hit = set()
