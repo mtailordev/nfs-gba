@@ -228,7 +228,7 @@ fn drive(sim: &mut Sim, e: u32, camera: u32, old_sector: u16, blk: u32) -> Resul
     m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
     m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
     m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    let s = find_sector(m);
+    let s = traffic_find_sector(m);
     m.set_u16(e + 0x78, if s == NONE { old_sector } else { s as u16 });
     let sector = m.u16(e + 0x78) as u32;
     let floor = world::floor_height(m, sector, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
@@ -305,7 +305,7 @@ fn knocked_away(sim: &mut Sim, e: u32, camera: u32) -> Result<()> {
     m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
     m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
     m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    let s = find_sector(m);
+    let s = traffic_find_sector(m);
     m.set_u16(e + 0x78, if s == NONE { old } else { s as u16 });
     world::link_entity(m, m.u16(e) as u32);
     let floor = world::floor_height(m, m.u16(e + 0x78) as u32, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
@@ -368,7 +368,7 @@ fn start_turn(m: &mut Mem, e: u32, blk: u32, nx: i32, nz: i32, steps: i32) {
 
 /// `FUN_08144b7c`: the sector of the query point (world `+0xC0/+0xC8`): the query sector, else one through a
 /// portal (solid walls only count with material 0, and walls with a dynamic state never count as solid).
-fn find_sector(m: &Mem) -> u32 {
+fn traffic_find_sector(m: &Mem) -> u32 {
     let (x, z) = (m.i32(W_QUERY), m.i32(W_QUERY + 8));
     let start = m.u16(W_QUERY_SECTOR) as u32;
     let sector = |id: u32| m.u32(W_SECTORS) + id * 0x30;

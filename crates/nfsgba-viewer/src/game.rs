@@ -61,11 +61,6 @@ pub fn race_runtime(sectors: &[rom::Sector]) -> render::Runtime {
     }
 }
 
-/// A wall's flags as the renderer sees them: its moving piece's when it names one.
-pub fn wall_flags(rt: &render::Runtime, w: &rom::Wall) -> u16 {
-    rt.pieces.get(w.piece as usize).map_or(w.flags, |p| p.flags)
-}
-
 fn word(rom: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(rom[at..at + 4].try_into().unwrap())
 }

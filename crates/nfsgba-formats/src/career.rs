@@ -764,6 +764,12 @@ impl Default for Race {
     }
 }
 
+/// `event_status` (`FUN_08135d4c`): the 2-bit status of career event `event` in the profile's event bytes
+/// (`+0x205`): 1 won, 2 second place, 3 not done.
+pub fn event_status(events: &[u8], event: usize) -> u8 {
+    events[event >> 2] >> ((event & 3) * 2) & 3
+}
+
 /// Per difficulty, the roll (`rand & 0xFF`) an AI must beat to take a shortcut (`0x7BFCD4`).
 pub const AI_BRANCH_CHANCE: usize = 0x7B_FCD4;
 /// What a knocked-out car's driver `+0xF8..` gets (`0x7F3DD0`, three words).
@@ -1252,7 +1258,7 @@ impl Save {
 
     /// 1 won, 2 second place, 3 not done (a new profile has every event at 3) (`FUN_08135d4c`).
     pub fn event_status(&self, event: usize) -> u8 {
-        self.events[event >> 2] >> ((event & 3) * 2) & 3
+        event_status(&self.events, event)
     }
 
     /// The unlock bitfield (profile `+0x42D`, 40 bytes, bit `id` set = unlocked) that `FUN_08135958` rebuilds

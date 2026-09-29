@@ -255,7 +255,7 @@ fn portal_texels(entries: Option<&[(render::Portal, u128)]>) -> Vec<u8> {
 /// `draw_sector_walls` (material 0, open portal, span flag 4, deferred walls beyond the 8-bit mask, rows outside
 /// the entry) and the early returns of `raster_wall_columns` (fewer than 2 column pairs, before or after clipping
 /// to the entry's pairs `left >> 1 .. right >> 1`), on the spans `render::setup_wall_spans` made for the entry.
-/// A moving piece's flags replace the wall's (`game::wall_flags`); its material offset is 0 in every race seen.
+/// A moving piece's flags replace the wall's (`render::Runtime::wall_flags`); its material offset is 0 in every race seen.
 fn walls_drawn(rt: &render::Runtime, portal: &render::Portal, spans: &[render::WallSpan], walls: &[rom::Wall]) -> u128 {
     let (e6, e8) = (portal.top as u16 as i32, portal.bottom as u16 as i32);
     let (left, right) = ((portal.left as u16 >> 1) as i32, (portal.right as u16 >> 1) as i32);
@@ -285,7 +285,7 @@ fn walls_drawn(rt: &render::Runtime, portal: &render::Portal, spans: &[render::W
             }
             cols > 1
         };
-        if w.material != 0 && game::wall_flags(rt, w) & 1 == 0 && visible && rows && columns() {
+        if w.material != 0 && rt.wall_flags(w.piece, w.flags) & 1 == 0 && visible && rows && columns() {
             mask |= 1u128 << i;
         }
     }
@@ -452,7 +452,7 @@ fn setup(
             }
         }
         for (k, a) in w.iter().enumerate() {
-            let flags = game::wall_flags(&rt, a);
+            let flags = rt.wall_flags(a.piece, a.flags);
             if a.material == 0 || flags & 1 != 0 {
                 continue;
             }
@@ -1256,7 +1256,7 @@ mod tests {
                 let mask = walls_drawn(&rt, &p, &spans, walls);
                 for (i, (s, w)) in spans.iter().zip(walls).enumerate() {
                     // Opaque textures only: a transparent one can legitimately write nothing.
-                    let flags = game::wall_flags(&rt, w);
+                    let flags = rt.wall_flags(w.piece, w.flags);
                     let opaque = textures[w.material as usize].pixels[0] != 0;
                     if w.material == 0 || flags & 1 != 0 || s.flags & 4 != 0 {
                         // Never passed to the rasteriser.

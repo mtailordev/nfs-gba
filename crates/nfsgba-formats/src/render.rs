@@ -237,6 +237,11 @@ impl Runtime {
         (index != 0xFFFF).then(|| self.pieces[index as usize])
     }
 
+    /// A wall's flags (`+0x2E`) as the renderer sees them: its moving piece's (`+0x2A`) when it names one.
+    pub fn wall_flags(&self, piece: u16, flags: u16) -> u16 {
+        self.piece(piece).map_or(flags, |p| p.flags)
+    }
+
     fn material(&self, slot: u16) -> MaterialState {
         self.materials.get(slot as usize).copied().unwrap_or_default()
     }
@@ -534,7 +539,7 @@ pub fn draw_sector_walls(
         if u16_at(rom, material_at(rom, material)) == 0 {
             continue; // material 0
         }
-        let flags = piece.map_or(u16_at(rom, w + 0x2E), |p| p.flags);
+        let flags = rt.wall_flags(u16_at(rom, w + 0x2A), u16_at(rom, w + 0x2E));
         let draw = flags & 1 == 0
             && match deferred {
                 None if s.flags & 4 != 0 => false,
@@ -1162,9 +1167,7 @@ pub fn camera_sector(rom: &[u8], rt: &Runtime, sector: u16, x: i32, z: i32) -> O
     let (walls, count) = sector_walls(rom, sector);
     (0..count).find_map(|k| {
         let w = walls + 0x44 * k;
-        let flags = rt
-            .piece(u16_at(rom, w + 0x2A))
-            .map_or(u16_at(rom, w + 0x2E), |p| p.flags);
+        let flags = rt.wall_flags(u16_at(rom, w + 0x2A), u16_at(rom, w + 0x2E));
         let next = u16_at(rom, w + 0x32);
         if flags & 0x1000 != 0 || next == 0xFFFF || !point_in_sector(rom, next, x, z) {
             return None;

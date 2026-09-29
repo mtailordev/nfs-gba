@@ -1255,7 +1255,8 @@ fn frames_to_centiseconds(frames: i32) -> i32 {
 /// `event_status` (`0x08135D4C`): the 2-bit status of career event `n` (profile `+0x205`; 1 won, 2 second, 3 not
 /// done).
 fn event_status(g: &Gba, n: i32) -> u32 {
-    (g.u8(g.u32(PROFILE).wrapping_add(0x205).wrapping_add((n >> 2) as u32)) as u32 >> ((n & 3) * 2)) & 3
+    let (mem, o) = g.at(g.u32(PROFILE).wrapping_add(0x205));
+    crate::career::event_status(&mem[o..], n as usize) as u32
 }
 
 /// `zone_ladder_index` (`0x0812FC34`): zone·12 plus the zone's events with status 1 or 2 (6 events in zone 5).
