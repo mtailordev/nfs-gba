@@ -5,9 +5,9 @@
   - visible list (world `+0x60`), all 9 entries;
   - wall draw buffer (world `+0x68`) of the camera sector;
   - flat outline (world `+0x6C`) and its clipped copy;
-  - **the frame itself**: all 33,350 world pixels of the 240×160 frame match VRAM, except 536 pixels where pass 1 had begun drawing the player car over the floor. The only other areas are the sky and row 159.
-- **Decoded but not reimplemented:** the entity draw (pass 1 and entities in pass 0). It is marked below.
-- Everything here comes from the ARM code (Ghidra decompilation, checked against the disassembly where it matters) plus the reference dump. Hypotheses are labelled.
+  - **the frame itself**: all 33,350 world pixels of the 240×160 frame match VRAM. The only other areas are the sky and row 159.
+- **Exact and verified: the entity draw** (cars and spoilers; pass 1 and the entities of `0x80` entries in pass 0), in `crates/nfsgba-formats/src/render/entities.rs` (section "Entities" below). The mid-frame reference dump is reproduced up to the exact span it was taken at, and 16 whole frames captured at frame boundaries (opponents near and far, every LOD branch) match the game pixel for pixel.
+- Everything here comes from the ARM code (Ghidra decompilation, checked against the disassembly where it matters) plus the reference dumps. Hypotheses are labelled.
 
 The race renderer is ARM code copied from ROM `0x08165134` to IWRAM `0x03000220`, so an IWRAM address is the ROM address minus `0x164F14`. Thumb code reaches it through two dispatchers:
 - `FUN_0815e674(index, …)` calls `*0x03006490 + 0xE4 + index·4`, where `*0x03006490 = 0x03000220`. Callers pass `(rom_fn − 0x08165218) >> 2`.
@@ -151,7 +151,7 @@ There is no per-row clipping in the list (top/bottom are always the full screen)
 
 ## `draw_sector` (`FUN_0300224c`)
 
-Reimplemented as `render::draw_sector` (pass 0, entities left out); `render::draw_world` is pass 0 of `FUN_030048c8`.
+Reimplemented as `render::draw_sector`; `render::draw_world` is `FUN_030048c8` (both passes).
 
 ```
 flags = sector+0x12 (byte); if sector+0x0A != 0xFFFF: flags = offsets[+0x0A].+8; if flags & 0x40: return
@@ -168,8 +168,9 @@ if floor (+0x08) || ceiling (+0x04):
               fill ? draw_flat_fill(floor, fill×4) : draw_flat_textured(floor)
   if ceiling: copy each clipped vertex's ceiling y over its floor y
               fill = sector+0x0C; … draw the ceiling the same way
-if entry.flags & 0x80 && world+0x78: collect + draw entities
-if deferred: draw_sector_walls(mask = deferred)                         // walls with span flag 2, after the flats
+if entry.flags & 0x80 && world+0x78: collect + draw entities            // may leave E2/E4 at the whole screen
+if deferred: draw_sector_walls(mask = deferred)                         // walls with span flag 2, after the flats,
+                                                                        // clipped to E2/E4 as the entities left them
 ```
 
 ### `transform_walls` (`FUN_03000978`)
@@ -281,26 +282,72 @@ The rasterisers (`draw_flat_textured` `FUN_03002da0`, `draw_flat_fill` `FUN_0300
 - **Flat heights come from wall `+0x38` (floor) and `+0x3A` (ceiling) at each corner, not from the wall's bottom/top.** They differ at 384 floor corners (kerbs, steps).
 - A sector with neither floor nor ceiling (117 sectors) gets no flat vertices at all.
 
-## Entities (partly decoded, not reimplemented)
+## Entities (R12)
 
-`collect_sector_entities` (`FUN_03004e24`) → `sort_sector_entities` (`FUN_03001ae4`):
-- It walks the sector's entity list (world `+0x0C`[sector], then entity `+0x02`) once per frame, using a visited bitmap at `DAT_03001c6c`.
-- It runs the entity handler `world+0x78[entity+0x4E]` when entity `+0x08` has bit 1 set and bit 2 clear.
-- When bit 4 of `+0x08` is set, it stores `(x'^2 + d^2) >> 8` in `+0x28` and, if `d > 0`, inserts the entity into a list sorted farthest first (links in `+0x04`).
+Reimplemented exactly in `render/entities.rs` (`draw_entities`, `project_model`, `Scene`, `Entity`); `draw_sector` calls it in pass 1 and for `0x80` entries in pass 0. The entity array is world `+0x3C` (0xA4 bytes each, `0x0201431C` in races; count world `+0xF8` + `+0xFA`).
 
-`draw_sector_entities` (`FUN_03001cf0`), per entity with depth `d` (unsigned):
-- **Clip span:** entity `+0x0A` bit 0 uses the whole screen (world `+0x58/+0x5A`); otherwise the portal's span.
-- **Bit 4 (a "sector" entity):** if `d < 10000`, draw sector `+0x36` through a full-width entry.
-- **Otherwise (a model):**
-  - **Culls:** drawn only if `d < 0x2000` and the projected y is within `E6 − r .. E8 + r`, where `r = (recip[d]·focal >> 8 << 9) >> 16`.
-  - **Forced LOD:** bit 1 forces `d = 0`.
-  - **LOD with `+0x36 ≠ 0`:**
-    - `d > 0x1000`: if bit `0x40` is set, `d = 0x200`; otherwise nothing is drawn. The code does select the next model record first.
-    - `d ≥ 0x200`: model `+0x36`;
-    - otherwise: model `+0x36 − 1`.
-  - **Second model:** entity `+0x64` adds one (sign selects the order), with mesh slots `+0x88` / `+0x88 + 1`.
-  - Entities with `+0x36 == 0` are not drawn by this path.
-  - **Hypothesis:** `+0x36` is the model index for the car's LOD pair. Cars beyond depth 4,096 (about 85 m) are not drawn unless flag `0x40` is set. Not checked against a frame.
+### Entity fields the renderer uses (confirmed from the code and the captures)
+
+| Offset | Meaning |
+|---|---|
+| `+0x00` | own index (the draw order links through it) |
+| `+0x02` | next entity in its sector's list; the list heads are world `+0x0C` (u16 per sector) |
+| `+0x04` | next entity in the sector's draw order (written by the sort) |
+| `+0x08` | state: bit 0 runs the handler `world+0x78[+0x4E]` during the sort unless bit 1 is set; bit 2 takes part in the sort |
+| `+0x0A` | flags: **bit 0** clip to the whole screen (world `+0x58/+0x5A`) instead of the portal span; **bit 1** depth taken as 0 for LOD and the far cut (always the near model; opponents and markers have it, `0x22`/`0x02`); **bit 2** passed the screen cull this frame (written; the next frame's slot assignment reads and clears it); **bit 3** texture in RAM (`+0x84`) instead of the ROM; **bit 4** draw sector `+0x36` instead of a model; **bit 5** matrix from the driver's physics orientation (`FUN_0814da68`); **bit 6** beyond depth 0x1000, draw the far model instead of nothing. The player has `0x0D`, opponents `0x22` |
+| `+0x0C/+0x10/+0x14` | position, 8.8 fixed point |
+| `+0x28` | sort key `(x'² + d²) >> 8`, camera space (written) |
+| `+0x36` | **far model** (drawn at depth ≥ 0x200); the near model is `+0x36 − 1`. For cars it is the car's low-detail model, so the race draws the medium model near and the low one far; the high-detail model is never drawn in a race. Bit 4 entities: a sector index |
+| `+0x44` (high byte), `+0x46` | material steps added to `+0x48` (0 in every capture) |
+| `+0x48` | vehicle material (the atlas: its size, log2 width `+0x1E`, height `+0x0E` and, for ROM textures, texels `+0x08`); 0 = not drawn |
+| `+0x4E` | handler index (world `+0x78` = the Thumb table `0x7F38B8`, which answers OPEN-QUESTIONS 11) |
+| `+0x64` | second model on matrix slot `+0x88 + 1`: after the first model when positive (the player's spoiler: 12 for the Cobalt, 4 for car 0), before it as model `−n` when negative |
+| `+0x84` | RAM address of the unpacked atlas (bit 3) |
+| `+0x88` | matrix slot (world `+0xFC`, 0x30 bytes each); `0xFF`: not drawn |
+
+**Matrix slots** are game-side inputs, built each frame before the draw: `race_frame_update` (`FUN_0813a954`) calls `draw_vehicle` (`0x0814bc30`) for the player and `FUN_0814eba0` for every other entity. `FUN_0814eba0` gives the entity the next slot (counter `0x03005394`; `0xFF` from 0x40 on, or when `+0x36 == 0` or `+0x0A` bit 2 was not set by the last frame's draw, so a car appears one frame after it first passes the screen cull), builds the matrix with `FUN_0814da68`, then clears `+0x0A` bit 2 (`& 0xFFFB`). `FUN_0814da68` (and `FUN_0814ec0c`) only write the matrix when bit 1 is set or the depth is at most `0xDAC`: beyond that the slot keeps whatever it held. The matrix is `A(+0x30) · camera · B(+0x32)`: two rotation matrices built by IWRAM helpers from the angles `+0x30` and `+0x32` (axes not checked), multiplied through `FUN_0815e6c8`; with bit 5 (and `0x0300610C` non-zero) it is the driver's physics matrix (driver `+0x128…+0x148`, `<< 2`) times the camera (`FUN_08160434`). The translation is the camera-space position.
+
+### Per frame
+
+1. `draw_visible_sectors` clears the visited bitmap `0x03006920` (32 bytes, one bit per entity), so an entity is drawn at most once per frame even when its sector is listed twice.
+2. **`collect_sector_entities`** (`FUN_03004e24`), per `draw_sector` call: resets the draw list (head `0x03006940` = `0xFFFF`, greatest key `0x03006900` = −1) and sorts the sector's list, or for a container (sector `+0x12` bit 3, from the ROM) the list of each child along the `+0x24` chain.
+3. **`sort_sector_entities`** (`FUN_03001ae4`), along `+0x02`: skip visited entities (then mark them) and those with material 0; run the handler if `+0x08` has bit 0 and not bit 1; if `+0x08` bit 2: `x' = m9 + (x >> 8)`, `z' = m11 + (z >> 8)`, `d = (m2·x' + m8·z') >> 14`, `c = (m0·x' + m6·z') >> 14`, key = `(c² + d²) >> 8` → `+0x28`; if `d > 0` insert: a key ≥ the greatest so far becomes the head, otherwise it goes after the last entity with a greater key (so equal keys go first). The result is farthest first.
+4. **`draw_sector_entities`** (`FUN_03001cf0`), along `+0x04`:
+   ```
+   E2/E4 and rect[0]/rect[2] = bit 0 ? world+0x58/+0x5A : the entry's span   // stays set after the loop
+   d = (m2·(m9 + x>>8) + m8·(m11 + z>>8)) >> 14;  y' = m10 + (y >> 8)
+   bit 4: if (u32)d ≤ 9999: draw_sector(pass 0) of sector +0x36 through {E2, E4, E6, E8}
+   else if (u32)d < 0x2000:
+     r = recip[d]·focal >> 8;  sy = cy + (r·y' >> 16);  margin = (r << 9) >> 16
+     if E6 − margin < sy < E8 + margin:                                  // E6/E8 unsigned
+       material = +0x48;  if bit 1: d = 0;  +0x0A |= 4
+       if +0x36 ≠ 0 && d > 0x1000: bit 6 ? d = 0x200 : material += 1       // (the step is dead: see below)
+       material += +0x46 + (+0x44 >> 8)
+       texture = bit 3 ? +0x84 : vehicle texel base (world +0x04) + material+0x08
+       if d > 0x1000 || +0x36 == 0 || +0x88 == 0xFF: next
+       model = +0x36 + (d ≥ 0x200) − 1
+       draw_model_polygons(model, slot +0x88), and the +0x64 model on slot +0x88 + 1 (order by its sign)
+   ```
+   Beyond 0x1000 without bit 6 the code also offsets a RAM texture by the previous material's width × height, but then draws nothing, so that path has no effect.
+5. **`draw_model_polygons`** (`FUN_03004190`): `transform_model_vertices` (`FUN_03004018`) projects the model's vertices into world `+0xA0` (`0x030053F0`): camera = `M·v >> 14` plus the translation (columns `m0,m3,m6` / `m1,m4,m7` / `m2,m5,m8`), `r = recip[d]·focal >> 8`, screen = centre + `(r·c) >> 16` stored as halfwords. **If any vertex's depth, unsigned, is beyond 0x6000 the whole model is dropped.** Then per polygon: size byte `n`, the first three projected corners give `cross = (y1−y0)(x2−x0) − (y2−y0)(x1−x0)`; `cross < 0` is culled. UVs come from world `+0x90` plus model `+0x08`·4 when model flag bit 0 is set.
+6. **`raster_polygon`** (`FUN_03003808`), with the rectangle `rect = {E2, E6, E4, E8}` (IWRAM `0x030053D0`):
+   - **Outcode** (`FUN_0300514c`): 4 (dropped) when no corner has `left ≤ x < right` or none has `top ≤ y < bottom`, **even if the polygon covers the screen**; otherwise bit 0 when a corner is outside in x, bit 1 in y.
+   - **Clip** (`FUN_03003d70` / `FUN_03003acc`): Sutherland–Hodgman in x (if bit 0) then y (if bit 1), against `lo ≤ c ≤ hi` (**inclusive**, unlike the outcode). An edge end is moved by `t = (recip[den] >> 8)·num` (16.16), the other coordinate and u, v by `p + ((q−p)·t >> 16)`. Results are stored as halfwords (scratch `0x03006440`/`0x03006390`, then `0x03006460`/`0x030063B0`, identity indices `0x03006430`). An empty result draws nothing.
+   - **Top corner** (`FUN_03005320`): the first with the least y.
+   - **Edges:** `a` walks the corners backwards (`FUN_03003464`), `b` forwards (`FUN_03003634`), sharing one count of edges left (`0x03006904`, starting at `n`); horizontal edges are skipped; the polygon ends when the count runs out or the next corner is higher. Each edge: `r = recip[dy] >> 8`, x in 16.16 (`dx = r·Δx`), u = `(uv.u << log2w) >> 7` and v = `(uv.v · height) >> 7` in 1/256 texels, `du = (r·Δu) >> 16`, `dv = (r·Δv) >> 16`, drawing `dy` rows.
+   - **Rows:** a span only when `a.x > b.x`, from `b.x >> 16` for `((a.x + 0xFFFF) >> 16) − (b.x >> 16)` pixels, starting at `b`'s u, v with `du = (recip[w] >> 8)·(a.u − b.u) >> 16` (likewise dv).
+   - **Span** (`FUN_030051f4`): texel pointer `texture + (v >> 8 << log2w) + (u >> 8)`, stepped by the integer parts of du, dv plus the carries of their 8-bit fractions: **no wrap in u or v**, full resolution (halfword read-modify-write at odd ends). Row 159 is never drawn.
+   - Globals: `0x030068F0` log2w, `0x030068F4` edge x, `0x030068F8` edge v, `0x030068FC` corner index, `0x03006908` edge du, `0x0300690C` edge dx, `0x03006910` edge u, `0x03006914` span dv, `0x03006944` edge rows, `0x03006948` edge dv, `0x0300694C` span du.
+
+**Wheels and shadows** (R12) are not a separate pass: they are polygons of the car models (the medium/low models and their atlases; the opponents' 128×100 atlases include the wheels). After `draw_visible_sectors` the game writes nothing more into the page (checked on 3 captures), and no OBJ sprite covers the cars in the reference frame. Car effects such as `FUN_0814e628`/`FUN_0814e7b0` are sprites (the 2D layer).
+
+### Quirks to keep
+
+- The outcode drops a polygon with no corner inside in x (or in y), even one covering the screen.
+- The outcode excludes `right`/`bottom`, the clipper includes them.
+- The model drop at vertex depth > 0x6000, and the unsigned depth tests (negative depths are culled).
+- An entity drawn with bit 0 leaves E2/E4 at the whole screen for the sector's deferred walls.
+- A car appears one frame after it first passes the screen cull (slot assignment); beyond depth 0xDAC without bit 1 its slot keeps a stale matrix.
 
 ## Camera sector (`FUN_03000800`, `FUN_030047a8`)
 
@@ -326,16 +373,35 @@ A neighbour with floor 0 is replaced by its `+0x20` alias when that is set. Othe
 - **Buffers used:** the visible list at `0x02018C8C`, the wall buffer at `0x02017288`, the flat buffer at `0x0201B094`, the view at `0x03000080` and the camera at `0x030057A0`. At dump time the buffers hold camera sector 760, the last sector drawn in pass 0.
 - **Scripts** (not in git): `data/scratch/frame.py`, `flat.py`, `map.py` and `walls.py` in the renderer worktree.
 - **Tests:** `cargo test -p nfsgba-formats render` (needs the ROM vault).
-  - `world_pixels_match_the_race_frame` also needs `race.vram.bin`. It renders pass 0 of the frame with `visible_sectors` + `draw_world` and compares against the VRAM page being drawn (`0x0600A000`).
+  - `world_pixels_match_the_race_frame` also needs `race.vram.bin`. It renders pass 0 of the frame with `visible_sectors` + `draw_world` (no entities) and compares against the VRAM page being drawn (`0x0600A000`).
   - It draws on two backgrounds to tell written pixels from unwritten ones.
+  - `race_frame_matches_up_to_the_car_span_being_drawn` (entities): the dump was taken inside pass 1 (`mgba/log.txt`: pc `0x03003A7C`, just after a span call in `raster_polygon`; its row pointer `0x06011080` is row 120; the stack holds `draw_model_polygons` with 24 of model 9's 68 polygons left, i.e. polygon 44). Of the frame's 346 entity spans, cutting at exactly one count (184) reproduces every written pixel of the page, and that span is on row 120 of polygon 44.
+  - `probe_frames_match`: every capture in `data/work/e5298b24/entity-draw/` (below) must match on every pixel the renderer writes.
+
+### Frame captures (`data/work/e5298b24/entity-draw/`)
+
+`tools/mgba_frame_probe.lua` (loaded with `NFSGBA_MGBA_SCRIPTS`, armed by writing `NAME [ADDR=VALUE …]` to `probe.txt`, atomically) keeps IWRAM and EWRAM at the start of `draw_visible_sectors` and VRAM at its end, the page again one frame later (`NAME.final.bin`), and can apply 16-bit writes first to steer the renderer into paths the data does not reach. States: `race.ss` (the reference race) and `g0.ss` (a Quick Play from `mainmenu.ss`, A ×4, saved during the countdown). All 16 match on every written pixel:
+
+| Capture | What | Entities shown (depth) |
+|---|---|---|
+| `r0` | reference race, frame boundary | player (0x157), 1679 px |
+| `c1`…`c7` | race start, `g0` + 60…470 frames | opponents near model at every depth (bit 1): 0x144 (1829 px) … 0x194F (6 px), none at 0x1C54 |
+| `e1`…`e5` | 12 s into another Quick Play | a marker entity (model 92, 30–318 px) |
+| `p1`, `p2` | opponents' bit 1 cleared | near model at 0x16F / 0x1F9 |
+| `p3`, `p5` | bit 1 cleared | **far model** at 0x4DE…0xB54 |
+| `p4` | bits 1 cleared, 6 set, below 0x1000 | far model, same pixels as `p3` |
+| `p6` | bit 1 cleared, 0x1328…0x1481 | **nothing drawn** (the 0x1000 cut) |
+| `p7` | bit 6 set, 0x136C…0x14CD | **far model drawn** beyond the cut |
+
+`p*` write `+0x0A` of entities 1–3 (`0x020143CA`, `0x0201446E`, `0x02014512`). `p1`, `p3`, `p7`: `NAME.final.bin` equals the page at the end of the world draw.
 
 ## Not done / NOT 1:1 if used as is
 
-- **Entities** (`render::draw_sector` / `draw_world` leave them out, marked `NOT 1:1`):
-  - the entity draw (pass 1, and entities drawn with `0x80` sectors in pass 0), its LOD path and `raster_polygon` are not reimplemented;
-  - the LOD path is not checked against a frame;
-  - the meanings of entity `+0x36`/`+0x64`/`+0x88` are hypotheses.
-- The pixel check covers one frame: 9 sectors, 128-row wall textures, textured floors. Fill-colour flats, ceilings, deferred walls, moving pieces, animated or scrolled materials and transparent textures are reimplemented from the code but not yet exercised against a frame.
+- **Entities:**
+  - the entity handlers (world `+0x78`, Thumb game code) are not reimplemented: `Scene::handler` defaults to doing nothing. No entity in any capture calls one (all have `+0x08` bit 1).
+  - bit 4 (sector) entities, material steps `+0x44`/`+0x46`, negative `+0x64` and textures outside ROM/EWRAM follow the code but appear in no capture.
+  - the matrix slots are inputs: their builders (`draw_vehicle`, `FUN_0814eba0` → `FUN_0814da68`, `FUN_0814ec0c`) are game code, not reimplemented here.
+- The pixel check covers 17 frames from two races: 128-row wall textures, textured floors. Fill-colour flats, ceilings, deferred walls, moving pieces, animated or scrolled materials and transparent textures are reimplemented from the code but not yet exercised against a frame.
 - The focal speed effect's input `g` (`FUN_0815fc38`, `FUN_0815fadc`) is not decoded.
 - The camera offsets `0x030056B8`, `0x030053A0`, `0x030055F8`, `0x03005390` and `0x03005FA4` are not traced to their writers.
 - The runtime tables (world `+0x18`, `+0x1C`, `+0x48`) are inputs. Their writers (door/animation code) are not decoded.
@@ -452,3 +518,66 @@ Rename existing rows:
   - **Floor heights:** the viewer puts floors at the wall's bottom. The game uses wall `+0x38` (floor) and `+0x3A` (ceiling) per corner; they differ at 384 floor corners.
   - **Resolution:** floors and ceilings render at 120×160 (byte writes duplicated by VRAM); wall edges at 120 columns with 240-column texturing. Only relevant for a pixel-exact 240×160 mode.
   - **Draw limits:** the viewer draws the whole city. The game drops sectors with a corner deeper than `0x5FFF`, stops each wall column at `1/z > 0x5FFF`, lists at most about 25 sectors, 5 portals deep, and does not draw cars beyond depth `0x1000` (hypothesis, see Entities).
+
+## Integration notes (entity-draw)
+
+For the owners of `FIDELITY.md`, `address-map.md`, `symbols.csv`, `OPEN-QUESTIONS.md`, `TOOLS.md` and the viewer. Code: `crates/nfsgba-formats/src/render/entities.rs` (new; `render.rs` declares it), `render::draw_sector` / `draw_world` gained a `&mut Scene` (and `draw_sector` a pass flag); `tools/mgba_frame_probe.lua` (new); `tools/mgba_ctl.py` loads extra scripts from `NFSGBA_MGBA_SCRIPTS` (backward compatible).
+
+### FIDELITY.md
+
+- **R12:** the entity draw is exact and verified in `nfsgba_formats::render` (`draw_entities`, `project_model`): the mid-frame reference dump up to its exact span (184 of 346, row 120 of model 9's polygon 44) and 16 frame-boundary captures, pixel for pixel, covering the near model, the far model, the 0x1000 cut and flag 6. Wheels and shadows are polygons of the car models, not a separate pass. What remains is **viewer work**: draw `+0x36 − 1` (depth < 0x200 or `+0x0A` bit 1) or `+0x36` (farther), plus the `+0x64` spoiler; nothing beyond 0x1000 without bit 6. The viewer's showroom uses each car's high-detail model, which the race never draws.
+- **"Draw limits" (R10) entry:** replace "(hypothesis, see Entities)" with the rule: cars are dropped at depth ≥ 0x2000 (unsigned) or outside the rows `E6 − margin … E8 + margin`; beyond 0x1000 only with `+0x0A` bit 6 (far model) or bit 1 (depth taken as 0: opponents and markers); a model is dropped whole when a vertex is deeper than 0x6000.
+- **New NOT 1:1 entries:**
+  - **Entity handlers** (world `+0x78` = `0x7F38B8`, called by the sort for `+0x08` bit 0 without bit 1) are not reimplemented; `Scene::handler` does nothing by default. No captured entity calls one.
+  - **Matrix slots** (world `+0xFC`) are inputs: `draw_vehicle` (player), `FUN_0814eba0` → `FUN_0814da68` and `FUN_0814ec0c` (others) are not reimplemented, including their one-frame delay and the stale matrix beyond depth 0xDAC.
+  - Not exercised by any capture (implemented from the code): bit-4 sector entities, material steps `+0x44`/`+0x46`, negative `+0x64`.
+
+### address-map.md
+
+- **ROM:** `0x7F38B8`: "entity handler table (world `+0x78`, indexed by entity `+0x4E`; 65 Thumb entries)". This answers OPEN-QUESTIONS 11.
+- **RAM:**
+
+| Address | What |
+|---|---|
+| `0x030053D0` | the model rasteriser's rectangle (left, top, right, bottom, i32; view `+0x04`): `draw_sector` sets it from the entry, `draw_sector_entities` rewrites left/right per entity |
+| `0x030053F0` | projected model vertices (world `+0xA0`), x/y halfwords |
+| `0x03006920` | entity visited bitmap, 32 bytes, cleared each frame by `draw_visible_sectors` (replaces "32 bytes cleared each frame") |
+| `0x03006940` / `0x03006900` | draw-list head / greatest sort key of the sector being drawn |
+| `0x03005394` | matrix slot counter (`FUN_0814eba0`, `FUN_0814ec0c`; ≥ 0x40 → `0xFF`) |
+| `0x0300610C` | non-zero: `FUN_0814da68` may take the driver's physics orientation (entity `+0x0A` bit 5) |
+| `0x030068F0…0x0300694C` | polygon rasteriser state: `F0` log2 width, `F4` edge x 16.16, `F8` edge v, `FC` corner index, `0x03006904` edges left, `08` edge du, `0C` edge dx, `10` edge u, `14` span dv, `44` edge rows, `48` edge dv, `4C` span du |
+| `0x03006390` / `0x030063B0` | clipped UVs (x pass / y pass) |
+| `0x03006440` / `0x03006460` | clipped screen corners (x pass / y pass) |
+| `0x03006430` | identity index table 0…7 for clipped polygons |
+
+- **World struct:** `+0x0C` "per sector: head of its entity list"; `+0x78` "entity handler table (`0x7F38B8`)"; `+0xA0` "projected model vertices (`0x030053F0`)"; `+0xFC` "matrix slots, 0x30 each: entity rotation × camera rotation (2.14) + camera-space position; 64 slots".
+- **Entity:** replace the rows with the table in "Entities" above (`+0x00`, `+0x02`, `+0x04`, `+0x08`, `+0x0A` bits, `+0x28`, `+0x36`, `+0x44/+0x46/+0x48`, `+0x4E`, `+0x64`, `+0x84`, `+0x88`). Corrections: `+0x04` is the draw-order link (not the sector list, which is `+0x02`); `+0x36` is the far model, not a "LOD piece count"; `+0x64` is the second (spoiler) model, not a "second LOD piece offset"; `+0x88` is the matrix slot. Also `+0x0A` bit 5 (physics orientation) and `+0x30`/`+0x32` (angles for `FUN_0814da68`'s rotations).
+
+### symbols.csv
+
+New rows:
+
+```
+0x0300514c,polygon_outcode,function,model polygon outcode: 4 if no corner inside in x or none in y; bit 0/1 outside in x/y
+0x03003d70,clip_polygon,function,Sutherland-Hodgman of a model polygon against the view rect (x then y), halfword results
+0x03003acc,clip_polygon_edge,function,clips one edge to lo..=hi on x or y with u/v; 1 visible, 2 start clipped, 4 end clipped
+0x03005320,polygon_top_corner,function,first corner with the least y
+0x03003464,polygon_edge_back,function,next polygon edge walking corners backwards: 16.16 x, u/v steps per row
+0x03003634,polygon_edge_forward,function,next polygon edge walking corners forwards
+0x030051f4,draw_polygon_span,function,textured model span: texel pointer stepped by du/dv with 8-bit fraction carries, no wrap
+0x0814eba0,assign_entity_slot,function,gives an entity drawn last frame a matrix slot (counter 0x03005394) and builds it; clears +0x0A bit 2
+0x0814da68,build_entity_matrix,function,slot matrix: rot(+0x30) * camera * rot(+0x32) (or physics matrix, bit 5) + camera-space position; only if +0x0A bit 1 or depth <= 0xDAC
+0x0814ec0c,assign_billboard_slot,function,(name tentative) slot with the camera rotation and the camera-space position
+0x0814e628,opponent_effects,function,(name tentative) rear effect sprites of a car via FUN_0814e414
+0x0814e7b0,spawn_effect_sprite,function,(name tentative) projects a point and allocates a scaled sprite object (FUN_08162048)
+```
+
+Comment updates: `0x03001ae4` "sorts a sector's entities farthest first by (x'^2+d^2)>>8 into +0x04; runs handlers"; `0x03001cf0` "per entity: clip span, depth/row culls, LOD +0x36-1 / +0x36, 0x1000 cut (bit 6), material, texture, body + spoiler"; `0x03004018` "projects a model's vertices; drops the model if a vertex depth > 0x6000"; `0x03004190` "back-face cull (cross >= 0 drawn) then raster_polygon per polygon"; `0x03003808` "outcode, clip, edges from the top corner, spans"; `0x03004e24` "resets the draw list and sorts the sector's (or a container's children's) entities"; `0x0814bc30` "player car: builds its matrix slots (body and spoiler) each frame".
+
+### OPEN-QUESTIONS.md
+
+- 11 is answered (see address-map above).
+
+### TOOLS.md
+
+- `tools/mgba_frame_probe.lua`: with `NFSGBA_MGBA_SCRIPTS=<path>`, `mgba_ctl.py start` loads it next to the remote. Write `NAME [ADDR=VALUE …]` to `probe.tmp` in the session folder and rename it to `probe.txt`; it saves `NAME.iwram.bin`, `NAME.wram.bin`, `NAME.vram.bin` (renderer inputs at the start of `draw_visible_sectors`, the frame at its end) and `NAME.final.bin` (the same page a frame later). `emu:setBreakpoint` works on IWRAM ARM code.
