@@ -21,7 +21,7 @@ fn with_mem<R>(g: &mut Gba, f: impl FnOnce(&mut Mem) -> R) -> R {
     r
 }
 
-fn load_state(g: &mut Gba) -> MenuState {
+pub(super) fn load_state(g: &mut Gba) -> MenuState {
     with_mem(g, |m| MenuState::load(m))
 }
 

@@ -96,7 +96,9 @@ STUBS.update({
     0x08151454: 0, 0x081372E4: 1, 0x08143010: 1, 0x08139E10: 1,  # vblank wait; goto_screen(0x82)
     0x08149FD8: 1, 0x08149D84: 1,  # intro: save write, save load
     0x0813644C: 2, 0x081356DC: 0,  # intro enter: health image, profile_reset
-    0x08139C8C: 2, 0x08163D30: 2, 0x08161EEC: 2, 0x08161C24: 2,  # menu scene: descriptor, unpack, sprite screen
+    # The menu scene: descriptor, unpack, sprite screen. Typed and checked by scene.py (the RAM-image GbaHost cannot
+    # reproduce the heap); stubbed here only so the screens above them compare call by call.
+    0x08139C8C: 2, 0x08163D30: 2, 0x08161EEC: 2, 0x08161C24: 2,
     0x081364C4: 1,  # intro page setup (clears the page)
     0x081372D8: 1,  # scene teardown (every exit handler)
     0x08143284: 0, 0x081435C4: 0,  # map screens: zone colours, map draw

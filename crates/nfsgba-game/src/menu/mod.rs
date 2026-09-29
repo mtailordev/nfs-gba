@@ -203,6 +203,7 @@ mod results;
 pub mod scene;
 mod setup;
 pub mod text;
+pub mod typed;
 pub use adapt::*;
 
 /// The eight kinds of menu screen. Each has an enter, update, draw and exit handler; the screens share them
