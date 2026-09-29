@@ -560,3 +560,8 @@ address,name,kind,comment
 0x081300e0,list_item_new,function,(tentative; stub) (screen; item) nonzero: the item gets a "new" mark
 0x081302c4,upgrades_changed,function,(tentative; stub) (not the performance page) nonzero when the upgrades changed (0x03005954; save question 0x376)
 0x08133d30,car_stats_draw,function,(tentative; stub) (car; x; y; 0) the car-select stat bars
+0x08148f24,orient_upright,function,body upright at a 14-bit heading (low 2 bits dropped): quaternion via matrix_to_quat renormalised through the reciprocal table; rotation matrix; momenta kept (car_put_back_on_road; body_init)
+0x08143ba8,traffic_spawner_behind,function,spawner entity (state 0 -> 1): while traffic is under its limit and the camera car within *0x03006258: counts +0xA0 down and spawns traffic kind 0 (section start; half speed)
+0x08143c78,traffic_spawner_ahead,function,as traffic_spawner_behind with traffic kind 2 (section start; full speed)
+0x0814a974,spawner_handlers,function,(tentative) entity handler 0x28; the thunks 0x0814A9C0 (0x2A: traffic_spawner_ahead) and 0x0814A9D4/0x0814A9E0 (0x2D/0x2E: traffic_spawner_behind) sit inside it; no Carbon race creates such entities
+0x08141250,non_racer_car_hit,function,car-to-car hit of a non-racer: when 0x03006174 is set and it is not the first entity the other car's +0x4B8 = 0x40; clears 0x030061F0

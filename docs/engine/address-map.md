@@ -128,6 +128,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F0636` | i16 per `car·0x10 + rec[0]` | entity `+0x64` source (clamped at 0) | formats/car-paint |
 | `0x7F0BD8` | 15 × 0x58 | car table (`+0x0C` first material, `+0x0E` palette bank = 1 for all, `+0x10`/`+0x12` far model, `+0x14`/`+0x16` close model) | formats/vehicle-models, formats/car-paint |
 | `0x7F1100` | 15 × 0x158 | handling records | engine/physics |
+| `0x7F2528` | 8 × 12 | tipped-over body corners (x y z in car axes) that car_tipped_dynamics rests the car on | engine/physics |
 | `0x7F2588` | 44 × 0xC | race slot per route number: environment, route index (`race_setup_route`) | formats/career |
 | `0x7F2798` | 44 × 0x14 | route table | formats/race-routes |
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments; the **menu descriptor** at `0x7F2FE8` has the same layout | formats/city-sectors, formats/ui |
@@ -368,20 +369,20 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x0300617C` | hunter: hit damage factor ×256 (0x440) |
 | `0x03006180` | wingman: engaged steps left (6) (4) |
 | `0x03006184` / `0x030061A0` | hunter: drain factor ×256 of `hunter_wall_hit` / `hunter_drain_b` (0x240 each) |
-| `0x0300618C` | wingman: cleared when a command ends (4) |
+| `0x0300618C` | wingman: cleared when a command ends (4); set when a command is given in the drafter role (`0x030061F8` set) |
 | `0x0300619C` | the wingman's partner entity (the player's; world +0x3C) (4) |
 | `0x030061A4` | someone finished |
 | `0x030061B0` | hunter life gain by place, 5 × 4 (0, 200, 150, 100, 0) |
 | `0x030061D0` / `0x030061E0` | hunter: wrong-way frames (27) / wall frames (50) before the drain |
-| `0x030061D4` / `0x030061DC` | wingman: command available (the HUD portrait blinks) / gap setting from `0x7F4284` (the HUD portrait frame) |
-| `0x030061D8` | wingman: cooldown (down by 0x03005934; copied to 0x03006048) (4) |
-| `0x030061E4` / `0x03006188` | wingman: command time left / command length 0x78000 (the HUD bar value / full scale) |
-| `0x030061E8` | wingman: command running (4) |
+| `0x030061D4` / `0x030061DC` | wingman: command available (the HUD portrait blinks) / command count (loaded from `0x7F4284`; one spent per command; the HUD portrait frame) |
+| `0x030061D8` | wingman: cooldown (down by 0x03005934; copied to 0x03006048) (4); 0x1E000 after a command |
+| `0x030061E4` / `0x03006188` | wingman: command time left / command length 0x78000 (the HUD bar value / full scale); each wingman command refills the bar to full scale |
+| `0x030061E8` | wingman: command running (4); set by `wingman_command` |
 | `0x030061EC` | wingman: previous lead (follow gain) (4) |
 | `0x030061F0` | wingman: engaged with its target (attacker; `wingman_steer` on); cleared by `traffic_wall_hit` |
 | `0x030061F4` / `0x030061A8` | hunter: wrong-way drain per frame (1000) / wall drain per frame (100) |
 | `0x030061F8` | wingman role: 0 attacker; 1 drafter (4) |
-| `0x030061FC` | wingman: previous lead + 500 or gap + 100 (gains) (4) |
+| `0x030061FC` | wingman: previous lead + 500 or gap + 100 (gains) (4); cleared by the wingman command (attacker role) |
 | `0x03006200` | wingman: keep-gap phase (4) |
 | `0x03006210` | 6 × 4 HUD message slots |
 | `0x03006230` | map state: +0/+4 view x/y 8.8; +8 cursor i8; +9 moved (0xC) |
@@ -389,8 +390,9 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03006244` | traffic tuning word (0x7F53EC +0x1C) (4) |
 | `0x03006248` | traffic setting count (4) (4) |
 | `0x0300624C` | traffic speed-up period (steps of +0x52) (4) |
+| `0x03006250` | set when a traffic spawner has the camera car in range (4) |
 | `0x03006254` | traffic tuning word (0x7F53EC +0x10) (4) |
-| `0x03006258` | traffic tuning word (0x7F53EC +4) (4) |
+| `0x03006258` | traffic tuning word (0x7F53EC +4) (4); traffic spawner range squared (camera car to spawner) |
 | `0x03006270` | 8 × pointer: live traffic cars |
 | `0x03006290` | traffic top speed (entity +0x24) (4) |
 | `0x03006294` | traffic stop distance factor (modes 2 and other) (4) |
@@ -506,16 +508,21 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x90` | racing-line segment |
 | `+0x94` | AI: copy of +0x76 at setup (2) |
 | `+0x9A` | traffic: direction along the route (+-1) (2) |
-| `+0x9C` | traffic: waypoint (2) |
-| `+0x9E` | traffic: mode (1 lane driving; 2 waypoints; else stop at the waypoint) (2) |
+| `+0x9C` | traffic: waypoint (2); 1 for spawns at a section start |
+| `+0x9E` | traffic: mode (1 lane driving; 2 waypoints; else stop at the waypoint) (2); spawn kind: 0 section start at half speed, 1 near the player, 2 section start at full speed |
 
 ### Driver (`*(entity + 0x8C)`)
 
 | Offset | What |
 |---|---|
 | `+0x00` | heading the chase camera follows (0x1000 in the reference race) |
+| `+0x08` | suspension step: vertical speed per point (FUN_0814de40) (4 × 4) |
 | `+0x28` | brake lights on (opponent_effects draws them for entity 0) (4) |
 | `+0x3C` / `+0x40` / `+0x44` | revs / gear / speed (read by the HUD) |
+| `+0x48` | suspension step: points on the floor (its return value; 4 at car init) (4) |
+| `+0x4C` | suspension step: spring position per point (4 × 4) |
+| `+0x5C` | suspension step: spring rate per point (damped to 160/256 each step) (4 × 4) |
+| `+0x6C` | suspension step: height per point (floor-clamped); entity y = the mean of the four (4 × 4) |
 | `+0x90` | wheel angle (`>> 8`; the rim redraw rotates by it) |
 | `+0x94` | AI: target heading (14-bit) (4) |
 | `+0x98` | AI: curve term = angle between the next two line segments × 0x14 >> 4 (4) |
@@ -538,6 +545,8 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x4D6` | AI: preferred lane (2 when it changed section) |
 | `+0x4D8` | race flags: bit 0 backwards past the start, bit 1 lap armed, bit 3 knocked out |
 | `+0x4DA` | AI: blocked lanes 0..4 (set each step for the next) (5 × 0x2) |
+| `+0x4E4` | steps tipped over (car_tipped_dynamics); over 100 with a corner down and slow: car_put_back_on_road (2) |
+| `+0x4E6` | tipped steps with no corner down (airborne); landing sound 0x16 or 0x19 after more than 4 (2) |
 | `+0x4E8` | hunter life (clamped at 0; nothing else happens at 0) |
 | `+0x4EC` / `+0x4EE` | wrong-way frames / wall frames |
 | `+0x4F0` | AI: follow timer (with `+0x4F4`); cleared by hunter hits and drains |
