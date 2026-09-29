@@ -10,8 +10,9 @@
 // Fixed-point expressions are written the way the game's C writes them (see nfsgba-sim).
 #![allow(clippy::precedence)]
 
+pub mod camera;
 pub mod oam;
-pub mod standin;
+pub mod slots;
 pub mod trace;
 pub mod view;
 
@@ -22,7 +23,7 @@ use nfsgba_formats::{
     city, hud, paint, render, sector_light, sky, tint_palette,
     ui::{self, SpriteBank},
 };
-use nfsgba_sim::{Mem, Sim, Unported, car, sound::Command};
+use nfsgba_sim::{Mem, Sim, Unported, ai, car, sound::Command, traffic_ai};
 
 use view::WORLD;
 
@@ -34,15 +35,20 @@ pub struct Timing {
     pub timer3: u16,
     /// At `update_entities`' entry.
     pub entities: u32,
-    /// At each sound call of the car steps, in order.
-    pub sounds: Vec<u32>,
-    /// When `route_gap` reads the race time (inside the player's car step).
+    /// At the entry and the return of each sound call of the entity handlers, in order (an IRQ can land inside a
+    /// call: `snd_set_sfx_rate` divides before it stores the rate).
+    pub sounds: Vec<(u32, u32)>,
+    /// At `route_gap`'s entry (inside the player's car step).
     pub gap: Option<u32>,
+    /// At each of `route_gap`'s race-time reads: it reads it twice, around a division.
+    pub gap_reads: Vec<u32>,
     /// At `hud_update`'s entry, and when `hud_timer` reads the race time.
     pub hud: u32,
     pub timer: Option<u32>,
     /// The whole frame.
     pub end: u32,
+    /// When an opponent's AI reads the race time for its lane-change timer (`0x0813C95C`): (driver struct, count).
+    pub lanes: Vec<(u32, u32)>,
 }
 
 impl Timing {
@@ -54,9 +60,11 @@ impl Timing {
             entities: 0,
             sounds: Vec::new(),
             gap: None,
+            gap_reads: Vec::new(),
             hud: 4,
             timer: None,
             end: 4,
+            lanes: Vec::new(),
         }
     }
 }
@@ -111,15 +119,15 @@ impl Machine {
     }
 }
 
-/// Where a replay may stand in for a subsystem that is not ported yet (the test replaces the RAM that subsystem
-/// writes with the reference build's).
+/// Points of the race frame where a caller may look at or override the state (`Game::frame_with`); returning
+/// `true` at `Camera` or `Slots` replaces that code with the caller's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Checkpoint {
-    /// After `update_entities`: the opponents' and traffic handlers (D4).
+    /// After `update_entities`.
     Entities,
-    /// After the camera update (`FUN_081389a0` → `camera_update`), before the visible list.
+    /// Instead of the camera update (`camera_dispatch` → `camera_update`), before the visible list.
     Camera,
-    /// After the matrix slots (`build_player_matrices`, `assign_entity_slot`, the effect sprites, R25).
+    /// Instead of the matrix slots (`build_player_matrices`, `assign_entity_slot`, the effect sprites).
     Slots,
 }
 
@@ -135,9 +143,6 @@ pub struct Game {
     /// Samples the sound hardware played during the last frame (signed 8-bit, 176 per VBlank, 10,512 Hz).
     pub sound: Vec<u8>,
     pub bank: SpriteBank,
-    /// Entities whose handler is not ported and was skipped in the last frame: (index, handler).
-    /// NOT 1:1 (D4): the opponents (0x29) and traffic (0x36) keep their state.
-    pub skipped: Vec<(u32, u16)>,
     /// VBlank IRQs run so far in the current frame.
     irqs: u32,
 }
@@ -184,7 +189,6 @@ impl Game {
             display_page: 0,
             audio,
             sound: Vec::new(),
-            skipped: Vec::new(),
             irqs: 0,
         }
     }
@@ -215,7 +219,6 @@ impl Game {
         assist: &mut dyn FnMut(Checkpoint, &mut Game) -> bool,
     ) -> nfsgba_sim::Result<()> {
         self.sound.clear();
-        self.skipped.clear();
         // Timer 3 (FUN_08162228 stops it, FUN_0816223c reads it): the frame time for the physics.
         let m = &mut self.sim.mem;
         m.set_u32(0x0300_5934, t.timer3 as u32);
@@ -342,12 +345,21 @@ impl Game {
         self.sim.mem.u32(SFX_OPTION)
     }
 
-    /// The sound commands the car step issued, in order (`nfsgba_sim::sound`), each after the VBlank IRQs that
-    /// came before it in the frame (`t.sounds`; the sim records the commands instead of running them).
-    fn play_commands(&mut self, t: &Timing, done: &mut usize) {
+    /// The sound commands the entity handlers issued, in order (`nfsgba_sim::sound`), each after the VBlank IRQs
+    /// that came before its effect in the frame (`t.sounds`; the sim records the commands instead of running
+    /// them): a rate change takes effect when the call returns (after its division), a stop at its entry (it
+    /// zeroes the volume first). A play that an IRQ interrupted half-way is not modelled.
+    fn play_commands(&mut self, t: &Timing, done: &mut usize) -> nfsgba_sim::Result<()> {
         for c in std::mem::take(&mut self.sim.sounds) {
-            if let Some(&at) = t.sounds.get(*done) {
-                self.irqs_to(at);
+            if let Some(&(entry, ret)) = t.sounds.get(*done) {
+                match c {
+                    Command::Pitch(..) => self.irqs_to(ret),
+                    Command::Stop(_) => self.irqs_to(entry),
+                    _ => {
+                        is(entry != ret, "an IRQ inside snd_play_sfx (a half-set voice)")?;
+                        self.irqs_to(entry)
+                    }
+                }
             }
             *done += 1;
             let rom = Rom(&self.rom);
@@ -367,6 +379,23 @@ impl Game {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Runs `step` with the race time the game read `at` IRQs into the frame (the IRQs themselves run later, where
+    /// the frame's other timing points put them): the ticks between now and then are lent to it.
+    fn lend<R>(&mut self, at: Option<u32>, step: impl FnOnce(&mut Sim) -> R) -> R {
+        let lent = match at {
+            Some(n) if self.race_time_runs() => n.saturating_sub(self.irqs),
+            _ => 0,
+        };
+        let rt = nfsgba_sim::route::RACE_TIME;
+        let m = &mut self.sim.mem;
+        m.set_u32(rt, m.u32(rt).wrapping_add(lent));
+        let r = step(&mut self.sim);
+        let m = &mut self.sim.mem;
+        m.set_u32(rt, m.u32(rt).wrapping_sub(lent));
+        r
     }
 
     fn entity(&self, i: u32) -> u32 {
@@ -396,21 +425,20 @@ impl Game {
         m.set_u16(WORLD + 0xF6, 0);
         self.update_entities(t)?;
         assist(Checkpoint::Entities, self);
-        let m = &self.sim.mem;
-        is(m.u32(0x0300_55F8) != 2, "camera views other than the chase view")?;
+        if !assist(Checkpoint::Camera, self) {
+            camera::dispatch(&mut self.sim.mem)?;
+        }
         is(
-            !assist(Checkpoint::Camera, self),
-            "camera_update (not ported; a caller must stand in)",
+            !matches!(self.sim.mem.u32(camera::VIEW_MODE), 0 | 2),
+            "camera views other than the bumper and chase views",
         )?;
         let mut vis = view::visible(&self.rom, &self.sim.mem);
         if vis.sky {
             self.sim.mem.set_u16(WORLD + 0xF6, 1);
         }
-        is(self.sim.mem.u32(LINK) == 2, "link play (race_frame_update)")?;
-        is(
-            !assist(Checkpoint::Slots, self),
-            "the matrix slots and effect sprites (build_player_matrices, assign_entity_slot: R25)",
-        )?;
+        if !assist(Checkpoint::Slots, self) {
+            slots::race_slots(&mut self.sim.mem)?;
+        }
         let page = (self.sim.mem.u32(0x0300_0080) - 0x0600_0000) as usize;
         if self.sim.mem.u16(WORLD + 0xF6) != 0 {
             let m = &self.sim.mem;
@@ -470,7 +498,9 @@ impl Game {
         )
     }
 
-    /// `update_entities` (`0x0813765c`): the handler of every entity with state bits 0 and 1 set.
+    /// `update_entities` (`0x0813765c`): the handler of every entity with state bits 0 and 1 set, from the entity
+    /// handler table `0x087F38B8`: the cars (0..3), the opponents and the wingman (0x29), the sparks (0x34) and
+    /// traffic (0x36).
     fn update_entities(&mut self, t: &Timing) -> nfsgba_sim::Result<()> {
         let mut sounds = 0;
         for i in 0..view::entity_count(&self.sim.mem) {
@@ -481,23 +511,41 @@ impl Game {
             }
             match m.u16(e + 0x4E) {
                 0..=3 => {
+                    if matches!(m.u16(e + 0x4A), 2 | 0x100) {
+                        slots::rim_redraw(&mut self.sim.mem, e)?;
+                    }
                     // The step reads the race time (route_gap, lap crossing) with the IRQs before route_gap
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
                     // the IRQs themselves run after it, between the sound commands they fell between.
-                    let lent = match t.gap {
-                        Some(gap) if self.race_time_runs() => gap.saturating_sub(self.irqs),
-                        _ => 0,
-                    };
-                    let rt = nfsgba_sim::route::RACE_TIME;
-                    let m = &mut self.sim.mem;
-                    m.set_u32(rt, m.u32(rt).wrapping_add(lent));
-                    let r = car::handler(&mut self.sim, e);
-                    let m = &mut self.sim.mem;
-                    m.set_u32(rt, m.u32(rt).wrapping_sub(lent));
-                    r?;
-                    self.play_commands(t, &mut sounds);
+                    let at = t.gap_reads.first().copied().or(t.gap);
+                    self.lend(at, |sim| car::handler(sim, e))?;
+                    // route_gap reads the race time again after its division (split = rt₂ − x·rt₁ / y); the sim
+                    // reads it once, so an IRQ in between adds its tick afterwards.
+                    if let [first, second, ..] = t.gap_reads[..]
+                        && self.race_time_runs()
+                    {
+                        let m = &mut self.sim.mem;
+                        m.set_u32(0x0300_615C, m.u32(0x0300_615C).wrapping_add(second - first));
+                    }
+                    self.play_commands(t, &mut sounds)?;
                 }
-                h => self.skipped.push((i, h)),
+                0x29 => {
+                    // The lane-change timer reads the race time the IRQs have counted by then.
+                    let d = m.u32(e + 0x8C);
+                    let at = t.lanes.iter().find(|(driver, _)| *driver == d).map(|&(_, n)| n);
+                    let effects = self.lend(at, |sim| ai::handler(sim, e))?;
+                    self.play_commands(t, &mut sounds)?;
+                    if let Some(f) = effects {
+                        let m = &mut self.sim.mem;
+                        slots::opponent_effects(m, e, f.heading as i32, f.view as i32, f.size);
+                    }
+                }
+                0x34 => slots::effect_handler(&mut self.sim.mem, e),
+                0x36 => {
+                    traffic_ai::handler(&mut self.sim, e)?;
+                    self.play_commands(t, &mut sounds)?;
+                }
+                _ => return Err(Unported("an entity handler other than 0..3, 0x29, 0x34 and 0x36")),
             }
         }
         Ok(())

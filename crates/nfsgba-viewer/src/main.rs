@@ -28,6 +28,7 @@ use std::{collections::BTreeMap, f64::consts::TAU};
 
 use bevy::{
     asset::{RenderAssetUsages, embedded_asset},
+    audio::AddAudioSource,
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin, FreeCameraState},
     core_pipeline::tonemapping::{DebandDither, Tonemapping},
     light::NotShadowCaster,
@@ -354,7 +355,9 @@ fn main() {
         ..default()
     }))
     .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
+    .add_audio_source::<play::GbaSound>()
     .add_systems(Startup, setup)
+    .add_systems(PostStartup, play::start_sound.run_if(resource_exists::<play::Play>))
     .add_systems(
         Update,
         (
