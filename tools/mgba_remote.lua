@@ -5,6 +5,7 @@
 --   shot NAME                  screenshot to NAME.png
 --   dump NAME                  every memory domain except the cartridge to NAME.<domain>.bin, registers to log
 --   save NAME / load NAME      savestate NAME.ss
+--   poke ADDR VALUE            write one byte to RAM (test scenarios, e.g. unlocking a wingman; never the ROM)
 --   trace NAME [SKIP] / untrace
 --                              log every call of the car handler FUN_0814bd4c for entity 0 (the player) to
 --                              NAME.csv, at its entry: frame, keys, a few globals, entity 0 (0xA4 bytes) and its
@@ -106,6 +107,8 @@ local function run(line)
     dofile(a) -- extra probes (e.g. tools/trace_probe.lua); they see the globals emu, callbacks, C
   elseif op == "luax" then
     assert(load(a))() -- one Lua statement without spaces, e.g. luax AUTOPILOT.mode="race"
+  elseif op == "poke" then
+    emu:write8(tonumber(a), tonumber(b))
   elseif op == "untrace" then
     if breakpoint then emu:clearBreakpoint(breakpoint) end
     if trace then trace:close(); traceRam:close() end

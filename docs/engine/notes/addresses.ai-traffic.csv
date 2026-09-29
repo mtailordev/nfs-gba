@@ -1,0 +1,61 @@
+region,address,size,what,doc
+rom,0x7F38B8,65 × 0x4,entity handlers by entity +0x4E: 0..3 car_handler; 4..0xD 0x0814add4; 0x29 opponent_handler; 0x34 effect_handler; 0x36 traffic_handler; 0x39..0x3F camera_update; 0x40 camera_look_at_player,engine/ai
+rom,0x7F5A50,5 × 0x4,AI look-ahead distance by lane when the curve term abs(driver +0x98) > 0x1000: 0xA28 0xA28 0x960 0x898 0x578,engine/ai
+rom,0x7F3DE8,3 × 0x4,AI boost timer reload per start value 0x03006158: 0 20 40,engine/ai
+rom,0x7F3DF4,3 × 0x4,AI boost timer shift per start value: 0 6 4,engine/ai
+rom,0x7F42B4,18 × 0x4,a non-racer's (the wingman's) upgrade level by wingman; one entry fills all ten slots,engine/ai
+rom,0x7F4284,12 × 0x4,wingman gap per wingman (-> 0x030061DC),engine/ai
+rom,0x7F5604,per traffic type × 0x4,hit-response shift of the traffic car's velocity (and + 0xD of its wobble),engine/ai
+rom,0x7F5684,per traffic type × 0x4,hit-response shift of the racer's impulse,engine/ai
+rom,0x7F5704,per traffic type × 0x4,traffic collision point count (2 for all),engine/ai
+rom,0x7F5804,per traffic type × 2 × 0x4,traffic collision points along the car (832; -576),engine/ai
+rom,0x7F5784,per traffic type × 0x4,traffic collision radius squared (0x33A900),engine/ai
+rom,0x7F5924,per traffic type × 0x2,non-zero: the player hitting this traffic type sets race phase 7,engine/ai
+ram,0x03005934,4,per-frame amount the wingman's and the knocked-away traffic timers count down by (unit not decoded),engine/ai
+ram,0x030056F0,4,below 0x32 the AI's lane offset is 0x200 per lane (else 0x100),engine/ai
+ram,0x03006110,4,added to driver +0x188 in the AI's wheel drive,engine/ai
+ram,0x03006158,4,AI boost start value 0..2 (0x7F3DE8/0x7F3DF4); 2 also boosts over the last lap's last 3 segments,engine/ai
+ram,0x0300624C,4,traffic speed-up period (steps of +0x52),engine/ai
+ram,0x03006290,4,traffic top speed (entity +0x24),engine/ai
+ram,0x03006294,4,traffic stop distance factor (modes 2 and other),engine/ai
+ram,0x0300619C,4,the wingman's partner entity (the player's; world +0x3C),engine/ai
+ram,0x03006178,4,the entity the wingman attacks (and the lane reference of wingman_steer),engine/ai
+ram,0x030061D4,4,wingman: command available,engine/ai
+ram,0x030061D8,4,wingman: cooldown (down by 0x03005934; copied to 0x03006048),engine/ai
+ram,0x030061DC,4,wingman: gap setting (0x7F4284),engine/ai
+ram,0x030061E4,4,wingman: command time left,engine/ai
+ram,0x030061E8,4,wingman: command running,engine/ai
+ram,0x030061EC,4,wingman: previous lead (follow gain),engine/ai
+ram,0x030061F0,4,wingman: engaged with its target (attacker); wingman_steer on,engine/ai
+ram,0x030061F8,4,wingman role: 0 attacker; 1 drafter,engine/ai
+ram,0x030061FC,4,wingman: previous lead + 500 or gap + 100 (gains),engine/ai
+ram,0x03006200,4,wingman: keep-gap phase,engine/ai
+ram,0x03006174,4,wingman: attack timer (0x12),engine/ai
+ram,0x03006180,4,wingman: engaged steps left (6),engine/ai
+ram,0x03006188,4,wingman: command length (0x78000),engine/ai
+ram,0x0300618C,4,wingman: cleared when a command ends,engine/ai
+driver,+0x94,4,AI: target heading (14-bit),engine/ai
+driver,+0x98,4,AI: curve term = angle between the next two line segments × 0x14 >> 4,engine/ai
+driver,+0x4B0,4,AI: stuck counter (0x32 ai_resync_segment; over 0x96/0xFA car_put_back_on_road),engine/ai
+driver,+0x4B8,4,AI: grip scale 0..0x100 (+4 per step) of the base grips,engine/ai
+driver,+0x4D4,2,AI: lane-change timer (reset to race time & 0x1F; over 300 marks its lane blocked),engine/ai
+driver,+0x4D6,2,AI: preferred lane (2 when it changed section),engine/ai
+driver,+0x4DA,5 × 0x2,AI: blocked lanes 0..4 (set each step for the next),engine/ai
+driver,+0x4F0,2,AI: follow timer (with +0x4F4),engine/ai
+driver,+0x4F2,2,AI: hunter countdown (0x28),engine/ai
+driver,+0x4F4,4,AI: the entity followed,engine/ai
+driver,+0x4F8,2,AI: boost timer,engine/ai
+entity,+0x94,2,AI: copy of +0x76 at setup,engine/ai
+entity,+0x18,4,traffic: direction x (1.0 = 0x1000),engine/ai
+entity,+0x20,4,traffic: direction z,engine/ai
+entity,+0x24,4,traffic: speed (3 or 4 while driving),engine/ai
+entity,+0x30,2,traffic: pitch,engine/ai
+entity,+0x32,2,traffic: shown heading,engine/ai
+entity,+0x38,4,traffic: heading wobble,engine/ai
+entity,+0x52,2,traffic: speed-up counter,engine/ai
+entity,+0x56,2,traffic: knocked-away timer,engine/ai
+entity,+0x7C,2,traffic: type (0x7F546C),engine/ai
+entity,+0x9A,2,traffic: direction along the route (+-1),engine/ai
+entity,+0x9C,2,traffic: waypoint,engine/ai
+entity,+0x9E,2,traffic: mode (1 lane driving; 2 waypoints; else stop at the waypoint),engine/ai
+profile,+0x26C,0x60,AI drive-force curve (count 0x15; x0 0; x1; pointer to +0x27C; 21 values),engine/ai

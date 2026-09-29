@@ -185,6 +185,10 @@ deterministic from a savestate (`trace_race.py` relies on this).
   - every environment once (sky, palette);
   - the pause menu options.
 
+## Oracle gotcha (from the menus work)
+
+`Result.read` rebuilds memory from the snapshot plus the call's writes, **not** the call's `mem=` inputs: a byte set as an input that the call leaves alone reads back as the snapshot's value. Generators should apply the writes to their own inputs.
+
 ## Integration notes (harness)
 
 **TOOLS.md, new rows:**
