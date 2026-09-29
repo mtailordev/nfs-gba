@@ -41,6 +41,8 @@ Lua API: `callbacks:add("frame", fn)`, `emu:currentFrame()`, `emu:readRegister("
 
 **Remote control for the canonical ROM:** `python tools/mgba_ctl.py start`, then batches such as `python tools/mgba_ctl.py "hold A 10" "wait 120" "shot x" "dump x" "save x"`, then `stop`. Output goes to `$NFSGBA_DATA\work\<sha1-8>\mgba\`.
 
+**Race-start captures:** `tools/race_init_capture.py` + `tools/race_init_capture.lua` (states at the entry and return of `race_start_from_table_a`), `tools/race_init_oracle.py` (the game's result in the oracle, the seed timing), `tools/race_init_inputs.py` (the read-before-write inputs of the race start).
+
 **Game-frame traces:** `tools/mgba_game_trace.lua` + `tools/game_trace.py` save the whole machine state at every `main_frame` entry, with the IRQ counter at each point that reads it and the effect-sprite list (`tools/test_game_trace.py` round-trips the packed format); `crates/nfsgba-game/tests/replay.rs` replays them. `tools/decomp_show.py` prints a decompiled function with every literal-pool `DAT_` resolved to its value and symbol.
 
 **Menu oracle cases:** `tools/ui_menu_oracle.py [fades|toplevel|intro]` writes oracle cases for `menu.rs` into `$NFSGBA_DATA/work/<sha8>/menus/`; its `STUBS`/`PORTED` tables list every game function the port does not implement yet, with argument counts.

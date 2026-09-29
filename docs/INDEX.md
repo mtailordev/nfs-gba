@@ -24,6 +24,7 @@
 | [engine/game-loop.md](engine/game-loop.md) | The race frame loop (`crates/nfsgba-game`): `main_frame` order, IRQs, timing as an input, frame-trace replay; viewer play mode |
 | [engine/harness.md](engine/harness.md) | Shared tooling: the function oracle (call any game function on a RAM snapshot), function coverage over real play, ROM byte attribution, notes merge, scenario library design |
 | [engine/physics.md](engine/physics.md) | The player car's simulation (`crates/nfsgba-sim`): init, dynamics, contacts, walls, route tracking, traffic spawn; the trace harness |
+| [engine/race-init.md](engine/race-init.md) | The race start (`race_init::race_start`): level load, heap order, entity spawn, racers, camera, traffic, music; its exact inputs from the previous scene |
 | [engine/renderer.md](engine/renderer.md) | The world renderer: visible-sector list, wall and flat setup, projection, drawers, entity draw (decoded), pixel-exact `render::draw_world` |
 | [engine/sky.md](engine/sky.md) | Sky: per-scanline gradient (VCount IRQ on palette entry 0) and the skyline blit |
 | [engine/viewer-rendering.md](engine/viewer-rendering.md) | How the viewer reproduces GBA indexed colour and the light tint; the game's wall/floor drawers |

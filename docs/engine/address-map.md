@@ -117,6 +117,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F38B8` | 65 × 4 | **entity handler table** (world `+0x78`, by entity `+0x4E`; `update_entities`): 0..3 `car_handler`; 4..0xD `0x0814add4`; 0x29 `opponent_handler` (opponents, wingman); 0x34 `effect_handler`; 0x36 `traffic_handler`; 0x39..0x3F `camera_update`; 0x40 `camera_look_at_player`; 0xE empty | engine/physics, engine/ai |
 | `0x7F399C` | 4 per view | camera function per view (camera_dispatch; 0 = none) | engine/game-loop |
 | `0x7F39BC` / `0x7F39D4` / `0x7F39EC` | 6 each | per camera view: x offset (all 0), height 8.8 (−100, −140, −150, −115, −80, −105), distance (0, −290, −300, −150, 200, −120); orbit distance = `distance·256 + (0x80 − focal)·0x200` | engine/viewer-rendering |
+| `0x7F3A24` | 0x10 per route index | moving pieces that start closed (i16 list; -1 ends; moving_pieces_init) | engine/race-init |
 | `0x7F3CDA` | | breakable-wall partners | engine/physics |
 | `0x7F3DD0` | 12 | the zero vector (also driver `+0xF8` init) | engine/physics |
 | `0x7F3DE8` | 3 × 0x4 | AI boost timer reload per start value 0x03006158: 0 20 40 | engine/ai |
@@ -133,6 +134,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F4480`, `0x7F44A8` | | map scales and offsets (`map_world_to_screen`) | formats/ui |
 | `0x7F44F8` | 5 × 0x20 | minimap palettes | formats/ui |
 | `0x7F4598` | 1 per route | minimap palette per route | formats/ui |
+| `0x7F53EC` | 4 × 0x20 | traffic tuning per traffic setting: byte type count; words to 0x03006258 0x03006260 0x03006294 0x03006254 0x0300624C 0x03006290 0x03006244 | engine/race-init |
 | `0x7F546C` | | traffic types (u16 model, u16 paint) | engine/physics |
 | `0x7F5488` | | traffic lane offsets | engine/physics |
 | `0x7F5494` | 4 × 9 × 8 | control bindings | engine/physics |
@@ -204,6 +206,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre (120, 79), `+0x0C` pitch 240, `+0x10` near 64, `+0x1C` focal 150 |
 | `0x030000A0` | career flag; when set, opponents take entry 0's car id |
 | `0x030000AC` | race-state changed flag |
+| `0x030000B0` | camera: 0 at camera_init (4) |
 | `0x030000BC` | event AI skill |
 | `0x030000C0` | **world struct** (below) |
 | `0x03000164` | race sprite screen (world `+0xA4`): `+0x00` materials, `+0x04` texels, `+0x0C` elements, `+0x10` screens, `+0x14` objects, `+0x18` u16 screen |
@@ -220,13 +223,17 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x0300539C` | pointer to the car records (`0x02000901`, 0x11 bytes per car id; = profile `+0xF9`) |
 | `0x030053A0` | extra projection-centre y offset (8.8) |
 | `0x030053A4` | sound option (volume = option × 4, at most 63) |
+| `0x030053A8` | camera_init: waypoint offset of the start camera (0) (4) |
 | `0x030053AC` | pointer to the player entity |
 | `0x030053B4` | VBlank counter (`vblank_irq`); bit 4 blinks menu cursors and PRESS START |
 | `0x030053D0` | view rect (left, top, right, bottom, i32; view `+0x04`): `draw_sector` sets it from the list entry, `draw_sector_entities` rewrites left/right per entity |
 | `0x030053E4` | camera setting |
+| `0x030053E8` | set to 1 by race_init (meaning unknown) (4) |
 | `0x030053F0` | projected model vertices (world `+0xA0`), x/y halfwords |
 | `0x030055F0` | pointer to the base palette buffer (`0x02001008` in the race); the light tint reads it |
+| `0x030055F4` | camera: 0 at camera_init (4) |
 | `0x030055F8` | camera view (0 bumper, 2 chase; per-view tables `0x7F39BC`/`0x7F39D4`/`0x7F39EC`) |
+| `0x030055FC` | camera: two halfwords cleared at camera_init (4) |
 | `0x03005600` | language (0 En … 4 Es) |
 | `0x03005604` | traffic |
 | `0x03005608` | difficulty |
@@ -238,6 +245,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005630` | i32 palette fade step (±0x10, stepped by 2 to 0); while non-zero the tint and shade write the second buffer. **Not a pointer** |
 | `0x0300563C` | palette dirty flag: `copy_palette_to_ram` copies `*0x0300577C` to palette RAM (outside races) |
 | `0x03005640` | frame time (25,500 / timer-3 ticks, 10..100; 15 if `0x03005624` is 2), written by `main_frame` |
+| `0x03005644` | camera: 0 at camera_init (4) |
 | `0x03005650` | 0x40-byte results block per racer: `+0` car id copy (entity `+0x89`), `+8` knockout bytes, `+0x10` best lap, `+0x20` finish time, `+0x30` hunter life (`0x0300565C` is inside it) |
 | `0x03005658`/`0x03005660`/`0x03005670`/`0x03005680` | per-racer slots cleared when Quick Play starts a race (4 × (u8 / u32 / u32 / u32)) |
 | `0x0300565C` | 4 bytes: per-racer byte, 0xFF = empty slot |
@@ -250,6 +258,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030056EC` | pointer to the profile (`0x02000808`, saved to EEPROM) |
 | `0x030056F0` | race frame counter (`race_frame_update`; cleared at race start); below 0x32 the AI's lane offset is 0x200 per lane (else 0x100) |
 | `0x03005700` | car record being edited in the garage |
+| `0x03005714` | race start set-up state (3 = FUN_0813a054..FUN_0813a108); cleared by race_init (4) |
 | `0x03005718` | player car |
 | `0x03005720` | u32 current route index (23 in the reference race) |
 | `0x03005724` | counter incremented by vblank_irq (4) |
@@ -264,6 +273,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030057A0` | camera matrix in the race |
 | `0x030057D8` | u16 control word per entity (`0xFC00 \| keys` for the player) |
 | `0x030057E0` | set to 0x10 at race start (with the fade) (u32) |
+| `0x030057E8` | cleared by race_init (4) |
 | `0x030057EC` | AI car count (opponents, + 1 with a wingman) |
 | `0x030057F0` | pointer to the unpack buffer |
 | `0x030057F8` | entity index whose heading `shade_car_paint` uses (0) |
@@ -286,12 +296,16 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030059F4` | message box result (1 A / −1 B / 0) (i32) |
 | `0x03005A00` | IWRAM block (0x54C): mode-1 mixer code, then mix buffers `0x03005DEC` / `0x03005E9C` (176 samples each) |
 | `0x03005F4C` / `0x03005F50` | sound work-area pointer (0x26AC allocated) / 28-byte engine config |
+| `0x03005F8C` | camera: 0xFFFEF000 at camera_init (4) |
 | `0x03005F94` | chase orbit yaw; eases towards the driver's heading by `clamp(diff, ±0x600) >> 3` unless `0x03006148` |
 | `0x03005F9C` | camera yaw, 14-bit (renderer camera; the rim redraw test uses it) |
+| `0x03005FA0` | camera: 0x400 at camera_init (4) |
 | `0x03005FA4` | camera height offset (8.8) = the view's height table entry (chase −150·256) |
+| `0x03005FB0` | camera: -1 at camera_init (4) |
 | `0x03005FB4` | pointer to the plane table (malloc 0x2000; 0x20 per waypoint: direction, widening, crossing plane, length); built with the lapped flag the previous scene left, so skipped rows keep old contents |
 | `0x03005FB8` | pointer to the back table (256 × i32: lap index where a branch leaves; −1 none) |
 | `0x03005FB8` | pointer to the backward-step table for branch starts (`racing_line_step`) |
+| `0x03005FD0` | +0x0A = 0 and +0x0C = 8 at race start (meaning unknown) (0x10) |
 | `0x03005FEC` | i8 paint per racer ([0] = player record `[6]`, also at `0x030000B8`) |
 | `0x03006000` | 5 words: the player's upgrade totals; `+0x10` nitro level × 10 |
 | `0x0300601C` | off-route warning (−1/0/1), written by `car_dynamics`; the HUD arrow shows it |
@@ -300,6 +314,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03006078`, `0x03006084`, `0x03006088`, `0x03006028`, `0x03006090`, `0x03006190` | race-start globals (`race_start_setup`) |
 | `0x0300608C` | lapped race (0 = sprint) |
 | `0x03006094` | per entity: pointer to the unpacked decal |
+| `0x03006098` | cleared at the end of race_start_from_table_a (4) |
 | `0x030060A4` | the player's final drive |
 | `0x030060C0` | per section (16 words): non-zero = the AI may take this branch as a shortcut |
 | `0x03006104` | wingman (0 none, 1..12; `race_start_from_table_a`) |
@@ -337,7 +352,11 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03006200` | wingman: keep-gap phase (4) |
 | `0x03006210` | 6 × 4 HUD message slots |
 | `0x03006240`, `0x03006264`, `0x03006260`, `0x03006298`, `0x0300625C` | traffic: spawned count (max 4), countdown (byte), countdown reload, traffic on, type count |
+| `0x03006244` | traffic tuning word (0x7F53EC +0x1C) (4) |
+| `0x03006248` | traffic setting count (4) (4) |
 | `0x0300624C` | traffic speed-up period (steps of +0x52) (4) |
+| `0x03006254` | traffic tuning word (0x7F53EC +0x10) (4) |
+| `0x03006258` | traffic tuning word (0x7F53EC +4) (4) |
 | `0x03006270` | 8 × pointer: live traffic cars |
 | `0x03006290` | traffic top speed (entity +0x24) (4) |
 | `0x03006294` | traffic stop distance factor (modes 2 and other) (4) |
@@ -351,7 +370,9 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03006440` / `0x03006460` | clipped screen corners (x pass / y pass) |
 | `0x03006480` / `0x03006494` | IWRAM divider remainder / pointer to the divide routine (`0x03000220`) |
 | `0x03006490` | IWRAM overlay base − 0xE4 (`0x03000220`): ROM `0x08165218` ↔ IWRAM `0x03000304` |
+| `0x03006498` | race overlay size (0x5164) (4) |
 | `0x0300649C` | pointer to the 32-byte-block fill `0x030002C0` |
+| `0x030064A0` | pointer to the IWRAM 32-byte block copy (copy_shadow_oam and obj_upload_tiles call through it) (4) |
 | `0x030064C0` | keys newly pressed this frame (the menus compare it with 1 = A and 2 = B) (u16) |
 | `0x030064C8` | `rand_table` index |
 | `0x030064CC` / `0x030064D0` | heap descriptor table (8 bytes per block) / arena (`heap_alloc`) |
@@ -399,8 +420,11 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0xA0` | projected model vertices (`0x030053F0`) |
 | `+0xC0` / `+0xC8` | point searched by `find_camera_sector`; scratch shared by the camera and entity code |
 | `+0xD8`, `+0xDA`, `+0xDC` | counts: materials, sectors, walls |
+| `+0xDE` | sectors with an offsets record (the world +0x1C count) (2) |
+| `+0xE0` | walls with a moving piece (the world +0x18 count) (2) |
 | `+0xE2…+0xE8` | current portal span (left, right, top, bottom); the race clip rect is (0, 240, 0, 159), so row 159 is never drawn |
 | `+0xEA` | camera sector |
+| `+0xEC` | cleared at race start (2) |
 | `+0xEE` | visible count |
 | `+0xF0` | 0 each frame |
 | `+0xF2` / `+0xF4` | flat outline / clipped outline lengths |
@@ -490,13 +514,15 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x205` | event status (2 bits per event) |
 | `+0x218` | record times |
 | `+0x26C` | AI drive-force curve (count 0x15; x0 0; x1; pointer to +0x27C; 21 values) (0x60) |
-| `+0x2EE` | music choice (resume race plays music +1) (i8) |
+| `+0x2EE` | race music choice, i8 (`rand & 3` at race start; music id = choice + 1; resuming a race plays it again) |
+| `+0x2EF` | engine sound id (car table +0x48; 0x7EEA44 +8 in link play) (1) |
 | `+0x2F6` / `+0x2F8` | cleared on every screen enter (u16 / u32) |
 | `+0x33C…+0x343` | key-repeat delays (3 on a new press; count down each menu frame): keys 0x20 0x10 0x40 0x80 1 2 0x200 0x100 (8 × i8) |
 | `+0x344…` | menu back stack (screen ids) (bytes) |
 | `+0x350…` | List screens' cursor slots (list_slot) (bytes) |
 | `+0x3B0` | intro screen deadline (tick counter 0x03000044 + 0xF0/0x5A/…) (u32) |
 | `+0x3B8…+0x3F8` | setting values |
+| `+0x400` | two bytes cleared at race start (2) |
 | `+0x402` | needle scale (0x2000 instead of 0x1C00) |
 | `+0x404` | screen 7/8/0x11 flag (3 on screen 0x11: B calls FUN_081439C0 instead of going back) (u8) |
 | `+0x42D` | unlock bits (40 bytes) |

@@ -24,12 +24,17 @@ public class ApplySymbols extends GhidraScript {
 
     private BigInteger wantedMode(long offset, Address a) throws Exception {
         if ((offset >>> 24) == 0x03) return BigInteger.ZERO;
+        // Only direct branches tell the mode: `bl` keeps the caller's, `blx #imm` flips it. Register jumps
+        // (`bx rN`, `ldr pc`, `blx rN`) take it from the target address's bit 0, handled by the pointer search below.
         for (Reference r : getReferencesTo(a)) {
-            if (r.getReferenceType().isCall() && getInstructionAt(r.getFromAddress()) != null) {
-                String op = getInstructionAt(r.getFromAddress()).getMnemonicString().toLowerCase();
-                BigInteger caller = context.getValue(tmode, r.getFromAddress(), false);
-                if (caller != null) return op.startsWith("blx") ? BigInteger.ONE.subtract(caller) : caller;
-            }
+            Instruction from = getInstructionAt(r.getFromAddress());
+            if (!r.getReferenceType().isCall() || from == null || from.getNumOperands() != 1
+                    || from.getOperandType(0) == ghidra.program.model.lang.OperandType.REGISTER) continue;
+            String op = from.getMnemonicString().toLowerCase();
+            BigInteger caller = context.getValue(tmode, r.getFromAddress(), false);
+            if (caller == null) caller = BigInteger.ZERO;
+            if (op.equals("bl")) return caller;
+            if (op.equals("blx")) return BigInteger.ONE.subtract(caller);
         }
         long thumb = offset | 1;
         byte[] le = {(byte) thumb, (byte) (thumb >> 8), (byte) (thumb >> 16), (byte) (thumb >> 24)};
