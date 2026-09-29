@@ -1,4 +1,4 @@
-"""Smoke tests for the car-trace tools (no emulator needed): python tools/trace_tests.py"""
+"""Smoke tests for the car-trace tools (no emulator needed); run by `unittest discover -p "test_*.py"`."""
 import re
 import sys
 import tempfile

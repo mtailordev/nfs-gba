@@ -128,7 +128,9 @@ fn frames_match_the_trace() {
     let Some(rom) = nfsgba_testkit::rom() else { return };
     for (name, frames, trace) in traces() {
         let mut failed = 0;
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} frames"), frames);
         for k in 0..frames {
+            checked.tick();
             let want = &trace.states[k + 1];
             let mut g = Game::new(trace.machine(&rom, k));
             if let Err(e) = g.frame(trace.keys(k), &trace.timing[k]) {
@@ -156,7 +158,9 @@ fn free_run_matches_the_trace() {
     for (name, frames, trace) in traces() {
         let mut g = Game::new(trace.machine(&rom, 0));
         let mut exact = 0;
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} free run"), frames);
         for k in 0..frames {
+            checked.tick();
             let want = &trace.states[k + 1];
             if let Err(e) = g.frame(trace.keys(k), &trace.timing[k]) {
                 panic!("{name}: the free run stops in frame {k}: {e}");

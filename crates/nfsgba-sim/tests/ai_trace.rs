@@ -183,6 +183,7 @@ fn each_call_matches_the_game() {
             continue;
         };
         let (mut checked, mut stopped, mut failures) = (0, Vec::new(), Vec::new());
+        let mut counted = nfsgba_testkit::Expect::new(format!("{name} calls"), want_calls);
         let mut step = usize::MAX;
         let mut mem = trace.state(&rom, 0);
         for c in &calls {
@@ -194,6 +195,7 @@ fn each_call_matches_the_game() {
             let mut sim = Sim::new(mem.clone());
             if let Some(result) = run(&mut sim, c.handler, e) {
                 checked += 1;
+                counted.tick();
                 match result {
                     // Paths the port does not have yet stop instead of guessing (the 1:1 rule); only the ones
                     // listed in docs/engine/ai.md may stop.
@@ -316,6 +318,7 @@ fn replay_matches_the_trace() {
         };
         let steps = trace.deltas.len();
         let mut own: std::collections::BTreeMap<u32, Own> = Default::default();
+        let mut counted = nfsgba_testkit::Expect::new(format!("{name} car states"), want_compared);
         let (mut compared, mut timing, mut stops) = (0, 0, 0);
         for i in 0..steps - 1 {
             // Cars that reached unported code this frame: they take the game's result and re-sync from the trace.
@@ -387,6 +390,7 @@ fn replay_matches_the_trace() {
                 }
                 assert!(bad.is_empty(), "{name} step {i} entity {}: {}", c.entity, bad.join(" "));
                 compared += 1;
+                counted.tick();
                 let block = if p >= 0x0200_0000 {
                     mem.bytes(p, block_size(&mem, e)).to_vec()
                 } else {

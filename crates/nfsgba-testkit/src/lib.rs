@@ -57,7 +57,8 @@ pub fn fixture(rel: &str) -> Option<PathBuf> {
             .append(true)
             .open(log)
             .expect("NFSGBA_FIXTURE_LOG");
-        writeln!(f, "{rel}").expect("NFSGBA_FIXTURE_LOG");
+        // One write per line: test threads append to the same file, and an append is atomic per write.
+        f.write_all(format!("{rel}\n").as_bytes()).expect("NFSGBA_FIXTURE_LOG");
     }
     Some(path)
 }
@@ -73,6 +74,37 @@ pub fn dump(prefix: &str) -> Option<PathBuf> {
         }
     }
     Some(work_dir()?.join(prefix))
+}
+
+/// Counts what a replay checked and fails the test if it ends with any other count, including an early
+/// `return` or `break` that skips the assertions after a loop: `let mut n = Expect::new("live free run", 699);`
+/// then `n.tick()` per checked frame.
+pub struct Expect {
+    what: String,
+    want: usize,
+    got: usize,
+}
+
+impl Expect {
+    pub fn new(what: impl Into<String>, want: usize) -> Expect {
+        Expect {
+            what: what.into(),
+            want,
+            got: 0,
+        }
+    }
+
+    pub fn tick(&mut self) {
+        self.got += 1;
+    }
+}
+
+impl Drop for Expect {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            assert_eq!(self.got, self.want, "{}: items checked", self.what);
+        }
+    }
 }
 
 /// The bytes of a fixture file ([`fixture`]).

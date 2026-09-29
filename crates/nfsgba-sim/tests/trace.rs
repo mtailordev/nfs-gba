@@ -208,7 +208,9 @@ fn each_step_matches_the_trace() {
         let Some(trace) = load(&dir, name) else { continue };
         let expected = oracle(&dir, name);
         let mut failures = Vec::new();
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} steps"), want_steps);
         for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+            checked.tick();
             let (want_writes, want_sounds) = &want.effects;
             let mut sim = Sim::new(trace.state(i));
             let e = sim.mem.u32(W_ENTITIES);
@@ -261,7 +263,9 @@ fn replay_matches_the_trace() {
         let mut sim = Sim::new(trace.state(0));
         let e = sim.mem.u32(W_ENTITIES);
         let start = sim.mem.vec3(e + 0xC);
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} replay steps"), want_steps);
         for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+            checked.tick();
             let mut mem = trace.state(i);
             if let Some((entity, physics)) = &own {
                 let merged: Vec<u8> = (0..0xA4)
