@@ -1,0 +1,3 @@
+address,name,kind,comment
+0x08135ea4,sound_reinit,function,LS_Play init with the music and sound volume globals x4 (after a save load); ends with FUN_081518c4
+0x08135d44,byte_clear,function,*p = 0 (empties a saved profile name)

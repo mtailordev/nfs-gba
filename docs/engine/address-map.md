@@ -559,6 +559,8 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | Offset | What |
 |---|---|
 | `+0x10` / `+0x11` | player's car in career / Quick Play (0x81 copies it to 0x03005718 and 0x0300611C); screen 28 sets +0x11 to a random unlocked car (i8) |
+| `0x14` | car_extra: 15 cars x 15 bytes (save 0x11C..; MenuProfile::car_extra) (225) |
+| `0xF5` | field_f5 (save 0x104) (4) |
 | `+0xF9` | car records, 0x11 bytes per car id |
 | `+0x1F8` | career hints seen (1) |
 | `+0x1F9` | career hints pending (added to +0x1F8 on save) (1) |
@@ -576,6 +578,7 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `0x2F4` | camera-reset flag: at the race end in phase 6 it is cleared and the camera setting 0x030053E4 = 1 (1) |
 | `+0x2F6` / `+0x2F8` | car select turn: speed (0x80) / target angle; cleared on every screen enter (u16 / u32) |
 | `+0x318` | sparks: the car's matrix code spawns two sparks while it is > 0 (4 per racer) |
+| `0x328` | loaded: the profile was decoded from a save (save_load_profile) (1) |
 | `+0x338` | cleared when an upgrade page opens (4) |
 | `+0x33C…+0x343` | key-repeat delays (3 on a new press; count down each menu frame): keys 0x20 0x10 0x40 0x80 1 2 0x200 0x100 (8 × i8) |
 | `+0x344…` | menu back stack (screen ids) (bytes) |
@@ -598,6 +601,7 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x478…+0x48C` | cleared on entering the name screen unless +0x494 is 2 (6 × u32) |
 | `+0x490` | a profile exists (title START loads it; else name entry) (u16) |
 | `+0x494` | profile/name page mode: 1 new, 2 rename (came from the menus; OK goes back) (u16) |
+| `0x496` | slot_names: saved names of save slots 0 and 1 (9 bytes each) (18) |
 | `+0x4A8` | record message pending (results page 0xB) (2) |
 | `+0x4AA` | unlock message text keys (u16; 0 ends) |
 | `+0x4E8` | language of the saved profile (title: units follow the language when they differ) (u16) |

@@ -536,7 +536,7 @@ address,name,kind,comment
 0x0813a108,countdown_nop,function,empty (last of the start set-up calls)
 0x0814397c,map_enter,function,map screens: cursor from profile +0x1FB (x2) on 0xE else 0; view (0x100 0xC0); map_zone_palettes
 0x081439c0,map_select,function,map cursor = arg; moved flag +9 = 1 (state 0x03006230)
-0x08143284,map_zone_palettes,function,(not ported) the map's zone colours into the second base palette (unlock 0x118.. per zone)
+0x08143284,map_zone_palettes,function,(typed: menu/map.rs) the map's zone colours into the second base palette (unlock 0x118.. per zone)
 0x081435c4,map_draw,function,(not ported) scrolls the map view towards the cursor and draws the map and its markers
 0x0812d62c,thousands_separator,function,thousands separator for n > 999 (French space; German and Italian dot) inserted digits-3 from the left
 0x08162fc0,time_text_colons,function,"mm:ss:cc" of |centiseconds| capped at 0x57E3F
@@ -573,3 +573,5 @@ address,name,kind,comment
 0x081474b8,link_race_end,function,link play only: race_frame_update calls it at the race end when race_over != 2 (unported: G1)
 0x08162b6c,text_draw_centred,function,(font; text; page; pitch; x; y; max width; max lines; colour) word-wrapped lines centred on x (breaks at the last space that fits); no range check; used by text_box and text_menu_7
 0x08169880,blit_rows,function,ARM overlay code (ROM image at 0x08165218 + 0x4668): copies w x h bytes by halfwords with source stride w and destination stride pitch; menu_blit_material_alt runs it through iwram_call_7
+0x08135ea4,sound_reinit,function,LS_Play init with the music and sound volume globals x4 (after a save load); ends with FUN_081518c4
+0x08135d44,byte_clear,function,*p = 0 (empties a saved profile name)

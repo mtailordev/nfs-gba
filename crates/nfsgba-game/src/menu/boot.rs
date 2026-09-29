@@ -45,6 +45,7 @@ impl BootHost {
     }
 
     /// One `main_frame`, with the frame's keys and tick counter (the vblank IRQ's and the pad's inputs).
+    // NOT 1:1 (T1): the game's frames take 1 to 70 video frames; this one is atomic and its tick counter an input.
     pub fn frame(&mut self, st: &mut MenuState, keys: u16, ticks: i32) {
         st.g.keys = keys;
         st.g.ticks = ticks;
