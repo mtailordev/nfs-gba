@@ -1,81 +1,73 @@
 # Progress log
 
-Session state for whoever picks this up next. Read `AGENTS.md` first, then this file.
+Session state for whoever picks this up next. Read `AGENTS.md` first, then this file, then `docs/DECISIONS.md` (the newest entries set the contract) and `docs/FIDELITY.md` (every open deviation).
 
-## Status (2026-09-29)
+## Status (2026-09-29, after the project review)
 
-Done and committed:
-- **Task 1 (recon):** the vault holds five ROMs, one per game, and the redundant dumps are deleted (hashes in `docs/DECISIONS.md`). The first-look reports are in `docs/recon/`.
-- **Tools:** all installed (`docs/TOOLS.md`). MSYS2 is broken but not needed.
-- **Reference run:** `tools/mgba_ctl.py` and `tools/mgba_remote.lua` drive the mGBA nightly (keys, screenshots, RAM dumps, savestates). Savestates `mainmenu.ss` and `race.ss` are in `data/work/e5298b24/mgba/`. The route into a race is in TOOLS.md.
-- **Ghidra:** headless analysis with the race's IWRAM loaded (`tools/ghidra/*.java`). Decompiled C of 874 functions is in `data/work/e5298b24/ghidra/carbon_decomp.c` (not in git).
-- **Formats decoded and verified** (details in `docs/formats/`):
-  - text table: 977 keys × 5 languages;
-  - LZ77 image bank;
-  - vehicle model bank: 102 models, the car table (15 cars, names, LOD triplets, atlases), vehicle textures and UVs;
-  - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
-  - world scale: one unit for cars and city, about 48 per metre.
-- **Rust workspace:**
-  - `crates/nfsgba-sim` has 4 tests (2 trace tests over 9 scenarios); `crates/nfsgba-formats` has 51 real-data tests (modules `atlas`, `career`, `hud`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10; `crates/nfsgba-viewer` has 6;
-  - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
-  - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
-  - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
-- **Tests:** the Python tools have 12 tests.
-- **Previews** (not in git): `data/out/previews/`. `viewer-race-camera.png` renders from the game's own chase camera and matches the in-game screenshot `data/work/e5298b24/mgba/s15.png`.
+**Phase: consolidation.** No new subsystems until it is done (user decision, `docs/DECISIONS.md`).
+
+What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
+- **Data:** every asset family decoded from the ROM (text, images, models, city, routes, audio, career tables, fonts, HUD and menu layouts); 98.9% of the ROM's bytes attributed (`tools/rom_attribution.py`).
+- **Crates:**
+  - `nfsgba-formats`: parsers, plus rendering (`render`, `sky`, `paint`, `atlas`), HUD (`hud`, `ui`), menus (`menu`), career and race rules (`career`);
+  - `nfsgba-audio`: the LS_Play engine, bit-exact;
+  - `nfsgba-sim`: the player car, the opponents, the wingman and traffic, with every car-step path ported;
+  - `nfsgba-game`: the race start (`race_init`) and the race frame loop (`Game::frame`), exact over five recorded runs (2,445 frames) with nothing stood in;
+  - `nfsgba-viewer` (Bevy 0.19.1): high resolution, a 240×160 reference mode, and play mode (`NFSGBA_PLAY=1 NFSGBA_DUMP=game-loop/s18`).
+- **Not yet:** boot → menus → race in our code (the menus port has logic but no drawing: U3, U7); the garage screens (Kind18); coverage of the 415 functions never reached; the high-resolution view agrees with the reference frame only 49% exactly (R27).
+- **Known structural debt (the independent audit, 2026-09-29):**
+  - 52% of the Rust keeps state in a GBA-layout RAM image;
+  - duplicated helpers and subsystems (camera ×2, racing line ×2, decoder ×2, `rand_table` ×3, maths helpers ×3);
+  - 71 tests pass silently without their data;
+  - the 1.4 GB of fixtures have no provenance and sit in per-agent folders;
+  - ROM data is read by hard-coded BN7E offsets;
+  - several Closed claims have no test.
+
+Run everything: `cargo test --release --workspace` (about 3 minutes; the AI trace test alone takes about 70 s), `cargo clippy --release --workspace --all-targets`, `cargo fmt --all --check`, and the Python tools' tests (`cd tools && ../.venv/Scripts/python.exe -m unittest discover -p "test_*.py"`).
 
 ## Working rules (from the user)
 
-- **No game code at runtime, no emulator.** Everything in `crates/` is our own Rust; mGBA and unicorn are test oracles only. State moves from the GBA-layout RAM image to typed Rust state once the game loop's frame tests exist (`docs/DECISIONS.md`, 2026-09-29). New code should prefer typed state with a `from_ram`/`to_ram` test adapter.
+- **The contract (binding, `docs/DECISIONS.md`):** the core (assets, mechanics, rules, AI, physics, audio, save, the 240×160 reference frame) is exact; presentation adapts (any resolution; any framerate by interpolating between simulation steps). Byte-equal RAM is a test oracle, not the contract. Frame timing is a deterministic input.
+- **No game code at runtime, no emulator.** mGBA and unicorn are test oracles only. New code uses typed state; RAM images live only in tests.
+- **Every deviation is tracked.** `NOT 1:1 (ID)` in code, the matching row in `docs/FIDELITY.md`; an entry is closed only with a test in the repo that checks it.
+- **Never find anything twice.** Every ROM offset, RAM address and function goes into `docs/engine/address-map.md` and `docs/engine/symbols.csv` (applied to Ghidra by `tools/ghidra/ApplySymbols.java`).
+- **Oracle first:** port a function against `tools/oracle` on generated inputs over snapshots; use mGBA only for new snapshots and whole-frame traces.
 
-- **Merging notes:** `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tools/notes_merge.py [--write] docs/engine/notes/*.<agent>.csv` appends clean symbols and inserts new address rows into their region's (sorted) table; conflicts and rows already in a table are listed for a hand edit.
-- **Port against the oracle first** (`tools/oracle`, `docs/engine/harness.md`): run the game's function on generated inputs over a snapshot, save the cases as JSONL, and have a Rust test replay them. Use mGBA only for new snapshots and whole-frame traces. Agents write `docs/engine/notes/symbols.<agent>.csv` and `addresses.<agent>.csv`; the parent runs `tools/notes_merge.py`.
+## Next steps: the consolidation phase
 
-- **Absolute 1:1 rewrite, no compromise.** Every approximation is marked `NOT 1:1` in code and listed in `docs/FIDELITY.md`, with the game function that holds the exact behaviour. Close entries only after checking them against the reference build.
-- **Never find anything twice.** Every ROM offset, RAM address or function goes into `docs/engine/address-map.md` and `docs/engine/symbols.csv` (applied to Ghidra by `tools/ghidra/ApplySymbols.java`).
+1. **Test kit.** Build one shared test crate:
+   - one `rom()` and data loader, and `NFSGBA_REQUIRE_DATA=1` so missing data fails instead of skipping;
+   - a fixture manifest with provenance (sha1, ROM hash, recorder, command, savestate);
+   - a scenario library replacing the per-agent folders;
+   - exact stop lists and frame counts in the replay tests;
+   - the out-of-workspace oracle checker folded in.
+2. **One copy of everything:**
+   - a fixed-point maths crate (`div`, `recip`, sine/atan, `isqrt`, `rand_table`, `angle_diff`);
+   - one camera (drop the viewer's `Chase`), one racing line, one decoder;
+   - one mGBA recorder with probe modules, and one oracle case CLI;
+   - one way to load extra emulator scripts.
+3. **Typed `World`:** move each subsystem to typed state behind the replay tests (car, AI and traffic, camera and slots, HUD, `race_init`, menus); ROM data parsed once into `GameData`, with the BN7E offsets in one layout table.
+4. **Ledgers gated:**
+   - every Closed line names its test;
+   - a checker for `NOT 1:1 (ID)` markers against open IDs;
+   - "Integration notes" sections and merged notes CSVs removed;
+   - a merge gate script (tests with required data, `notes_merge`, fmt, clippy).
 
-## Next steps (roadmap)
+Then: boot → menus → race at 240×160 (a playable reference), the timing model, broader coverage (every car, route and mode, the garage, a career win, cops if any), the high-resolution renderer on typed state with automated comparisons, and link play and extras.
 
-Done since the last update: race routes (grid plus racing line, `docs/formats/race-routes.md`); environments (the 12 level descriptors pick palette and sky; K cycles them in the viewer); the in-race light tint mechanism (`FUN_0813a514`).
+## How agents are run (lessons from the first 25)
 
-**Parallel agents (started 2026-09-29, each in its own git worktree/branch; the parent merges):**
-- **viewer-indexed:** done and merged. R1/R2 closed (`docs/engine/viewer-rendering.md`).
-- **car-paint:** done and merged. Car palette slots 160–255 exact in `paint.rs`; R4 closed; the viewer part of R3 is open (`docs/formats/car-paint.md`).
-- **sky:** done and merged. Gradient and skyline exact in `sky.rs`; the viewer parts of R5/R6 are open (`docs/engine/sky.md`). It found that the reference race is **environment 11**, not 1.
-- **sector-renderer:** done and merged. `render.rs` reproduces the reference frame's world pixels exactly (visible list, walls, flats, projection); R7/R9 closed; found wall v units (R20, fixed in `Wall::uv`) and flat heights (R19). The entity draw is decoded but not reimplemented (R12).
-- **vehicle-physics:** done and merged. `crates/nfsgba-sim` reproduces the player car's per-frame update exactly (1,149 traced steps, 9 scenarios, with RAM writes and sounds); its `tools/trace_oracle.py` replays ROM code in unicorn. Unported paths: D9–D13; AI and traffic: D4.
-- **audio:** done and merged. `crates/nfsgba-audio` reproduces LS_Play bit for bit (13,800 traced frames); `nfsgba-audio-render` writes WAVs to `data/out/audio` (`docs/formats/audio.md`). Hook: `Engine::vblank` once per frame, gameplay calls the `carbon_*` functions.
-- **ui-2d:** done and merged. Five menu screens byte-exact from ROM, HUD sprites bit-exact, the game's decompressor, fonts and Windows-1252 text (`ui.rs`, `docs/formats/ui.md`, `tools/ui_export.py` in `.venv`). HUD and menu logic not ported yet (U1–U4).
-- **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).
-- **viewer-sky-paint:** done and merged. One race palette, the per-line backdrop and the skyline layer in the viewer (R3, R5 closed; R6 leftovers only); level chase camera with focal 150 (part of R11).
-- **car-atlas:** done and merged. `atlas.rs`: the player's atlas (overlay, decal set, wheel rims) and the opponents' choice, pixel-exact at four race starts; R13 closed. The viewer does not use it yet (R23).
-- **race-rules:** done and merged. Every race rule exact in `career.rs` (traces plus oracle), lap arming found, hunter life at zero only clamps, `Save::encode` byte-identical; the race-time racing line `career::RacingLine` (D5–D7 closed; D15, D16).
-- **entity-draw:** done and merged. `render/entities.rs`: the car draw is exact, so `draw_world` reproduces whole frames pixel for pixel (17 captures); R12 closed. Matrix-slot building is still an input (R25).
-- **viewer-geometry:** done and merged. The viewer uses the game's chase camera, projection and per-frame visible list; racers from `atlas`; an original-resolution mode equal to s15 on every non-HUD pixel (R8, R15, R19, R22, R23 closed; R10, R11, R14 narrowed; R27 high-res differences).
-- **hud-logic:** done and merged. `hud.rs`: every HUD element, the messages and the minimap, exact over 7,096 traced frames (U1, U2 closed). The HUD arrow is the off-route warning `0x0300601C`.
-- **harness:** done and merged. `tools/oracle` (unicorn function oracle; `trace_oracle.py` runs on it; 93,169 cases vs the Rust ports, 0 mismatches), `coverage.py` (465 of 880 functions run in 4 scenarios; 200 of those unnamed), `rom_attribution.py` (98.907% of the ROM claimed), `notes_merge.py`. See `docs/engine/harness.md`.
-- **ai-traffic:** done and merged. Opponents, wingman and traffic exact (12,376 byte-exact calls, 12 traced races, free replay); `docs/engine/ai.md`. Remaining stops are D9–D11 (physics-paths).
-- **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
-- **menus:** done and merged (first part). `menu.rs`: `main_frame`, the game state machine, the 49-screen menu machine, all six fades and the whole intro flow, exact on 5,400 oracle cases. Open: 7 of 8 screen kinds (U3), drawing onto VRAM (U7).
-- **game-loop:** done and merged. `nfsgba-game`: `Game::frame` is byte-exact on 149 of 149 traced frames, per frame and free-running (AI, `camera_update` and matrix slots stood in from the trace); viewer play mode `NFSGBA_PLAY=1 NFSGBA_DUMP=game-loop/s18`. Open: G1, G2, T1.
-- **live-race:** a live race with no stand-ins: AI called from `nfsgba-game`, `camera_update`, the matrix slots and effect sprites/entities, sound output in play mode; 600+ frame free runs byte-exact. Owns `nfsgba-game` (except `race_init.rs`), the viewer, `docs/engine/game-loop.md`.
-- **race-init:** done and merged. `race_init::race_start` is byte-exact on 14 race starts (all modes, career, wingman, two menu histories each); inputs documented (259 bytes of prior state, `seed_vblanks` T2). G1 narrowed; R24 exact in the RAM-image loop.
-- **menus-2:** U3/U4: the seven remaining screen kinds (25 screens), the message-box draw and the menu scene setups, oracle-first. Owns `menu.rs`, `docs/formats/ui.md`, `tools/ui_menu_oracle.py`, `docs/engine/notes/*.menus-2.csv`.
-
-Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
-
-Next, driven by `docs/FIDELITY.md`:
-1. **Live race, fully ported:** call the AI (`ai.rs`, `traffic_ai.rs`) from `nfsgba-game`; port `camera_update` and the matrix-slot code (R25) with the effect sprites; sound output; `race_init` so races start from ROM (G1). Then the typed-state refactor (`docs/DECISIONS.md`).
-2. **Viewer geometry (after viewer-sky-paint merges):** R8 portal step walls, R10 traversal and limits, R11 projection, R19 flat heights; optionally a 240×160 original-resolution mode from `render::draw_world`.
-2b. **Entity draw (R12):** reimplement `draw_sector_entities`/`raster_polygon` in `render.rs` and check the 536 car pixels of the reference frame.
-3. **R13:** decals and overlays on the player's atlas; opponent material choice.
-4. **Gameplay parity (roadmap step 4):** handling, AI and cops, traced against the reference build.
+- Infrastructure first, one at a time; fan out only on top of it.
+- Size tasks to about 100 turns, each against a named acceptance test. Agents that ran into the 200-turn limit lost time.
+- Agents edit the ledger rows they own directly, and `tools/notes_merge.py --write` merges their `docs/engine/notes/*.csv`. Don't leave "Integration notes" sections behind.
+- Worktrees share one build directory (`CARGO_TARGET_DIR`) and are removed after their merge.
+- Every emulator session uses `NFSGBA_MGBA_SESSION=<agent>` and is stopped by its own PID, never by image name.
 
 ## Environment notes
 
-- Toolchains: Rust 1.98.1 (with clippy and rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10). The analysis venv is `.venv`.
+- Toolchains: Rust 1.98.1 (clippy, rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10); the analysis venv is `.venv` (unicorn, capstone, numpy, pillow).
 - `~/.cargo/bin` may be missing from PATH in the tool shells: prefix `export PATH="/c/Users/cyntrex/.cargo/bin:$PATH"`.
-- Agents: never kill `mGBA.exe` by image name (one agent did, ending the others' sessions); stop your own PID with `mgba_ctl.py stop`.
-- Tools that need unicorn, capstone or numpy run with `.venv/Scripts/python.exe`; Python tool tests: `cd tools && ../.venv/Scripts/python.exe -m unittest discover -p "test_*.py"` (22 tests).
-- In the Bash tool, `python` is a pyenv-win batch shim. **Multi-line `python -c` and `python - <<EOF` get mangled or hang**, so write a script file into the scratchpad instead.
+- In the Bash tool, `python` is a pyenv-win batch shim. **Never run `python -` or multi-line `python -c`**: they hang, and stopping the shell task leaves the `python.exe` running (three strays were found and ended by PID in the review). Write a script file and run it with `.venv/Scripts/python.exe`.
+- `tools/notes_merge.py` prints non-ASCII: run it with `PYTHONIOENCODING=utf-8`.
 - In PowerShell, `@(118039/48, -30/48)` fails to parse; pass precomputed numbers.
-- The mGBA stable build from scoop creates `cheats/ patch/ savegame/ savestate/ screenshot/` in its current folder. The tools agent left such folders in the repo root. They are untracked, and the user was asked to delete them.
+- The mGBA stable build creates `cheats/ patch/ savegame/ savestate/ screenshot/` in its working folder; `tools/mgba_ctl.py` points them at the session folder. The strays in the repo root were removed in the review (the one save moved to `data/work/e5298b24/_archive/`).

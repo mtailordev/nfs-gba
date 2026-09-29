@@ -2,6 +2,15 @@
 
 Newest first. Each entry: what, why, alternatives.
 
+## 2026-09-29 (project review; the user's decisions)
+
+- **What "1:1" means (the contract every test checks).** In the user's words: rebuild everything from the game (assets, scripts, all mechanics, all graphics) 1:1, but as an adaptable engine that runs at pretty much any resolution and framerate while every core system stays exactly the game's, like the Skate 3 and IW4L Rust rewrites. So:
+  - **Core = exact.** Simulation, rules, AI, physics, audio, save data and asset decoding give the game's results: same inputs and same frame times, same state evolution, same audio samples, same save bytes, same 240×160 reference frame and sprite table. Byte-equal *RAM* is no longer the contract; RAM images are a debugging and test oracle only.
+  - **Presentation = adaptable.** The simulation steps at the game's own cadence (its frame time, `0x03005640`, is a deterministic input). The renderer draws that state at any resolution, and at any framerate by interpolating between steps. The 240×160 mode stays as the exact reference view.
+- **Timing: a deterministic model.** Frame timing (timer 3's ticks, where the VBlank IRQs land: T1, T2, D17, U5, R17) stays an explicit input: exact from recordings, a documented deterministic model in live play. No cycle-accurate CPU model unless live play must match real hardware frame for frame later.
+- **Consolidate before adding features** (the independent audit, 2026-09-29): a shared test kit with a data-required mode and fixture provenance; one copy of every duplicated helper and subsystem; the typed `World` migration behind the existing replay tests; the ledgers brought up to date and gated. Then boot → menus → race in our code, then broader coverage, then the high-resolution renderer on typed state.
+- **Merged agent worktrees are removed** after each merge (the user agreed; 23 worktrees, 29 GB, removed 2026-09-29 after archiving their untracked files).
+
 ## 2026-09-29
 
 - **The rewrite never runs game code; there is no emulator in it.** Every runtime crate is our own Rust (their only dependencies are `serde_json` and Bevy; no ARM decoding or CPU emulation anywhere in `crates/`). mGBA and unicorn (`tools/oracle`) run the *original* code only as **test oracles**, to prove our code gives identical results. This is the IW4L / Skate 3 approach (own engine, the user's original data), with one addition forced by the 1:1 goal: game logic is transcribed from the decompile with identical integer maths, not approximated.
