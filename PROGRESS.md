@@ -37,8 +37,8 @@ What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 
 **State (2026-09-30):** everything is merged except the viewer branch `worktree-agent-a17182f905c90bd65` (race from the grid, smooth motion; being extended with the fixes from the user's one playtest). Gate and merge it when memory allows. Then, in order:
 1. **Playable story mode at 240×160 in our code:** one `Game` loop (boot → title → menus → race → results → menus, passing `Setup`/`Handover`; the menus drawn by the typed `Screen`), the garage (Kind18, U3), `map_draw`. Check: a headless power-on-to-results run compared with the original at every screen change.
-2. **Coverage:** a recorded race for every mode (circuit, sprint, elimination, hunter, wingman, career) and a career event win; the six `Unported` stops in the AI and traffic (D4, AI hunter mode); every route started once.
-3. **Automated visual check (R27) before more high-resolution work:** the high-resolution view compared with the exact 240×160 frame on every recorded state (traffic drawn, lights on their cars, no seams, the shortcut walls), so rendering bugs fail a test instead of needing a playtester.
+2. **Coverage** (cross-check the career state with the Carbon RetroAchievements memory notes: RA offsets are IWRAM-first, e.g. RA `0x0056E0` = `0x030056E0`; guidance only): a recorded race for every mode (circuit, sprint, elimination, hunter, wingman, career) and a career event win; the six `Unported` stops in the AI and traffic (D4, AI hunter mode); every route started once.
+3. **Automated visual check (R27) before more high-resolution work** (for a later optional high-rate mode, read how `mstan/MarioKartSuperCircuitRecomp` does 60 fps; licence unclear, read only): the high-resolution view compared with the exact 240×160 frame on every recorded state (traffic drawn, lights on their cars, no seams, the shortcut walls), so rendering bugs fail a test instead of needing a playtester.
 
 ### 1. Toolchain (decided 2026-09-29; results in `docs/engine/harness.md` "Tool bake-off")
 
