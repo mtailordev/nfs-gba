@@ -411,6 +411,11 @@ impl Dump {
         })
     }
 
+    /// Live RAM (play mode: `nfsgba_game::Game`'s IWRAM and EWRAM).
+    pub fn from_ram(iwram: Vec<u8>, wram: Vec<u8>) -> Dump {
+        Dump { iwram, wram }
+    }
+
     fn at(&self, a: u32) -> &[u8] {
         match a {
             0x0300_0000.. => &self.iwram[(a - 0x0300_0000) as usize..],
