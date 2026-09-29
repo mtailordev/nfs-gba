@@ -20,7 +20,7 @@ The per-frame update of a racing car, from the entity handler down to the rigid 
   physics struct, write the same RAM bytes the game's own code writes, and issue the same sound calls.
 - **Replay:** the player's car runs on its own state across the whole trace.
 
-What is not ported stops the port with an `Unported` error instead of guessing ([Not ported](#not-ported)).
+Every path of the car step is ported (the physics-paths work closed D9–D13; [Paths no race reaches](#paths-no-race-reaches)). The only piece left out by design is the rim redraw onto the atlas, which is rendering.
 
 ## Frame structure
 
@@ -80,7 +80,9 @@ FUN_0814bd4c  car handler                              car::handler
    - off-route warning `0x0300601C` (±1 when far from the racing line at speed);
    - previous and pressed keys (`+0x4AE`);
    - wingman command (`FUN_0814078c`);
-   - stuck check (`FUN_0814efa8`, not ported).
+   - stuck check: tipped over for more than 100 steps (`+0x4E4`) with a corner down (`+0x4E6` = 0) and slow →
+     `car_put_back_on_road` (`FUN_0814efa8`): the car onto its waypoint's floor, the body 0x1900 above, upright along
+     the waypoint line (`orient_upright`, `FUN_08148f24`); momenta are kept.
 2. **Route and timers:**
    - route segment by sector (`FUN_0813f234`);
    - the traffic countdown for the player (`FUN_08143b2c` → `traffic_spawn`);
@@ -120,7 +122,8 @@ FUN_0814bd4c  car handler                              car::handler
 13. **Integration:** contact flags `+0x448 &= 8`; walls `FUN_08145ca8`; the body is integrated twice with `dt`
     (`FUN_08147b18`).
 14. **Entity position** = body position − R·(0, `+0x43C`, `+0x440`); then the sector again (0xFFFF → the push-back
-    loop, not ported).
+    loop at `0x0813DF98`: halve the step's move up to 6 times, searching from the start sector; then pull the car
+    back 0x6400 along the move and rebuild the body position; still no sector → the start sector).
 15. **"Drag":** the game scales a stack vector by `(speed/8)² >> 16 × handling +0x11C >> 6` and subtracts it
     from the velocity. That slot held the normalised velocity, but by now it holds the rotated centre-of-mass
     offset. (Handling `+0x11C` is 0 for every car, so this does nothing.) Then momentum = mass × velocity, and
@@ -132,7 +135,8 @@ FUN_0814bd4c  car handler                              car::handler
       down, then a 5-step pause), or the manual state machine on R/L (`0x03006074`);
     - route: waypoint `FUN_0813edd8`, progress `+0xAC` `FUN_0814032c`, gap `FUN_0813ebac` (`0x0300615C`);
     - nearest lane `+0xC0`;
-    - hunter life `hunter_life_tick` (hunter races, not ported).
+    - hunter life `hunter_life_tick` (hunter races): `nfsgba_formats::career::hunter_life_tick` through the RAM
+      adapters `car::race`/`car::racer`/`car::store_racer`.
 
 ### Rigid body (`FUN_08147b18`, physics `+0xC8`)
 Explicit Euler, run twice per frame:
@@ -183,7 +187,7 @@ Side effects:
   the plane through the first wall's corner, `−(a·dx + c·dz) × recip(b) >> 16`. The plane is sector
   `+0x14/+0x16/+0x18`, or a sloped plane at world `+0x1C` when sector `+0x0A` is not 0xFFFF.
 
-### Traffic spawn (`FUN_08143d48`, kind 1; `traffic.rs`)
+### Traffic spawn (`FUN_08143d48`; `traffic.rs`)
 The player's step counts down `0x03006264` (reload from `0x03006260`) while traffic is on (`0x03006298`) and fewer
 than 4 cars have spawned (`0x03006240`). At 0 it spawns:
 - a free entity (`FUN_08137534`) and a 0x28-byte heap block;
@@ -195,6 +199,32 @@ than 4 cars have spawned (`0x03006240`). At 0 it spawns:
 - orientation from the IWRAM `atan2_fast` (`0x03004470`); the lane offset from `0x087F5488`;
 - a type from `0x087F546C` (counter `0x03005628` mod `0x0300625C`);
 - handler 0x36.
+
+Kinds 0 and 2 (`traffic::at_section_start`) come only from spawner entities (handlers 0x2D/0x2E and 0x2A:
+`traffic_spawner_behind`, `traffic_spawner_ahead`), which no Carbon race creates: the car starts at the first
+waypoint of the spawner's racing-line section, heading for the second (`atan2_fast`), with the unit direction at half
+(kind 0) or full (kind 2) length; waypoint index `+0x9C` = 1. All kinds share the tail (`traffic::finish`): type,
+sector list, live-traffic slot, the block's direction.
+
+### Other contacts
+- **Car to car** (`car_car_proximity` → `car_car_response`, `FUN_08144fa4`; `walls::contact`/`response`): the
+  normal runs from the car to the later racer, the contact point is the midpoint. From the contact points' velocities
+  (angular part >> 14, linear × 0x1555 >> 8) the normal speed `vn` gives `k = clamp(−16 − (vn + 0x1C000 >> 15), −21,
+  −17)` and `j = k·vn >> 8`; the impulse `(n·j >> 10 >> 4)·0x3072 >> 14` changes both velocities; the angular
+  impulse is the arm × impulse >> 25 (only 0 or −1 per component survives; kept). Momenta follow the velocities;
+  contact flags; `non_racer_car_hit` for traffic; the other car of a collision with the player gets the torque timer
+  (`+0x42C` = 0x12); lanes; crash sounds 0x17/0x18 by `j`. The hit mask is never reset between the later racers, so
+  after one hit every later racer in range gets a response too (kept). In hunter races with `j` > 0x1000 the slower
+  car (normalising both velocities in place) takes `hunter_hit` (`career::hunter_hit`).
+- **Tipped over** (`FUN_081484f0`, `contact::tipped`): instead of the wheels, eight body corners (`0x087F2528`)
+  below their floor push back: load `pen·0x30 >> 8` plus the floor-normal speed (5/32 or 15/64 by the sign of the
+  vertical speed), friction capped by grip × surface, the torque's x component quartered (kept). The caller zeroes
+  the wheel spins and counts `+0x4E4`; `+0x4E6` counts steps with no corner down, and landing after more than 4 plays
+  sound 0x16 (0x19 after more than 8).
+- **Suspension step** (`FUN_0814de40`, `contact::suspension`, only while `0x0300610C` is 0, which no race does): four
+  points around the car turned by its heading find their floor; per point the vertical speed gains `0x320000/dt`, the
+  height stops at the floor (bouncing back at −1/32), the spring and rate follow through a 64-bit division by a
+  quarter of the mass, the rate is damped to 160/256; the entity's y is the mean height.
 
 ### Heap (`heap_alloc`, `heap_free`; `heap.rs`)
 `*0x030064CC` holds 256 nodes of 8 bytes (u16 own index, next, start, end in words from `*0x030064D0`). Node 0
@@ -228,7 +258,7 @@ block, leaving one spare word. `heap_alloc_zeroed` clears size/4 words, then siz
 | Offset | Meaning |
 |---|---|
 | `+0x00`, `+0x04` | heading (14-bit angle) and its sign word |
-| `+0x08..+0x14`, `+0x48`, `+0x4C..+0x78` | suspension state of `FUN_0814de40` (not ported); `+0x48` = 4 at init |
+| `+0x08..+0x14`, `+0x48`, `+0x4C..+0x78` | suspension step `FUN_0814de40`: per point vertical speed `+0x08`, spring `+0x4C`, rate `+0x5C`, height `+0x6C`; `+0x48` points on the floor (4 at init) |
 | `+0x20` | steering, ±0x80000 |
 | `+0x24` | throttle, 0..0x9999 |
 | `+0x28` | brake on |
@@ -312,34 +342,45 @@ The car table `0x087F0BD8` (`docs/formats/vehicle-models.md`) is not read by the
     state, the same RAM writes and the same sound commands;
   - `replay_matches_the_trace`: the player's car runs on its own state, with the rest of RAM from the reference at
     each step, and reproduces every traced car state.
+- **More scenarios** (physics-paths, session `physics-paths`, then copied to `vehicle-physics`): recorded with the
+  autopilot `tools/trace_autopilot.lua` (steers from the racing line or at a car; loaded with the remote's `lua`
+  command and driven by `luax`), counted with the probe `tools/trace_probe.lua`:
+  - `hunter` (hunter race, ramming opponent 3): car-to-car responses, hunter hits and wall hits;
+  - `tipped` (hunter race, hunting the nearest car): 86 tipped-over steps;
+  - `stuck`: the tipped drive with the tipped counter raised to 100 in RAM after 20 tipped steps (a test input: the
+    reset then runs on the game's own code at step 668);
+  - `shortcut` (Longpoint): the lap's shortcut (section 1) with both barrier breaks (steps 833 and 1330);
+  - `sprint`, `circuit`, `wingman` (recorded by the ai-traffic work): the wingman trace includes the wingman command.
+  Steps where other code changes the player's car before the next one (a traffic car's collision response) are
+  marked `external` in `NAME.oracle.txt`: only that step's own writes and sounds are compared, and the replay carries
+  on from the game's state.
+- **Oracle cases for paths no recording reaches** (`tests/trace.rs`, `tests/suspension.rs`):
+  - `tools/trace_fuzz.py` (`fuzz.jsonl`): real steps with extreme speeds (far sector search, the player's and the
+    opponents' push-back loops), random controls (manual gearbox, nitro, wingman command), and the car init with
+    random career globals on every racer slot; 4,500 cases;
+  - `tools/trace_calls.py` (`calls.jsonl`): `traffic_spawn` in all kinds, `wingman_command` in both roles,
+    `lap_crossing` (493 crossings with knock-outs and finishes); 4,500 cases;
+  - `tools/trace_suspension.py` (`suspension.jsonl`): the suspension step on the reference race with random racers,
+    681 sectors, speeds, springs and frame times; 3,000 cases.
+  Mutation checks: one changed constant in each ported path (push-back distances, AI halving, manual shift, nitro
+  drain and torque, career grid, wingman row, spawn speed, suspension damping, neutral revs, side-hit flags) breaks
+  between 10 and 3,000 cases or trace steps.
 - **Fields maintained elsewhere** are not compared: entity `+0x02`, `+0x04`, `+0x0A` bit 2, `+0x28`, `+0x88`;
   physics `+0xA8`.
 - **Sensitivity:** changing a single constant (the damping −10 to −11) breaks both tests.
 - Unit tests pin the integer helpers and the IWRAM divider's quirks.
 
-## Not ported
+## Paths no race reaches
 
-Each of these stops the port with `Unported` (NOT 1:1 until ported and traced):
-- `FUN_0814de40`: suspension step while `0x0300610C` is 0 (race phases 1 and 4).
-- `FUN_081484f0`: tipped-over dynamics.
-- `FUN_08144fa4` / `hunter_hit`: car-to-car collision response. The proximity test is ported.
-- `FUN_0814dbbc` (sector search two portals away) and the push-back loop when the car leaves every sector.
-- `FUN_0814efa8`: putting a stuck car back on the road.
-- `traffic_spawn` kinds 0 and 2 (at the route start).
-- The wingman command with a wingman.
-- `hunter_life_tick` (hunter races).
-- `lap_crossing` beyond its bookkeeping: race order and finish.
+Everything in the car step is ported. These parts are exact by the function oracle rather than by a recording:
+- the suspension step `FUN_0814de40` (`0x0300610C` is 1 at every car step of every trace; `race_init` and each
+  dynamics step set it);
+- traffic spawn kinds 0 and 2 (spawner entities no Carbon race creates);
+- `find_sector_far` and the push-back loops (only at speeds no drive reaches);
+- the manual gearbox, active nitro, and the career branches of the car init (no recording uses them).
 
 NOT 1:1 by design: `draw_decal_on_atlas` (`FUN_0813bd90`) is rendering and belongs to the renderer. It is called
 from the racing step and from `unpack_decal`.
-
-Ported but not exercised by the traces, so not verified:
-- the manual gearbox;
-- active nitro and its drain (the IWRAM divider at `0x03000220`, whose sign slip is pinned by a unit test);
-- breakable walls, side-hit flags and hunter wall hits;
-- neutral-gear revs;
-- side route segments;
-- the career and wingman branches of the car init.
 
 ## Integration notes
 
@@ -491,3 +532,37 @@ New rows:
 0x03004470,atan2_fast,function,IWRAM ARM: atan2 via recip_div_16 (divisor clamped to 0x7FFE)
 0x03000220,iwram_divmod,function,IWRAM ARM: signed divide storing a remainder; negative divisors divide by -|a|
 ```
+
+## Integration notes (physics-paths)
+
+**FIDELITY.md** (every item exact; `crates/nfsgba-sim` has no `Unported` left outside `ai.rs`/`traffic_ai.rs`):
+- **D9 closed.** Suspension step `FUN_0814de40` (3,000 oracle cases; unreachable in races), tipped-over dynamics
+  `FUN_081484f0` (`tipped` trace: 709 steps, 86 tipped; opponent path in `ai_trace` and the fuzz), stuck reset
+  `FUN_0814efa8` with `FUN_08148f24` (`stuck` trace step 668; the AI's two call sites use it too).
+- **D10 closed.** Car-to-car response `FUN_08144fa4` and hunter hits (`hunter` trace, 697 steps; `ai_trace` no longer
+  expects stops for it). Hunter life per frame, hits and wall drains use `career::hunter_life_tick`, `hunter_hit`,
+  `hunter_drain` through RAM adapters (the walls.rs comment now names `hunter_wall_hit`).
+- **D11 closed.** `find_sector_far` `FUN_0814dbbc` and the player's and the opponents' push-back loops (fuzz: 79 far
+  searches, 47 player and 28 opponent push-backs; the opponent's loop has no pull-back).
+- **D12 closed.** Traffic spawn kinds 0 and 2 (1,500 direct oracle cases; spawner entities no race creates).
+- **D13 closed.** Manual gearbox, nitro (drain and torque), neutral revs and side-hit flags (control fuzz, mutation
+  checked); breakable walls and side route segments (`shortcut` trace); hunter wall hits (`hunter`); the career
+  and wingman branches of the car init (init fuzz; `wingman` trace); the wingman command `FUN_0814078c` (`wingman`
+  trace plus 1,500 direct cases).
+- **D5 (lap tail):** `route::lap` now runs `career::RacingLine::lap_crossing` (4,500 direct cases, 493 crossings), so
+  the player and AI cars finish sprints and laps; `EXPECTED_STOPS` in `tests/ai_trace.rs` is empty (12,472 calls
+  exact, 0 stopped).
+- **Left for others:** the six `Unported` stops in `ai.rs`/`traffic_ai.rs` (AI hunter mode `FUN_0813fdb0`, the
+  player's car on the opponent handler, `FUN_0814dd24` outside every sector, and three more): AI scope. The
+  `hunter`, `tipped`, `stuck` traces can feed `ai_trace` once AI hunter mode is ported.
+
+**Notes CSVs:** `docs/engine/notes/symbols.physics-paths.csv` (5 rows) and `addresses.physics-paths.csv` (17 rows).
+The `driver` rows (`+0x08`, `+0x48`, `+0x4C`, `+0x5C`, `+0x6C`) are new rows of the address map's Driver table:
+`notes_merge.py` reports them as edits because it matches struct offsets across tables. `0x030061DC`: the AI notes
+call it the gap setting (`0x7F4284`); `wingman_command` spends one per command, so it is the command count loaded
+from that table.
+
+**Tools** (for TOOLS.md): `tools/trace_autopilot.lua` (deterministic autopilot: racing line, ram a car, hunt the
+nearest, take a shortcut, raise the tipped counter), `tools/trace_probe.lua` (call counts of chosen functions, the
+player's split out), `tools/trace_fuzz.py`, `tools/trace_calls.py`, `tools/trace_suspension.py` (oracle cases), and
+the remote's `lua FILE` / `luax STATEMENT` commands in `tools/mgba_remote.lua`.
