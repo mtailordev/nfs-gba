@@ -1,6 +1,8 @@
-//! The world renderer's integer maths, reimplemented from the IWRAM code (copied from ROM `0x08165134` to
-//! `0x03000220`). Spec with pseudocode and addresses: `docs/engine/renderer.md`. Everything here is exact:
-//! 32-bit wrapping arithmetic, the reciprocal table read straight from the ROM, and the game's quirks.
+//! The race world renderer, reimplemented from the IWRAM code (copied from ROM `0x08165134` to `0x03000220`):
+//! portal visibility, wall and flat setup, and the software rasterisers that write the 240×160 mode-4 frame.
+//! Spec with pseudocode and addresses: `docs/engine/renderer.md`. Everything here is exact: 32-bit wrapping
+//! arithmetic, the reciprocal table read straight from the ROM, and the game's quirks. The one gap is the
+//! entity draw (cars), marked `NOT 1:1` where it would go.
 
 use super::{LEVEL_TABLE, i16_at, ptr, u16_at, u32_at};
 
