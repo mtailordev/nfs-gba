@@ -4,7 +4,6 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Data
 
-4. **How does the raw 8bpp region `0x404000–0x794000` split into images?** Most city textures sit at `0x47BC6C` + material offsets; is the rest the same, or HUD, menus and sprites?
 5. **What are the small odd-sized vehicle materials** (46–146)? The 36 128×100 ones are answered: raw 8bpp opponent atlases already in final palette slots ([formats/car-paint.md](formats/car-paint.md)).
 6. **How does code locate the LZ77 image blobs** (bank bases such as `0x16C244`), and why do the size fields claim 8 bytes too many?
 8. **What are the 24-byte width/height records near the car atlases** (`0x36D010`, `0x345114`)? (The eight "41-byte LZ77 blobs" at `0x23C–0x53C` were false hits inside the sound-effect table at `0x210`.)

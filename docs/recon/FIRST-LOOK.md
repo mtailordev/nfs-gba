@@ -14,7 +14,7 @@ Rough split: about 5–6% code, 23% LZ77-packed images, 12% PCM-like audio, 47% 
 | `0x02C000–0x128000` | **audio bank** (about 1 MiB) | Signed bytes centred on 0, and neighbour differences more predictable than the bytes (PCM-like). It contains the **`GBAMOD30` music modules** at `0x04EA14–0x0507FC` (verified: pointed to by the text table, see below). The PCM reading is a hypothesis |
 | `0x128000–0x16C244` | **Thumb code** (about 250 KiB, including 32 KiB of ARM at `0x164000`) | Return and `push {…, lr}` density. The code ends in a `memset` just before `0x16C244` |
 | `0x16C244–0x402000` | **LZ77 image bank** (with raw pixel blocks between the banks) | 294 BIOS-LZ77 blobs, 4.6 MiB unpacked from 1.9 MiB. **Verified** by rendering, see [formats/lz77-images.md](../formats/lz77-images.md) |
-| `0x350000–0x368000` | **ARM code** (96 KiB) | >35% of words carry the AL condition. IWRAM is only 32 KiB. **Hypothesis:** renderer and mixer, copied in pieces or run from ROM |
+| `0x350000–0x368000` | ~~ARM code~~ **4bpp HUD sprite texels** (corrected 2026-09-29) | The "AL condition" heuristic misfired: blank 4bpp pixels `0xEEEEEEEE` have condition nibble `E` (always). See [formats/ui.md](../formats/ui.md) |
 | `0x404000–0x794000` | **raw 8bpp pixel data** (about 3.5 MiB) | Many equal neighbouring bytes. Rendered at a guessed 256-pixel width: top-down car sprites at `0x420000` and street/building textures at `0x500000`. Exact layout unknown |
 | `0x797D10–0x7E53EC` | localized text | 977 keys × 5 languages, **verified**, see [formats/text-table.md](../formats/text-table.md) |
 | `0x7E4000–0x7F4000` | tables | see below |
