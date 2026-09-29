@@ -1,9 +1,11 @@
 //! Fly-through viewer for Carbon's city (portal/sector world) and vehicle model bank, read from the user's ROM:
-//! textured walls, floors and ceilings, the 12 ROM skies, and a showroom of all 15 cars in every paint variant.
-//! Run from the repo root: `cargo run --release -p nfsgba-viewer`.
+//! textured walls, floors and ceilings, the race sky, the reference race's four cars on a route's grid, and a
+//! showroom of all 15 cars in every paint variant. Run from the repo root: `cargo run --release -p nfsgba-viewer`.
 //!
-//! Colour works like the GBA's: textures are palette indices, drawn through one 256-colour palette that the game's
-//! light tint rewrites every frame (`docs/engine/viewer-rendering.md`).
+//! Colour works like the GBA's: textures are palette indices, drawn through one 256-colour palette that holds the
+//! city and the race cars and that the game's light tint rewrites every frame; behind the world the window shows
+//! the GBA's 240×160 sky layer (backdrop gradient per line, skyline panorama). See
+//! `docs/engine/viewer-rendering.md`.
 //!
 //! Controls (Bevy `FreeCamera`): hold right mouse to look (M toggles), WASD move, Q/E down/up, Shift run,
 //! scroll wheel changes speed; K switches environment (palette and sky); R moves to the next race route (grid and
@@ -11,13 +13,13 @@
 //! `NFSGBA_ENV=<n>` picks the environment; `NFSGBA_CAM=x,y,z,tx,ty,tz` sets the start eye and target (metres);
 //! `NFSGBA_SHOT=<file.png>` saves one frame and quits, for checking renders without anyone at the screen.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, f64::consts::TAU};
 
 use bevy::{
     asset::{RenderAssetUsages, embedded_asset},
     camera_controller::free_camera::{FreeCamera, FreeCameraPlugin, FreeCameraState},
     core_pipeline::tonemapping::{DebandDither, Tonemapping},
-    image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
+    light::NotShadowCaster,
     mesh::MeshVertexBufferLayoutRef,
     pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
@@ -30,17 +32,51 @@ use bevy::{
         view::screenshot::{Screenshot, save_to_disk},
     },
     shader::ShaderRef,
+    window::WindowResolution,
 };
-use nfsgba_formats as rom;
+use nfsgba_formats::{self as rom, paint, sky};
 
 /// Raw units to metres. The engine draws cars and city in one unit (vehicle matrices are pure rotations,
 /// translations are city positions), and all 15 car models measure ~48 units per real-world metre, so the
 /// city comes out exaggerated: streets ~40 m wide, blocks ~50 m tall.
 const SCALE: f32 = 1.0 / 48.0;
 
+/// The race projection (view struct `0x03000080`): focal length 150 on the 240×160 screen.
+const FOCAL: f32 = 150.0;
+
+/// The skyline's clip rows (view rect `0x030053D0` `+4`/`+0xC` in the race).
+const SKY_CLIP: [i32; 2] = [0, 159];
+
+/// The reference race's racers (`docs/formats/car-paint.md`), which the viewer takes as given: the game draws
+/// them from the RNG (`pick_opponent_cars`) and the save. Car ids (`0x0300611C`), paints (`0x03005FEC`), the
+/// player's car record (paint 11, glass 0) and the opponents' materials (entity `+0x48`).
+const RACE_CARS: [i8; 4] = [2, 9, 10, 11];
+const RACE_PAINTS: [i8; 4] = [11, 11, 11, 5];
+const RACE_RECORD: [u8; 0x11] = [0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const OPPONENT_MATERIALS: [usize; 3] = [140, 141, 142];
+
 /// Raw space (x right, y down, z forward) to Bevy (y up, -z forward): a 180° turn about x, no mirroring.
 fn world(x: impl Into<f32>, y: impl Into<f32>, z: impl Into<f32>) -> Vec3 {
     Vec3::new(x.into(), -y.into(), -z.into()) * SCALE
+}
+
+/// A game angle (0x4000 per turn; entity headings and the camera yaw) as a direction on the ground: raw
+/// `(sin, 0, cos)`, so 0 faces +z and 0x1000 faces +x (checked against every route's racing line).
+fn direction(angle: i32) -> Vec3 {
+    let a = f64::from(angle & 0x3FFF) * TAU / 16384.0;
+    world(a.sin() as f32, 0.0_f32, a.cos() as f32).normalize()
+}
+
+/// The camera yaw (`0x03000214`, the convention of `direction`) of a view direction.
+fn game_yaw(forward: Vec3) -> i32 {
+    (f64::from(forward.x).atan2(-f64::from(forward.z)) * 16384.0 / TAU).round() as i32
+}
+
+/// The horizon shift (`0x030056B8`, screen rows): how far below the screen centre the eye-level horizon falls,
+/// `focal · tan(pitch)`, clamped to ±32 as `camera_update` does. The game's cameras never pitch (0 in the chase
+/// view; the bumper view shifts the projection centre instead); the viewer's free camera does.
+fn horizon(forward: Vec3) -> i32 {
+    (FOCAL * forward.y / forward.xz().length()).round().clamp(-32.0, 32.0) as i32
 }
 
 /// Unindexed triangle soup; flat normals are computed at the end.
@@ -97,14 +133,25 @@ fn model_tris(m: &rom::Model, atlas: Option<&rom::Texture>, color: Color) -> Tri
     t
 }
 
+/// Index 0 shows the backdrop instead of being skipped (`indexed.wgsl`).
+const OPAQUE: u32 = 1;
+/// `indices` is the 240×160 GBA screen, read at each pixel's screen position (the sky layer).
+const SCREEN: u32 = 2;
+
 /// GBA-style indexed colour (`indexed.wgsl`): a texture of 8-bit palette indices drawn through a 256-colour
-/// palette texture, texel by texel with wrapped integer coordinates. Index 0 is not drawn.
+/// palette texture, texel by texel with wrapped integer coordinates; index 0 per `mode`.
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 struct Indexed {
     #[texture(0, sample_type = "u_int")]
     indices: Handle<Image>,
     #[texture(1)]
     palette: Handle<Image>,
+    /// Palette entry 0 per GBA screen line (160×1).
+    #[texture(2)]
+    backdrop: Handle<Image>,
+    /// `x`: `OPAQUE | SCREEN` flags.
+    #[uniform(3)]
+    mode: UVec4,
 }
 
 impl Material for Indexed {
@@ -138,58 +185,74 @@ fn index_image(t: &rom::Texture) -> Image {
     texture_2d(t.width, t.height, t.pixels.clone(), TextureFormat::R8Uint)
 }
 
-/// A 256×1 palette texture; `Tint` rewrites its contents in place.
-fn palette_image() -> Image {
-    texture_2d(256, 1, vec![0; 256 * 4], TextureFormat::Rgba8UnormSrgb)
+/// An RGBA8 colour strip (`width`×1); the palette (256) and the backdrop lines (160). Systems rewrite its bytes.
+fn colour_image(width: usize) -> Image {
+    texture_2d(width, 1, vec![0; width * 4], TextureFormat::Rgba8UnormSrgb)
 }
 
-/// A car atlas as palette indices: the game loads atlas pixel `i` into palette slot `192 + (i ^ 16)`
-/// (`docs/formats/vehicle-models.md`).
-fn car_indices(atlas: &rom::Texture) -> Image {
+fn rgba(palette: &[u16]) -> Vec<u8> {
+    rom::palette_rgba(palette).as_flattened().to_vec()
+}
+
+/// A car atlas moved into the car slots as `unpack_player_atlas` does for the player (`paint::remap_atlas`, body
+/// 0xD0, trim 0xC0: pixel `i` becomes slot `192 + (i ^ 16)`).
+fn player_atlas(atlas: &rom::Texture) -> Image {
+    let mut pixels = atlas.pixels.clone();
+    paint::remap_atlas(&mut pixels, 0xD0, 0xC0);
     index_image(&rom::Texture {
-        pixels: atlas.pixels.iter().map(|&i| (i ^ 16).wrapping_add(192)).collect(),
+        pixels,
         ..atlas.clone()
     })
 }
 
-/// Palette slots 192..=223 (raw BGR555, slot order) from a 32-colour car palette indexed by atlas pixel, such as
-/// `rom::car_palette` or a paint preset. The RGBA8 channels are `c << 3 | c >> 2`, so `>> 3` recovers `c`.
-fn car_slots(by_pixel: &[[u8; 4]]) -> [u16; 32] {
-    std::array::from_fn(|j| {
-        let [r, g, b, _] = by_pixel[j ^ 16].map(|c| u16::from(c >> 3));
-        r | g << 5 | b << 10
-    })
+/// The race's base palette: the city palette with the reference race's car ramps (`load_car_palettes`).
+fn race_base(data: &[u8], city: &[u16]) -> Vec<u16> {
+    let mut base = city.to_vec();
+    paint::load_car_palettes(data, &mut base, RACE_CARS, RACE_PAINTS, &RACE_RECORD, true);
+    base
 }
 
-/// RGBA texture for the sky gradient (not a palette lookup: the game writes those colours per scanline).
-fn rgba_image(t: &rom::Texture, palette: &[[u8; 4]]) -> Image {
-    let rgba = t.pixels.iter().flat_map(|&i| palette[i as usize]).collect();
-    let mut img = texture_2d(t.width, t.height, rgba, TextureFormat::Rgba8UnormSrgb);
-    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        ..ImageSamplerDescriptor::nearest()
-    });
-    img
+/// A showroom car's palette, as the garage builds it (`load_car_palettes(0)` with the edited record, paint `paint`
+/// in slots 208..=223; `shade_car_paint` at turntable angle 0 for the glass).
+fn garage_base(data: &[u8], city: &[u16], car: usize, paint: i8) -> Vec<u16> {
+    let mut base = city.to_vec();
+    let mut record = [0; 0x11];
+    record[6] = paint as u8;
+    paint::load_car_palettes(data, &mut base, [car as i8, 0, 0, 0], [paint, 0, 0, 0], &record, false);
+    [base[192], base[208]] = paint::glass_shades(data, record[5], 0);
+    base
+}
+
+/// Each route's grid headings: template entity `+0x2C >> 8` (0x4000 per turn). The route table `0x7F2798`
+/// (0x14 bytes per route) points at the route's 0xA4-byte template entities at `+0x00`.
+fn grid_headings(data: &[u8], routes: usize) -> Vec<[i32; 4]> {
+    let word = |at: usize| i32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    (0..routes)
+        .map(|r| {
+            let entities = (word(0x7F_2798 + 0x14 * r) as u32 - rom::ROM_BASE) as usize;
+            std::array::from_fn(|e| word(entities + 0xA4 * e + 0x2C) >> 8)
+        })
+        .collect()
 }
 
 fn main() {
     let mut app = App::new();
-    app.insert_resource(ClearColor(Color::srgb(0.45, 0.62, 0.85)))
-        .insert_resource(GlobalAmbientLight {
-            brightness: 500.0,
+    app.insert_resource(GlobalAmbientLight {
+        brightness: 500.0,
+        ..default()
+    })
+    .add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "NFS Carbon GBA city viewer (unofficial)".into(),
+            // Four times the GBA screen: every GBA pixel is 4×4 window pixels.
+            resolution: WindowResolution::new(960, 640),
             ..default()
-        })
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "NFS Carbon GBA city viewer (unofficial)".into(),
-                ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (shot, sky, race, tint.after(sky).after(race)));
+        }),
+        ..default()
+    }))
+    .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
+    .add_systems(Startup, setup)
+    .add_systems(Update, (shot, race, sky.after(race), tint.after(sky)));
     embedded_asset!(app, "indexed.wgsl");
     app.run();
 }
@@ -211,8 +274,24 @@ fn setup(
         .and_then(|s| s.parse().ok())
         .unwrap_or(11)
         % envs.len();
-    // One palette for the whole city (and the skyline), as on the GBA; `tint` fills it every frame.
-    let city_palette = images.add(palette_image());
+    // One palette for the city, the race cars and the skyline, as on the GBA; `tint` fills it every frame.
+    // The backdrop (palette entry 0 per screen line) and the sky layer's screen are filled by `sky`.
+    let palette = images.add(colour_image(256));
+    let backdrop = images.add(colour_image(sky::SCREEN_H));
+    let screen = images.add(texture_2d(
+        sky::SCREEN_W,
+        sky::SCREEN_H,
+        vec![0; sky::SCREEN_W * sky::SCREEN_H],
+        TextureFormat::R8Uint,
+    ));
+    let mut new_material = |indices, palette: &Handle<Image>, mode| {
+        indexed.add(Indexed {
+            indices,
+            palette: palette.clone(),
+            backdrop: backdrop.clone(),
+            mode: UVec4::new(mode, 0, 0, 0),
+        })
+    };
 
     // City geometry grouped by material, one mesh each. Material 0 is "not drawn" (the scene code skips
     // floor/ceiling passes for it; assumed the same for the 91 walls that use it).
@@ -253,54 +332,48 @@ fn setup(
         });
     let center = (min + max) / 2.0;
     for (m, tris) in by_material {
-        let material = indexed.add(Indexed {
-            indices: images.add(index_image(&textures[m as usize])),
-            palette: city_palette.clone(),
-        });
+        // `raster_wall_columns` picks the transparent drawer when a texture's first stored texel is 0 and the
+        // opaque one otherwise; floors and ceilings are always opaque and hold no index 0.
+        let t = &textures[m as usize];
+        let mode = if t.pixels[0] != 0 { OPAQUE } else { 0 };
+        let material = new_material(images.add(index_image(t)), &palette, mode);
         commands.spawn((Mesh3d(meshes.add(tris.mesh())), MeshMaterial3d(material)));
     }
 
-    // Every car has its own palette: the city's with slots 192..=223 holding its colours, tinted alike.
-    // NOT 1:1 (R3): the game has one palette, so other cars use other slots (160..=191 in the race dump).
-    let mut spawn_car = |commands: &mut Commands, tris: Tris, atlas: &rom::Texture, slots, transform| {
-        let palette = images.add(palette_image());
-        let material = indexed.add(Indexed {
-            indices: images.add(car_indices(atlas)),
-            palette: palette.clone(),
-        });
-        commands
-            .spawn((
-                Mesh3d(meshes.add(tris.mesh())),
-                MeshMaterial3d(material),
-                transform,
-                CarPalette { slots, image: palette },
-            ))
-            .id()
-    };
-
-    // Showroom in front of the city: one row per car, its paint variants side by side, textured with the
-    // car's atlas and a paint preset (the race generates the real paint ramp at runtime).
+    // Showroom in front of the city: one row per car, its paint variants side by side, each car in the garage's
+    // palette with paint number = car row. It is a display only (the garage shows one car at a time), so every
+    // car has a palette of its own; `tint` keeps them lit like the city.
     let models = rom::models(&data);
     let vehicle_textures = rom::vehicle_textures(&data);
-    let paints = rom::paint_palettes(&data);
     let on_ground = |t: &Tris| -t.pos.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
     let showroom = Vec3::new(center.x - 12.0, 0.0, max.z + 80.0);
     let mut car_models = std::collections::HashSet::new();
-    for (c, car) in rom::cars(&data).iter().enumerate() {
+    let cars = rom::cars(&data);
+    for (c, car) in cars.iter().enumerate() {
         car_models.extend(car.models);
         for v in 0..car.paint_variants {
             let atlas = &vehicle_textures[car.first_material + v];
             let tris = model_tris(&models[car.models[0]], Some(atlas), Color::WHITE);
             let at = showroom + Vec3::new(v as f32 * 6.0, on_ground(&tris), c as f32 * 7.0);
-            let slots = car_slots(&paints[(3 * c + v) % 19]);
-            spawn_car(&mut commands, tris, atlas, slots, Transform::from_translation(at));
+            let image = images.add(colour_image(256));
+            let material = new_material(images.add(player_atlas(atlas)), &image, 0);
+            commands.spawn((
+                Mesh3d(meshes.add(tris.mesh())),
+                MeshMaterial3d(material),
+                Transform::from_translation(at),
+                CarPalette {
+                    car: c,
+                    paint: c as i8,
+                    image,
+                },
+            ));
         }
         info!("showroom row {c}: {} ({} paint variants)", car.name, car.paint_variants);
     }
     info!("showroom at {showroom:.1} m (rows of cars along +z, paint variants along +x)");
 
-    // Race: one route's racing line and four cars on its start grid (the player's Chevy Cobalt SS first, as in
-    // the reference race). R cycles the 44 routes; NFSGBA_ROUTE picks the first one and starts behind the grid.
+    // Race: one route's racing line and the reference race's four cars on its start grid, in the race palette.
+    // R cycles the 44 routes; NFSGBA_ROUTE picks the first one and starts behind the grid.
     let floors = sectors
         .iter()
         .map(|s| {
@@ -312,22 +385,44 @@ fn setup(
         })
         .collect();
     let start_route: Option<usize> = std::env::var("NFSGBA_ROUTE").ok().and_then(|s| s.parse().ok());
-    let race = Race {
-        routes: rom::routes(&data),
+    let routes = rom::routes(&data);
+    let mut race = Race {
+        headings: grid_headings(&data, routes.len()),
+        routes,
         floors,
         current: start_route.unwrap_or(23),
         active: start_route.is_some(),
+        lift: 0.0,
     };
-    let cars = rom::cars(&data);
-    // Paint: the reference race's red for the player, then blue, black and silver (BGR555 channel scale).
-    let colours = [[30, 0, 1], [4, 10, 28], [3, 3, 4], [22, 22, 23]];
-    for (slot, c) in [2, 3, 7, 11].into_iter().enumerate() {
-        let atlas = &vehicle_textures[cars[c].first_material];
-        let tris = model_tris(&models[cars[c].models[0]], Some(atlas), Color::WHITE);
+    for (slot, &car) in RACE_CARS.iter().enumerate() {
+        let car = &cars[car as usize];
+        // The player's atlas is its material remapped into the car slots; the opponents' materials already hold
+        // final slots (their body ramps at 160, 176 or 208).
+        let (atlas, indices) = match slot {
+            0 => {
+                let atlas = &vehicle_textures[car.first_material + RACE_RECORD[3] as usize];
+                (atlas, player_atlas(atlas))
+            }
+            _ => {
+                let atlas = &vehicle_textures[OPPONENT_MATERIALS[slot - 1]];
+                (atlas, index_image(atlas))
+            }
+        };
+        // Close up the race draws model entity `+0x36 - 1` = car table `+0x14` (`draw_sector_entities`; all four
+        // reference entities), our `models[1]`.
+        // NOT 1:1 (R10/R12): beyond depth 0x1FF the next model is drawn; the player also draws model 12 (entity
+        // `+0x64`) with a second matrix; decals and overlays are not on the atlas (R13).
+        let tris = model_tris(&models[car.models[1]], Some(atlas), Color::WHITE);
         let lift = on_ground(&tris);
-        let slots = car_slots(&rom::car_palette(&data, colours[slot], 0));
-        let car = spawn_car(&mut commands, tris, atlas, slots, race.grid(slot, lift));
-        commands.entity(car).insert(GridSlot { slot, lift });
+        if slot == 0 {
+            race.lift = lift;
+        }
+        commands.spawn((
+            Mesh3d(meshes.add(tris.mesh())),
+            MeshMaterial3d(new_material(images.add(indices), &palette, 0)),
+            race.grid(slot, lift),
+            GridSlot { slot, lift },
+        ));
     }
 
     // Everything else in the bank (lower-detail car models, spoilers, traffic, markers) untextured, 12 per row.
@@ -355,57 +450,31 @@ fn setup(
     let chase = (std::env::var("NFSGBA_CAM").is_err() && start_route.is_some()).then(|| race.chase());
     commands.insert_resource(race);
 
-    // Sky: the gradient on a far ring and the skyline panorama on a band at the horizon, both centred on the
-    // camera every frame. Each environment has its own sky and palette; K cycles them.
-    let mut skies = Environments {
+    // Sky: the GBA screen as it is before the world is drawn (skyline rows, index 0 elsewhere), on a quad that
+    // follows the camera behind everything. `sky` redraws it and the backdrop lines when the view changes.
+    let sky_layer = new_material(screen.clone(), &palette, OPAQUE | SCREEN);
+    let city_palettes: Vec<Vec<u16>> = envs.iter().map(|e| rom::city_palette_raw(&data, e.palette)).collect();
+    let descs: Vec<_> = (0..envs.len()).map(|e| sky::sky_desc(&data, e)).collect();
+    commands.insert_resource(Skies {
+        buffers: descs.iter().map(|d| sky::gradient_buffer(&data, d)).collect(),
+        descs,
+        palettes: city_palettes.clone(),
         current: env,
-        ..default()
-    };
-    for e in &envs {
-        let gradient = rom::Texture {
-            width: 1,
-            height: 64,
-            pixels: (0..64).collect(),
-        };
-        skies.gradient.push(materials.add(StandardMaterial {
-            base_color_texture: Some(images.add(rgba_image(&gradient, &e.sky.gradient))),
-            unlit: true,
-            double_sided: true,
-            cull_mode: None,
-            ..default()
-        }));
-        // The skyline is 8bpp through the city palette (colour 0 = sky), so it shares the city's palette.
-        skies.skyline.push(indexed.add(Indexed {
-            indices: images.add(index_image(&e.sky.skyline)),
-            palette: city_palette.clone(),
-        }));
-        let [r, g, b, _] = e.sky.gradient[0];
-        skies.top.push(Color::srgb_u8(r, g, b));
-        skies.palettes.push(rom::city_palette_raw(&data, e.palette));
-    }
-    // ponytail: the skyline repeats 4 times around the horizon and spans ~10° of height; take the real scroll
-    // factor from the sky renderer.
-    commands.spawn((
-        Mesh3d(meshes.add(ring(16000.0, 0.0, 10000.0, 1.0).mesh())),
-        MeshMaterial3d(skies.gradient[env].clone()),
-        SkyRing,
-    ));
-    commands.spawn((
-        Mesh3d(meshes.add(ring(14000.0, 0.0, 2480.0, 4.0).mesh())),
-        MeshMaterial3d(skies.skyline[env].clone()),
-        SkyRing,
-    ));
-    commands.insert_resource(ClearColor(skies.top[env]));
+        screen: vec![0; sky::SCREEN_W * sky::SCREEN_H],
+        screen_image: screen,
+        backdrop,
+        drawn: None,
+    });
     commands.insert_resource(Tint {
-        raw: skies.palettes[env].clone(),
+        raw: city_palettes[env].clone(),
         rom: data,
         sectors,
         m: None,
         sector: None,
-        city: city_palette,
+        palette,
+        written: Vec::new(),
         dirty: true,
     });
-    commands.insert_resource(skies);
 
     commands.spawn((
         DirectionalLight {
@@ -423,7 +492,10 @@ fn setup(
         .unwrap_or((Vec3::new(center.x, max.y + 480.0, max.z + 640.0), center));
     commands.spawn((
         Camera3d::default(),
+        // The race's vertical field of view: 160 lines at focal length 150.
+        // NOT 1:1 (R11): the game projects through a reciprocal table with the centre at (120, 79), in integers.
         Projection::Perspective(PerspectiveProjection {
+            fov: 2.0 * (sky::SCREEN_H as f32 / 2.0 / FOCAL).atan(),
             far: 24000.0,
             ..default()
         }),
@@ -437,6 +509,12 @@ fn setup(
             ..default()
         },
         chase.unwrap_or_else(|| Transform::from_translation(eye).looking_at(target, Vec3::Y)),
+        children![(
+            Mesh3d(meshes.add(Rectangle::new(1.0e6, 1.0e6))),
+            MeshMaterial3d(sky_layer),
+            Transform::from_xyz(0.0, 0.0, -20000.0),
+            NotShadowCaster,
+        )],
     ));
     info!(
         "city bounds {min:.0} .. {max:.0} m; controls: right mouse look, WASD/QE move, Shift run, wheel speed, K sky"
@@ -446,11 +524,15 @@ fn setup(
 #[derive(Resource)]
 struct Race {
     routes: Vec<rom::Route>,
+    /// Grid headings per route (template entity `+0x2C >> 8`).
+    headings: Vec<[i32; 4]>,
     /// Mean floor height (m) of every sector.
     floors: Vec<f32>,
     current: usize,
     /// Race mode (NFSGBA_ROUTE or R): the light follows the player's car instead of the camera.
     active: bool,
+    /// The player's model lift (the chase camera sits relative to the model's origin, the entity position).
+    lift: f32,
 }
 
 #[derive(Component)]
@@ -469,27 +551,27 @@ impl Race {
         world(w.x as f32, 0.0_f32, w.z as f32).with_y(self.floors[w.sector])
     }
 
-    /// Driving direction at the start: first waypoint towards the second, on the ground plane.
-    fn heading(&self) -> Vec3 {
-        match &self.route().waypoints[..] {
-            [a, b, ..] => ((self.at(b) - self.at(a)) * Vec3::new(1.0, 0.0, 1.0)).normalize_or(Vec3::X),
-            _ => Vec3::X,
-        }
+    /// The heading of grid slot `slot` (0x4000 per turn), which `shade_car_paint` also reads for the player.
+    fn heading(&self, slot: usize) -> i32 {
+        self.headings[self.current][slot]
     }
 
-    /// A car on grid slot `slot`, standing on the start sector's floor and facing along the route.
+    /// A car on grid slot `slot`, standing on the start sector's floor, facing its template heading.
     fn grid(&self, slot: usize, lift: f32) -> Transform {
         let [x, _, z] = self.route().grid[slot];
         let floor = self.route().waypoints.first().map_or(0.0, |w| self.floors[w.sector]);
         let at = world(x as f32, 0.0_f32, z as f32).with_y(floor + lift);
-        Transform::from_translation(at).looking_to(self.heading(), Vec3::Y)
+        Transform::from_translation(at).looking_to(direction(self.heading(slot)), Vec3::Y)
     }
 
-    /// The reference race's chase camera: 343 units behind the player's car and 134 above it.
+    /// The race's chase camera: level (the game never pitches it), yaw = the player's heading, and the car at
+    /// (0, 134, 343) in camera space (the reference race's vehicle matrix, world `+0xFC`).
+    /// NOT 1:1 (R11): the game's camera trails the car (yaw 0xFFD against heading 0x1000 at the reference start).
     fn chase(&self) -> Transform {
-        let car = self.grid(0, 0.0).translation;
-        let eye = car - self.heading() * 343.0 * SCALE + Vec3::Y * 134.0 * SCALE;
-        Transform::from_translation(eye).looking_at(car + self.heading() * 20.0, Vec3::Y)
+        let car = self.grid(0, self.lift).translation;
+        let ahead = direction(self.heading(0));
+        let eye = car - ahead * 343.0 * SCALE + Vec3::Y * 134.0 * SCALE;
+        Transform::from_translation(eye).looking_to(ahead, Vec3::Y)
     }
 }
 
@@ -523,17 +605,20 @@ fn race(
     gizmos.linestrip(line, Color::srgb(1.0, 0.2, 0.1));
 }
 
-/// A car's palette: the city palette with slots 192..=223 replaced by `slots` (raw BGR555, slot order), tinted
-/// like the rest. Whatever decides a car's paint writes `slots`; `tint` rebuilds the palette.
+/// A showroom car's own palette: the garage palette for `car` in paint `paint`, tinted like the city.
 #[derive(Component)]
 struct CarPalette {
-    slots: [u16; 32],
+    car: usize,
+    paint: i8,
     image: Handle<Image>,
 }
 
-/// The in-race light tint (`FUN_0813a514`): every frame the whole palette is tinted by the light interpolated at
-/// the observer's position in its sector (`rom::sector_light`, `rom::tint_palette`); when no light is found the
-/// palette stays as it was. The observer is the camera, or the player's car in race mode.
+/// The race palette every frame, in the game's order (`docs/formats/car-paint.md`, "Frame timing"):
+/// `shade_car_paint` writes the glass shades for the player's heading into the base palette, then the light tint
+/// (`FUN_0813a514`) derives palette RAM from it, tinted by the light interpolated at the observer's position in
+/// its sector (`rom::sector_light`); the next frame's shade restores the raw glass (`paint::race_palette`).
+/// When no light is found the palette stays as it was. The observer is the camera, or the player's car in race
+/// mode.
 #[derive(Resource)]
 struct Tint {
     rom: Vec<u8>,
@@ -543,25 +628,11 @@ struct Tint {
     /// Current multipliers; `None` until a sector first gives a light (the palette is then as loaded).
     m: Option<[i32; 3]>,
     sector: Option<usize>,
-    /// The shared city (and skyline) palette.
-    city: Handle<Image>,
-    /// The raw palette changed (K): rebuild every palette with the current multipliers.
+    /// The shared palette (city, race cars, skyline) and what was last written to it.
+    palette: Handle<Image>,
+    written: Vec<u16>,
+    /// The raw palette changed (K): rebuild the showroom palettes.
     dirty: bool,
-}
-
-impl Tint {
-    /// RGBA8 bytes of the tinted palette, with a car's colours in slots 192..=223 when given.
-    fn palette(&self, car: Option<&[u16; 32]>) -> Vec<u8> {
-        let mut raw = self.raw.clone();
-        if let Some(slots) = car {
-            raw[192..224].copy_from_slice(slots);
-        }
-        let tinted = match self.m {
-            Some(m) => rom::tint_palette(&raw, m),
-            None => raw,
-        };
-        rom::palette_rgba(&tinted).as_flattened().to_vec()
-    }
 }
 
 /// Whether the sector's outline (x, z) contains the point: even-odd rule, exact in integers.
@@ -581,7 +652,7 @@ fn contains(s: &rom::Sector, px: i32, pz: i32) -> bool {
     inside
 }
 
-/// Find the observer's sector, re-tint when the light changes, and rewrite the palette textures.
+/// Find the observer's sector and light, then rewrite the palette textures that changed.
 fn tint(
     mut tint: ResMut<Tint>,
     race: Res<Race>,
@@ -597,9 +668,9 @@ fn tint(
         let t = camera.translation;
         ((t.x / SCALE).floor() as i32, (-t.z / SCALE).floor() as i32, t.y)
     };
-    // NOT 1:1: the game follows the player's sector through the portals it crosses (0x03005614); we look it
-    // up by position, keeping the current sector while it still contains the point, else taking the containing
-    // sector whose floor is nearest the observer's height (sectors can overlap on different levels).
+    // NOT 1:1 (R15): the game follows the player's sector through the portals it crosses (0x03005614); we look
+    // it up by position, keeping the current sector while it still contains the point, else taking the
+    // containing sector whose floor is nearest the observer's height (sectors can overlap on different levels).
     let sector = tint.sector.filter(|&s| contains(&tint.sectors[s], px, pz)).or_else(|| {
         let near = |s: &usize| (y - race.floors[*s]).abs();
         (0..tint.sectors.len())
@@ -615,91 +686,98 @@ fn tint(
         debug!("observer ({px}, {pz}) in sector {sector:?}: palette multipliers {m:?}");
         tint.m = m;
         tint.dirty = false;
-        if let Some(mut image) = images.get_mut(&tint.city) {
-            image.data = Some(tint.palette(None));
-        }
+    }
+    let ram = |base: Vec<u16>| match m {
+        Some(m) => paint::race_palette(&base, m),
+        None => base,
+    };
+
+    // NOT 1:1 (R17): for 1–7 scanlines per game frame the game shows the tinted glass instead.
+    let mut base = race_base(&tint.rom, &tint.raw);
+    [base[192], base[208]] = paint::glass_shades(&tint.rom, RACE_RECORD[5], race.heading(0));
+    let palette = ram(base);
+    if palette != tint.written
+        && let Some(mut image) = images.get_mut(&tint.palette)
+    {
+        image.data = Some(rgba(&palette));
+        tint.written = palette;
     }
     for car in &cars {
         if (changed || car.is_changed())
             && let Some(mut image) = images.get_mut(&car.image)
         {
-            image.data = Some(tint.palette(Some(&car.slots)));
+            image.data = Some(rgba(&ram(garage_base(&tint.rom, &tint.raw, car.car, car.paint))));
         }
     }
 }
 
-/// The 12 environments: sky materials and untinted city palettes.
-#[derive(Resource, Default)]
-struct Environments {
-    gradient: Vec<Handle<StandardMaterial>>,
-    skyline: Vec<Handle<Indexed>>,
-    top: Vec<Color>,
+/// The 12 environments' city palettes and skies, and the sky layer: the GBA screen before the world is drawn.
+#[derive(Resource)]
+struct Skies {
     palettes: Vec<Vec<u16>>,
+    descs: Vec<sky::SkyDesc>,
+    /// Gradient buffers (`0x0200120C`, after the race fade-in).
+    buffers: Vec<Vec<u16>>,
     current: usize,
+    /// 240×160 indices: `draw_skyline`'s rows on a cleared screen.
+    screen: Vec<u8>,
+    screen_image: Handle<Image>,
+    /// Palette entry 0 per screen line (160×1 RGBA).
+    backdrop: Handle<Image>,
+    /// Environment and camera of the last drawn sky.
+    drawn: Option<(usize, sky::SkyCamera)>,
 }
 
-#[derive(Component)]
-struct SkyRing;
-
-/// A sky ring's transform and material: the gradient is RGBA, the skyline indexed.
-type SkyRingParts = (
-    &'static mut Transform,
-    Option<&'static mut MeshMaterial3d<StandardMaterial>>,
-    Option<&'static mut MeshMaterial3d<Indexed>>,
-);
-
-/// Open cylinder around the origin from `y0` to `y1`, texture v from 1 (bottom) to 0 (top), u repeating `repeats` times.
-fn ring(radius: f32, y0: f32, y1: f32, repeats: f32) -> Tris {
-    const SEGMENTS: usize = 64;
-    let mut t = Tris::default();
-    for k in 0..SEGMENTS {
-        let (a0, a1) = (k as f32 / SEGMENTS as f32, (k + 1) as f32 / SEGMENTS as f32);
-        let at = |a: f32, y: f32| {
-            Vec3::new(
-                radius * (a * std::f32::consts::TAU).cos(),
-                y,
-                radius * (a * std::f32::consts::TAU).sin(),
-            )
-        };
-        let quad = [
-            (at(a0, y1), Vec2::new(a0 * repeats, 0.0)),
-            (at(a1, y1), Vec2::new(a1 * repeats, 0.0)),
-            (at(a1, y0), Vec2::new(a1 * repeats, 1.0)),
-            (at(a0, y0), Vec2::new(a0 * repeats, 1.0)),
-        ];
-        t.fan(&quad, Color::WHITE);
-    }
-    t
-}
-
-/// Keep the sky centred on the camera; K switches to the next environment (sky and palette).
+/// K switches to the next environment (sky and palette). Redraws the sky layer when the environment or the
+/// camera's yaw or horizon changes: the skyline (`sky::draw_skyline`) and the backdrop colour of every screen line
+/// (`gradient_buffer[backdrop_entry(gradient_start, y)]`, palette entry 0, which the light tint leaves alone).
+///
+/// NOT 1:1 (R6): the game clears only whole 32-byte blocks above the skyline and never clears below it, so a few
+/// bytes keep the page's previous frame (none in the chase view); the viewer starts from a cleared screen.
 fn sky(
     keys: Res<ButtonInput<KeyCode>>,
-    mut skies: ResMut<Environments>,
+    mut skies: ResMut<Skies>,
     mut tint: ResMut<Tint>,
-    mut clear: ResMut<ClearColor>,
-    camera: Single<&Transform, (With<Camera3d>, Without<SkyRing>)>,
-    mut rings: Query<SkyRingParts, With<SkyRing>>,
+    camera: Single<&Transform, With<Camera3d>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    let switch = keys.just_pressed(KeyCode::KeyK) && !skies.top.is_empty();
-    if switch {
-        skies.current = (skies.current + 1) % skies.top.len();
-        clear.0 = skies.top[skies.current];
+    if keys.just_pressed(KeyCode::KeyK) {
+        skies.current = (skies.current + 1) % skies.palettes.len();
         tint.raw = skies.palettes[skies.current].clone();
         tint.dirty = true;
         info!("environment {}", skies.current);
     }
-    for (mut transform, gradient, skyline) in &mut rings {
-        transform.translation = camera.translation;
-        if switch {
-            if let Some(mut m) = gradient {
-                m.0 = skies.gradient[skies.current].clone();
-            }
-            if let Some(mut m) = skyline {
-                m.0 = skies.skyline[skies.current].clone();
-            }
-        }
+    let forward = camera.forward().as_vec3();
+    let cam = sky::SkyCamera {
+        yaw: game_yaw(forward),
+        horizon: horizon(forward),
+        view: 2,
+        ..default()
+    };
+    if skies.drawn == Some((skies.current, cam)) {
+        return;
     }
+    let Skies {
+        descs,
+        buffers,
+        current,
+        screen,
+        ..
+    } = &mut *skies;
+    let desc = &descs[*current];
+    screen.fill(0);
+    sky::draw_skyline(&tint.rom, desc, &cam, SKY_CLIP, screen);
+    let start = sky::gradient_start(desc, &cam);
+    let lines: Vec<u8> = (0..sky::SCREEN_H)
+        .flat_map(|y| rom::bgr555(buffers[*current][sky::backdrop_entry(start, y)]))
+        .collect();
+    if let Some(mut image) = images.get_mut(&skies.screen_image) {
+        image.data = Some(skies.screen.clone());
+    }
+    if let Some(mut image) = images.get_mut(&skies.backdrop) {
+        image.data = Some(lines);
+    }
+    skies.drawn = Some((skies.current, cam));
 }
 
 /// With `NFSGBA_SHOT=<file.png>`: save a frame after 8 s (shader pipelines compile in the background first) and quit.
@@ -712,5 +790,23 @@ fn shot(mut commands: Commands, time: Res<Time>, mut taken: Local<bool>, mut exi
     }
     if t > 10.0 {
         exit.write(AppExit::Success);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The camera conversions invert `direction` and follow the game's sign conventions.
+    #[test]
+    fn camera_angles() {
+        for angle in [0, 0x1000, 0x0FFD, 0x2000, 0x3000, 0x0452, 0x1C1A] {
+            assert_eq!(game_yaw(direction(angle)) & 0x3FFF, angle);
+        }
+        let level = direction(0x1000);
+        assert_eq!(horizon(level), 0);
+        // Looking up, the horizon falls below the screen centre (positive shift), and the shift is clamped.
+        assert_eq!(horizon((level + Vec3::Y * 0.1).normalize()), 15);
+        assert_eq!(horizon(Vec3::NEG_Y), -32);
     }
 }
