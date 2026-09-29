@@ -16,7 +16,7 @@ Done and committed:
   - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
   - world scale: one unit for cars and city, about 48 per metre.
 - **Rust workspace:**
-  - `crates/nfsgba-formats` has 32 real-data tests (modules `paint`, `sky`, `career`, `render` and `ui` from the agents); `crates/nfsgba-audio` has 10;
+  - `crates/nfsgba-formats` has 35 real-data tests (modules `atlas`, `career`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10;
   - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
   - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
   - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
@@ -41,15 +41,15 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **audio:** done and merged. `crates/nfsgba-audio` reproduces LS_Play bit for bit (13,800 traced frames); `nfsgba-audio-render` writes WAVs to `data/out/audio` (`docs/formats/audio.md`). Hook: `Engine::vblank` once per frame, gameplay calls the `carbon_*` functions.
 - **ui-2d:** done and merged. Five menu screens byte-exact from ROM, HUD sprites bit-exact, the game's decompressor, fonts and Windows-1252 text (`ui.rs`, `docs/formats/ui.md`, `tools/ui_export.py` in `.venv`). HUD and menu logic not ported yet (U1–U4).
 - **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).
-- **viewer-sky-paint** (started after the first merges): viewer parts of R3/R5/R6. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
-- **car-atlas:** R13, the player's decals and overlays, and how opponents' cars, paints and materials are chosen. Owns `paint.rs` (+ `atlas.rs`), `docs/formats/car-paint.md`.
+- **viewer-sky-paint:** done and merged. One race palette, the per-line backdrop and the skyline layer in the viewer (R3, R5 closed; R6 leftovers only); level chase camera with focal 150 (part of R11).
+- **car-atlas:** done and merged. `atlas.rs`: the player's atlas (overlay, decal set, wheel rims) and the opponents' choice, pixel-exact at four race starts; R13 closed. The viewer does not use it yet (R23).
 - **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
 - **entity-draw:** R12, the exact car/entity draw on top of `render::draw_world`, checked against every pixel of reference frames. Owns `render.rs` (+ `render_entities.rs`), `docs/engine/renderer.md`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
 Next, driven by `docs/FIDELITY.md`:
-1. **Viewer integration of R3/R5/R6:** one race palette from `paint::race_palette`; the backdrop per screen line and the skyline layer from `sky`.
+1. **Viewer (next agent):** R23 racers and player atlas from `atlas`; R8 step walls, R10 traversal and limits, R11 principal point and projection, R14 pixel pairs, R19 flat heights, R22 row 159; move the viewer's `grid_headings` (template entity `+0x2C`) into `Route`.
 2. **Viewer geometry (after viewer-sky-paint merges):** R8 portal step walls, R10 traversal and limits, R11 projection, R19 flat heights; optionally a 240×160 original-resolution mode from `render::draw_world`.
 2b. **Entity draw (R12):** reimplement `draw_sector_entities`/`raster_polygon` in `render.rs` and check the 536 car pixels of the reference frame.
 3. **R13:** decals and overlays on the player's atlas; opponent material choice.

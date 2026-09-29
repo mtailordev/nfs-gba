@@ -35,7 +35,7 @@ address,name,kind,comment
 0x03004db0,wall_column_opaque,function,wall column pair
 0x03004fa8,flat_span_affine,function,textured flat span: byte writes every 2 bytes (120-wide floors)
 0x03002c40,flat_span_perspective,function,long flat span in 16-pair perspective segments
-0x03004a74,blit_scaled_transparent,function,scaled 8bpp blit skipping index 0; writes two buffers
+0x03004a74,blit_rotated_twice,function,rotated 8bpp blit (16.16 steps, no source bounds) skipping 0, each texel also at +off; rim drawing
 0x0813b6d0,load_car_palettes,function,copies car paint ramps to base palette slots 160/176/208 (16) and 240/248 (8)
 0x0812b1d8,copy_to_base_palettes,function,copies n colours to slot k of both base palette buffers; sets dirty 0x0300563C
 0x0815f948,sin_q14,function,sine: 0x4000 per turn; table 0x087C05F0 (half wave)
@@ -177,7 +177,7 @@ address,name,kind,comment
 0x03005094,fill_span,function,solid-colour span at full resolution
 0x0815e674,iwram_call,function,calls IWRAM function *0x03006490+0xE4+index*4
 0x0815e690,iwram_call_ret,function,iwram_call with a return value
-0x08169208,lz77_ring_decode,function,ARM (IWRAM copy): BIOS LZ77 stream through a 4 KiB ring pre-filled with 0xFF from 0xFEE; writes header-size bytes
+0x08169208,lz77_ring_decode_rom,function,ROM copy of IWRAM 0x030042f4 (lz77_ring_decode)
 0x08164d90,blit_keyed,function,copies w x h bytes skipping a key byte through 16-bit read-modify-write; no clipping
 0x08136d74,menu_blit_material,function,blits menu material (unpacked if kind bit 6) at x y into the current frame buffer
 0x0812bd60,menu_button_prompts,function,button prompt bar: icons 156..161 and prompt texts in font 0xE
@@ -221,3 +221,25 @@ address,name,kind,comment
 0x08142d64,hud_message_hide,function,hides all HUD message elements
 0x081430c4,hud_minimap_palette,function,loads the route's minimap palette into OBJ colours 0xD0..0xDF
 0x08143144,map_world_to_screen,function,world position to map coordinates (scales 0x7F4480; offsets 0x7F44A8)
+0x08169988,blit_rotated_twice_rom,function,ROM copy of IWRAM 0x03004a74 (ARM)
+0x030042f4,lz77_ring_decode,function,ARM LZ77 (the game's decompressor): 0x1000 ring prefilled 0xFF from 0xFEE; writes the full header size (w*h+8)
+0x0815e6c8,iwram_call_4,function,calls the IWRAM copy of a ROM ARM function (overlay base 0x03006490) with 3 arguments
+0x0815e770,iwram_call_8,function,calls the IWRAM copy of a ROM ARM function (overlay base 0x03006490) with 7 arguments
+0x0815fd1c,rand_seed,function,*0x030064C8 = r0 & 0xFF
+0x08160af8,heap_alloc,function,allocates ceil(n/4) words; descriptor table *0x030064CC (8 bytes per block), arena *0x030064D0; one free word between blocks
+0x08160de4,heap_free,function,(tentative) frees a heap_alloc block
+0x08163bfc,blit_material_keyed_inside,function,blit_material_keyed that writes only over atlas pixels in lo..hi (decal sets)
+0x08163990,blit_material_keyed_outside,function,blit_material_keyed that writes only over atlas pixels outside lo..hi (not used by the atlas path)
+0x08163e14,add_to_pixels_keyed,function,p != key: p + add
+0x081636d0,unpack_material_format4,function,(tentative) format-4 decoder used by blit_material_keyed; no vehicle material uses it
+0x08163d68,unpack_rle,function,(tentative) PackBits-like RLE: b&0x80 repeat next byte (b&0x7F)+1 times, else copy b+1 bytes
+0x0813bc38,setup_player_car,function,(tentative) player-only dressing: material or look, unpack_player_atlas, load_car_palettes(1)
+0x0813ff48,reload_player_car,function,(tentative) frees the decal, setup_player_car, unpack_decal
+0x0813ff44,empty_0813ff44,function,empty; called at the end of setup_race_cars
+0x0814a2a0,entity_update_rim,function,(tentative) race entity update; redraws the player's rim when rim_side_visible
+0x0814b168,entity_update_rim_b,function,(tentative) second race entity update that redraws the player's rim
+0x0814a390,entity_reset_rim,function,(tentative) calls unpack_decal for the player
+0x0814b98c,entity_reset_rim_b,function,(tentative) calls unpack_decal for the player
+0x0814f9d0,rim_side_visible,function,0 when |angle_diff(a, b)| < 0x400 or in (0x1C00, 0x2400), else 1
+0x0815fc38,angle_diff,function,(tentative) signed difference of two angles (0x4000 per turn)
+0x0815fadc,abs_i32,function,absolute value
