@@ -48,7 +48,7 @@ address,name,kind,comment
 0x08163e5c,remap_atlas_pixels,function,p<16: p+body; p<32: p+trim-16
 0x08163e34,remap_decal_pixels,function,p==key: value; else p+add
 0x08163870,blit_material_keyed,function,unpack material (fmt 3/4/5, 0x40 compressed) and blit, skipping key, adding offset
-0x08163d30,decompress_material,function,decompress via FUN_0815e6c8
+0x08163d30,unpack_to_buffer,function,allocates a 0x1011-byte ring and runs the ring LZ77 decoder at 0x08169208; was decompress_material: decompress via FUN_0815e6c8
 0x0813bf58,unpack_decal,function,unpack decal 0x087EF816 into 0x03006094[id] (0x10->0, +0xB0)
 0x0813bd90,draw_decal_on_atlas,function,rotated decal blit into the atlas, twice
 0x0813b634,pick_opponent_cars,function,cars[1..3] = 3*(rand%5)+i, paints = rand%15; paints[1] from 0x087F4344
@@ -177,3 +177,47 @@ address,name,kind,comment
 0x03005094,fill_span,function,solid-colour span at full resolution
 0x0815e674,iwram_call,function,calls IWRAM function *0x03006490+0xE4+index*4
 0x0815e690,iwram_call_ret,function,iwram_call with a return value
+0x08169208,lz77_ring_decode,function,ARM (IWRAM copy): BIOS LZ77 stream through a 4 KiB ring pre-filled with 0xFF from 0xFEE; writes header-size bytes
+0x08164d90,blit_keyed,function,copies w x h bytes skipping a key byte through 16-bit read-modify-write; no clipping
+0x08136d74,menu_blit_material,function,blits menu material (unpacked if kind bit 6) at x y into the current frame buffer
+0x0812bd60,menu_button_prompts,function,button prompt bar: icons 156..161 and prompt texts in font 0xE
+0x081315a0,menu_screen_setup,function,menu state setup; state 0x2F loads the health screen colours from 0x7E5E48
+0x08162860,text_draw,function,draws a string: char map 0x7F5BC8; align 1 centre / -1 right; colour offset
+0x08162720,text_draw_glyph,function,draws one glyph (width table; key skip; 16-bit read-modify-write)
+0x08163080,text_measure,function,string width with a font
+0x08163278,text_draw_wrapped_checked,function,range check then text_draw_wrapped
+0x08162a1c,text_draw_wrapped,function,word-wrapped text: max width and lines; line height font +0x08
+0x08141578,text_menu,function,font id 0xC..0xF with text key or pointer into the current page; returns width
+0x081416d0,text_menu_both_pages,function,text_menu into both mode-4 pages; font 0xF uses material 12
+0x08141840,text_menu_wrapped,function,word-wrapped text into both mode-4 pages
+0x08141dd0,text_city_font_unused,function,uncalled variant reading glyphs from city materials 12..15
+0x08161a98,obj_upload_tiles,function,copies n x 32 bytes to OBJ tile slot + *0x030064E0
+0x08161c24,sprite_screen_update,function,sprite screen objects to shadow OAM (init or frame): position; hide; uploads; palette; blend; affine
+0x08161ea0,sprite_screen_alloc,function,allocates 0x37 sprite objects; flags = visible for the screen's elements
+0x08161eec,sprite_screen_select,function,sets the screen index then sprite_screen_alloc
+0x0816144c,oam_set_affine,function,affine matrix from scale x/y and angle
+0x08160fd0,oam_hide_range,function,hides n OAM entries (y 160; affine off)
+0x0815f988,cos_q14,function,sin_q14(a + 0x1000)
+0x08142148,hud_reset,function,hides the HUD objects and resets messages for the race mode
+0x08142f84,hud_update,function,minimap palette; per-mode HUD update; message tick
+0x081421b8,hud_update_mode0,function,HUD element updates for race modes 0 and 1
+0x0814228c,hud_update_mode3,function,HUD element updates for race mode 3
+0x08142360,hud_update_mode2,function,HUD element updates for race mode 2
+0x081428c0,hud_timer,function,race time digits mm:ss.cc (elements 5..10)
+0x081429c4,hud_split,function,split time digits and sign (elements 21..27)
+0x08142c4c,hud_lap,function,lap and total laps (elements 11..13)
+0x0814306c,hud_position,function,race position and racer count (elements 19..20)
+0x0814308c,hud_gear,function,gear digit (element 33)
+0x08142724,hud_speed,function,speed digits in km/h or mph (elements 34..36)
+0x08142bd8,hud_needle,function,rev needle angle (element 37)
+0x08142440,hud_minimap,function,minimap window of the 512x384 map rotated by heading; opponent dots
+0x08142ca8,hud_dial,function,dial segment frames from entity +0x4C8 (elements 29..31)
+0x08142b44,hud_portrait,function,portrait and 8-step bar (elements 43..44)
+0x081431a8,hud_arrow,function,animated arrow (element 45)
+0x081431f0,hud_panel_language,function,timer panel frame = language
+0x08143210,hud_split_panel_language,function,split panel frame and digit shift by language
+0x08142ec0,hud_message_show,function,starts a HUD message from the race mode's message table
+0x08142dec,hud_message_tick,function,counts down and blinks HUD messages
+0x08142d64,hud_message_hide,function,hides all HUD message elements
+0x081430c4,hud_minimap_palette,function,loads the route's minimap palette into OBJ colours 0xD0..0xDF
+0x08143144,map_world_to_screen,function,world position to map coordinates (scales 0x7F4480; offsets 0x7F44A8)

@@ -178,7 +178,7 @@ pub fn blit(fb: &mut [u8], stride: usize, x: i32, y: i32, src: &[u8], w: usize, 
 }
 
 /// The raw bytes of text-table string `key` in `lang` (0 En, 1 Fr, 2 De, 3 It, 4 Es), for `decode_text`
-/// and `Font::draw` (`crate::text` decodes as Latin-1).
+/// and `Font::draw` (`crate::text` decodes them with `decode_text`).
 pub fn text_bytes(rom: &[u8], key: usize, lang: usize) -> Vec<u8> {
     let at = ptr(rom, 0x7E_86A0 + 4 * (977 * (lang + 1) + key));
     rom[at..at + rom[at..].iter().position(|&b| b == 0).unwrap()].to_vec()

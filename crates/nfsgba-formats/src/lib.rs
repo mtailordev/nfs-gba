@@ -93,7 +93,7 @@ pub fn text(rom: &[u8], key: usize, lang: Option<usize>) -> String {
     const KEYS: usize = 977;
     let at = ptr(rom, TABLE + 4 * lang.map_or(key, |l| KEYS * (l + 1) + key));
     let end = rom[at..].iter().position(|&b| b == 0).map_or(rom.len(), |n| at + n);
-    rom[at..end].iter().map(|&b| b as char).collect() // 8-bit, Latin-1 as far as seen
+    ui::decode_text(&rom[at..end]) // Windows-1252, with `{`/`|` as the A/B buttons
 }
 
 /// A car from the car table at `0x7F0BD8` (15 × 0x58 bytes).
@@ -141,23 +141,18 @@ fn vehicle_material_count(rom: &[u8]) -> usize {
         .count()
 }
 
-/// Vehicle materials (level record `+0x20`, same layout as city materials). Texels are BIOS-LZ77 blobs at
-/// level record `+0x0C` + material `+0x08`, 5-bit indices into a car palette (`paint_palettes`).
+/// Vehicle materials (level record `+0x20`, same layout as city materials), decoded as the game does: packed
+/// ones (kind bit 6) through its ring decoder `ui::unpack`, the rest (the 36 128×100 opponent atlases) raw.
+/// Texels live at level record `+0x0C` + material `+0x08`; the player atlases hold 5-bit indices that the game
+/// remaps into palette slots (`paint::remap_atlas`), the raw ones final slot numbers.
 pub fn vehicle_textures(rom: &[u8]) -> Vec<Texture> {
-    let (materials, base) = (ptr(rom, LEVEL_TABLE + 0x20), ptr(rom, LEVEL_TABLE + 0x0C));
-    (0..vehicle_material_count(rom))
-        .map(|i| {
-            let m = materials + 0x24 * i;
-            let (width, height) = (u16_at(rom, m + 0x0C) as usize, u16_at(rom, m + 0x0E) as usize);
-            let at = base + u32_at(rom, m + 8) as usize;
-            // Most are LZ77 with size w*h + 8; the 36 128×100 materials are not (format unknown, read raw).
-            let mut pixels = if rom[at] == 0x10 && (u32_at(rom, at) >> 8) as usize == width * height + 8 {
-                lz77(rom, at)
-            } else {
-                rom[at..at + width * height].to_vec()
-            };
-            pixels.resize(width * height, 0);
-            Texture { width, height, pixels }
+    let base = ptr(rom, LEVEL_TABLE + 0x0C);
+    ui::materials(rom, ptr(rom, LEVEL_TABLE + 0x20))
+        .iter()
+        .map(|m| Texture {
+            width: m.width,
+            height: m.height,
+            pixels: ui::pixels_8bpp(rom, base, m),
         })
         .collect()
 }

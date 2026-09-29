@@ -19,6 +19,7 @@
 | [formats/audio.md](formats/audio.md) | Audio: Logik State LS_Play modules (`GBAMOD30`), sample bank, sound effects, sequencer and mixer (`crates/nfsgba-audio`) |
 | [formats/car-paint.md](formats/car-paint.md) | Car colours: palette slots 160–255, paint ramps, glass shades, atlas remap, decals |
 | [formats/career.md](formats/career.md) | Career (zones, events, unlocks, wingmen), race setup, race rules and the EEPROM save |
+| [formats/ui.md](formats/ui.md) | The 2D layer: menu and HUD material tables, the game's decompressor, fonts and text, sprite screens, HUD layouts (`ui.rs`, `tools/ui_export.py`) |
 | [engine/renderer.md](engine/renderer.md) | The world renderer: visible-sector list, wall and flat setup, projection, drawers, entity draw (decoded), pixel-exact `render::draw_world` |
 | [engine/sky.md](engine/sky.md) | Sky: per-scanline gradient (VCount IRQ on palette entry 0) and the skyline blit |
 | [engine/viewer-rendering.md](engine/viewer-rendering.md) | How the viewer reproduces GBA indexed colour and the light tint; the game's wall/floor drawers |

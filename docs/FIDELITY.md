@@ -36,6 +36,15 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 | D6 | Not located: the code that arms a lap (driver `+0x4D8` bit 1), and what happens when hunter life reaches zero | — | Race rule code (`docs/formats/career.md`) |
 | D7 | No save encoder (the decoder is exact) | `save_encode` (`FUN_081492c0`) | `docs/formats/career.md` |
 
+## UI (2D)
+
+| # | Now | Game | Exact source |
+|---|---|---|---|
+| U1 | The HUD sprite builder is exact (`ui::update_sprites`); the element logic is not ported (timer, lap, position, split, speed, gear, needle, dial, portrait, arrow, messages) | Formulas located and documented in `docs/formats/ui.md` | `hud_update`, `hud_update_mode0/2/3` and the `hud_*` functions |
+| U2 | Minimap not ported | Windows material 135 by player position / 499 + (0x86, 0x79), rotates it by heading into material 134's tiles, places dots; the rotation routine is not decoded | `hud_minimap`, the rotator called through `iwram_call` |
+| U3 | Menu primitives exact (`ui::unpack`, `blit`, `Font::draw`, `draw_wrapped`, button prompts); the screen logic and state machine are not ported | Page tables at `0x7E4A00–0x7E6EEC` only partly decoded (three tables) | `menu_screen_setup`, the page records, `menu_button_prompts` |
+| U4 | Menu image palettes are verified only for materials 1–5, 7, 156, 181, 191, 196, 202, 203, 218 and 226–266; `tools/ui_export.py` assumes the rest (recorded per image in `index.json`) | Each screen loads its palette | The screen logic (U3) |
+
 ## Audio
 
 | # | Now | Game | Exact source |
@@ -54,6 +63,9 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 - **R4, car trim:** slots 193–207 are the city palette's own colours; nothing car-specific writes them. 192 and 208 are the glass shades (R3).
 - **Environment palette and sky selection:** exact (`race_load_palettes`: palette `+0x00 + (+0x5A)·2`, sky from `+0x5E`/`+0x60`). Checked: the race's base palette equals city palette 13 (environment 11, the reference race; byte-identical to palette 3) in every non-runtime slot.
 - **D1, racing line length:** exact. Section 0 of the route `+0x04` table is the lap (its last waypoint repeats the first); sections 1.. are branches, joined by waypoint links (`routes()`; route 23: 36 waypoints, 108,219 units, one branch from 19 to 27).
+- **Menu drawing and HUD sprites:** five menu screens (language select, health and safety, EA logo, PSA, title) rebuilt from ROM with 0 bytes different from the game's frame buffer and palette; the HUD OAM entries 9–55, both affine matrices, the sprite palette and the uploaded tiles match the race dump bit for bit (`ui.rs`).
+- **Decompressor:** the game's ring decoder (`lz77_ring_decode`: 4 KiB ring pre-filled with 0xFF, writes the header size) decodes all 299 packed streams; `vehicle_textures` and the menus use it (`ui::unpack`). `lz77()` keeps plain BIOS semantics for comparison.
+- **Text encoding:** Windows-1252 with `{`/`|` as the A/B buttons; `text()` decodes this way. Four fonts of 224 glyphs; font 0xF takes material 14, except material 12 in `text_menu_both_pages`.
 - **LS_Play music, sound effects and mixer:** exact (`nfsgba-audio`: 13,800 traced frames bit-exact in mix buffers and the whole engine work area, including 12,000 free-running frames driven only by the game's API calls).
 - **Wall textures and wall u:** exact (column maps, `u >> 7`), from `raster_wall_columns` and `setup_wall_spans`. (Wall v was reopened as R20.)
 - **R7, material 0:** never drawn (`draw_sector_walls` skips materials whose slot `+0x00` is 0; only material 0), and walls with flag bit 0 are open portals. Confirmed from code and in the reference frame.

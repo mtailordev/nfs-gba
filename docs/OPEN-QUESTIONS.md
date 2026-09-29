@@ -15,6 +15,10 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 10. **What does the 96 KiB of ARM code at `0x350000–0x368000` do?** It is *not* what runs in IWRAM during a race: that code comes from `0x14FC38`, `0x165154` and `0x168264`.
 11. **What does the 65-entry Thumb function table at `0x7F38B8` dispatch?** Hypothesis: game states or menus.
 
+18. **Menu materials 6, 16–152 and most overlays:** what are they, and which palette does each screen use (FIDELITY U4)?
+19. **HUD details:** material kind bit 4 (materials 5–33), element bytes `+0x0F`/`+0x10`, and which race mode HUD screen 3 serves.
+20. **Menu sprite screens (`0x347778`):** all elements use material 0. Hit boxes or cursor anchors?
+21. **The 128 bytes at `0x71F168`**, zero apart from one word, just before the city palettes.
 16. **Audio module header bytes `+0x038` and `+0x138`** are never read by the player. What did they hold for the converter?
 17. **What calls the sound re-init/shutdown pair at `0x08149dbe`–`0x0814a018`?** Hypothesis: link play.
 
@@ -33,6 +37,10 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 - ~~Runtime palette~~ **Answered:** the city palette is picked by the environment (`race_load_palettes`) and tinted every frame by the wall light at the player (`apply_sector_light_to_palette`); car colours are ramps from `0x36C95C` (`load_car_palettes`, `shade_car_paint`). See [FIDELITY.md](FIDELITY.md), [formats/car-paint.md](formats/car-paint.md). The event's environment comes from `0x7F2588` ([formats/career.md](formats/career.md)).
 - ~~Route table fields~~ **Answered:** `+0x04` is the racing-line section table (lap plus branches). See [formats/race-routes.md](formats/race-routes.md), [formats/career.md](formats/career.md). Descriptor `+0x62`/`+0x64` are sky offsets ([engine/sky.md](engine/sky.md)).
 - ~~Portal walls between sectors of different heights~~ **Answered:** portal walls with flag bit 0 clear and a non-zero material are drawn like solid walls over their own top and bottom; there are no separate upper and lower parts ([engine/renderer.md](engine/renderer.md)).
+- ~~Raw 8bpp region `0x404000–0x794000`~~ **Answered:** every byte of `0x4018C0–0x71F1E8` belongs to a known material table except 128 bytes at `0x71F168` (question 21) ([formats/ui.md](formats/ui.md)).
+- ~~How the code finds LZ77 blobs, and the "size + 8"~~ **Answered:** through material tables; the game's ring decoder writes the header size ([formats/ui.md](formats/ui.md)).
+- ~~The 24-byte records near the car atlases~~ **Answered:** 0x24-byte HUD material records (`0x36CF5C`).
+- ~~Text character set for bytes ≥ `0x80`~~ **Answered:** Windows-1252, `{`/`|` = A/B buttons.
 - ~~Is `0x02C000–0x128000` PCM?~~ **Answered:** sound-effect data `0x0005D4–0x04EA11` and music bank data `0x051FD4–0x12A84B`, both signed 8-bit PCM; the `GBAMOD30` layout is decoded ([formats/audio.md](formats/audio.md)).
 
 - ~~Is `0x7E86A0` the master asset directory?~~ **No:** it's the text table plus music list, see [formats/text-table.md](formats/text-table.md).

@@ -16,7 +16,7 @@ Done and committed:
   - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
   - world scale: one unit for cars and city, about 48 per metre.
 - **Rust workspace:**
-  - `crates/nfsgba-formats` has 26 real-data tests (modules `paint`, `sky`, `career` and `render` from the agents); `crates/nfsgba-audio` has 10;
+  - `crates/nfsgba-formats` has 32 real-data tests (modules `paint`, `sky`, `career`, `render` and `ui` from the agents); `crates/nfsgba-audio` has 10;
   - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
   - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
   - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
@@ -39,7 +39,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **sector-renderer:** done and merged. `render.rs` reproduces the reference frame's world pixels exactly (visible list, walls, flats, projection); R7/R9 closed; found wall v units (R20, fixed in `Wall::uv`) and flat heights (R19). The entity draw is decoded but not reimplemented (R12).
 - **vehicle-physics:** car simulation plus trace harness. Owns `crates/nfsgba-sim`, `docs/engine/physics.md`, `tools/trace_*`.
 - **audio:** done and merged. `crates/nfsgba-audio` reproduces LS_Play bit for bit (13,800 traced frames); `nfsgba-audio-render` writes WAVs to `data/out/audio` (`docs/formats/audio.md`). Hook: `Engine::vblank` once per frame, gameplay calls the `carbon_*` functions.
-- **ui-2d:** HUD, fonts, menus, sprites and the raw 8bpp region. Owns `crates/nfsgba-formats/src/ui.rs`, `docs/formats/ui.md`, `tools/ui_*`.
+- **ui-2d:** done and merged. Five menu screens byte-exact from ROM, HUD sprites bit-exact, the game's decompressor, fonts and Windows-1252 text (`ui.rs`, `docs/formats/ui.md`, `tools/ui_export.py` in `.venv`). HUD and menu logic not ported yet (U1–U4).
 - **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).
 - **viewer-sky-paint** (started after the first merges): viewer parts of R3/R5/R6. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
 - **car-atlas:** R13, the player's decals and overlays, and how opponents' cars, paints and materials are chosen. Owns `paint.rs` (+ `atlas.rs`), `docs/formats/car-paint.md`.
