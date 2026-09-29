@@ -32,6 +32,16 @@ Done and committed:
 
 Done since the last update: race routes (grid plus racing line, `docs/formats/race-routes.md`); environments (the 12 level descriptors pick palette and sky; K cycles them in the viewer); the in-race light tint mechanism (`FUN_0813a514`).
 
+**Parallel agents (started 2026-09-29, each in its own git worktree/branch; the parent merges):**
+- **viewer-indexed:** R1/R2 in the viewer. Owns `crates/nfsgba-viewer`, `docs/engine/viewer-rendering.md`.
+- **car-paint:** R3/R4. Owns `crates/nfsgba-formats/src/paint.rs`, `docs/formats/car-paint.md`.
+- **sky:** R5/R6. Owns `crates/nfsgba-formats/src/sky.rs`, `docs/engine/sky.md`.
+- **sector-renderer:** R7–R11. Owns `crates/nfsgba-formats/src/render.rs`, `docs/engine/renderer.md`.
+- **vehicle-physics:** car simulation plus trace harness. Owns `crates/nfsgba-sim`, `docs/engine/physics.md`, `tools/trace_*`.
+- **audio:** GBAMOD30 and the LS_Play mixer. Owns `crates/nfsgba-audio`, `docs/formats/audio.md`.
+
+Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
+
 Next, driven by `docs/FIDELITY.md`:
 1. **R1 + R2:** indexed-colour rendering (index textures plus a palette texture) with the exact per-channel light tint at the camera/player position.
 2. **R3/R4:** exact car paint (`shade_car_paint`, the paint table) and how slots 160–223 are filled.
