@@ -19,6 +19,11 @@ pub fn udiv(a: u32, b: u32) -> u32 {
     a.checked_div(b).unwrap_or(0)
 }
 
+/// `__umodsi3` (`FUN_0816a9b4`): x % 0 = 0.
+pub fn umod(a: u32, b: u32) -> u32 {
+    a.checked_rem(b).unwrap_or(0)
+}
+
 /// `__muldi3` (`FUN_0816a8b4`) on two sign-extended words: the low 64 bits of the product.
 pub fn mul64(a: i32, b: i32) -> i64 {
     (a as i64).wrapping_mul(b as i64)

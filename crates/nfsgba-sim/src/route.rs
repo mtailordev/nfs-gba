@@ -372,10 +372,14 @@ pub fn traffic_countdown(mem: &mut Mem) -> Result<()> {
         return Ok(());
     }
     if mem.u8(0x0300_6298) != 0 && mem.u8(0x0300_6240) < 4 {
+        let near = crate::world::entity(mem, mem.u32(0x0300_57F8));
         let c = mem.u8(0x0300_6264).wrapping_sub(1);
         mem.set_u8(0x0300_6264, c);
         if c == 0 {
-            return Err(Unported("FUN_08143d48 (traffic spawn)"));
+            if crate::traffic::spawn(mem, near, 1)? != NONE {
+                mem.set_u8(0x0300_6240, mem.u8(0x0300_6240).wrapping_add(1));
+            }
+            mem.set_u8(0x0300_6264, mem.u32(0x0300_6260) as u8);
         }
     }
     Ok(())

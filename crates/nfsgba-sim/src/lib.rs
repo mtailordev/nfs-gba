@@ -17,6 +17,7 @@ pub mod math;
 pub mod mem;
 pub mod route;
 pub mod sound;
+pub mod traffic;
 pub mod walls;
 pub mod world;
 
