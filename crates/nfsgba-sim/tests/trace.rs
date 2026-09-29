@@ -268,7 +268,7 @@ fn replay_matches_the_trace() {
         let mut sim = Sim::new(trace.state(0));
         let e = sim.mem.u32(W_ENTITIES);
         let start = sim.mem.vec3(e + 0xC);
-        for i in 0..trace.cars.len() - 1 {
+        for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
             let mut mem = trace.state(i);
             if let Some((entity, physics)) = &own {
                 let merged: Vec<u8> = (0..0xA4)
@@ -285,7 +285,7 @@ fn replay_matches_the_trace() {
             }
             sim = Sim::new(mem);
             car::handler(&mut sim, e).unwrap_or_else(|err| panic!("{name} step {i}: {err}"));
-            if expected[i].external {
+            if want.external {
                 // Other code changed the car before the next step: carry on from the game's state.
                 own = Some(trace.cars[i + 1].clone());
                 continue;
