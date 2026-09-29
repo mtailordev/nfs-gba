@@ -1,7 +1,7 @@
 """Which of the decompiled functions run in real play: mGBA with a breakpoint on every function entry
-(tools/coverage.lua), one emulator run per scenario, counts per scenario.
+(probe coverage.lua), one emulator run per scenario, counts per scenario.
 
-    .venv/Scripts/python.exe tools/coverage.py [SCENARIO ...]     # default: all scenarios below
+    .venv/Scripts/python.exe tools/record.py coverage [SCENARIO ...]     # default: all scenarios below
     -> $NFSGBA_DATA/out/coverage/<sha8>/coverage.csv and summary.txt
 
 Functions come from the Ghidra export (`// ==== <addr> <name>` headers in carbon_decomp.c). Scenarios are a
@@ -9,16 +9,18 @@ savestate (or power-on) plus a key plan; screenshots of each step's end land in 
 plan did what it says. Stops only its own mGBA (by PID).
 """
 import csv
-import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 from collections import defaultdict
 
-from common import ROOT, data_dir, provenance, write_if_changed
-from mgba_ctl import MGBA, canonical
+import mgba_ctl
+from common import data_dir, provenance, write_if_changed
+from mgba_ctl import canonical
+from recorders import running
+
+SESSION = "harness"
 
 # Label, plan (coverage.lua syntax). Menus need presses of at least 10 frames (docs/TOOLS.md).
 PRESS = lambda k, wait=60: f"{k}:10,none:{wait}"  # noqa: E731
@@ -59,21 +61,13 @@ def run(label, plan, work, funcs_file, timeout=900):
     out = work / f"cov-{label}.csv"
     for f in (out, work / "done.txt"):
         f.unlink(missing_ok=True)
-    env = dict(os.environ, NFSGBA_MGBA_DIR=work.as_posix(), COV_PLAN=plan, COV_FUNCS=str(funcs_file), COV_OUT=str(out))
-    rom, _ = canonical()
-    cmd = [str(MGBA), "--script", str(ROOT / "tools" / "coverage.lua")]
-    for key in ("savegamePath", "savestatePath", "screenshotPath", "patchPath", "cheatsPath"):
-        cmd += ["-C", f"{key}={work}"]
-    cmd += ["-C", "mute=1", str(rom)]
+    env = {"COV_PLAN": plan, "COV_FUNCS": str(funcs_file), "COV_OUT": str(out)}
     t = time.time()
-    p = subprocess.Popen(cmd, cwd=work, env=env)
-    try:
+    with running(SESSION, ["coverage"], env) as (_, p):
         while not (work / "done.txt").exists():
             if time.time() - t > timeout or p.poll() is not None:
                 raise RuntimeError(f"{label}: no result after {time.time() - t:.0f} s")
             time.sleep(0.5)
-    finally:
-        subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True, check=False)
     print(f"{label}: {time.time() - t:.0f} s")
     hits = defaultdict(int)
     for row in csv.reader(out.open(encoding="utf-8")):
@@ -84,8 +78,7 @@ def run(label, plan, work, funcs_file, timeout=900):
 
 def main(names):
     rom, sha8 = canonical()
-    work = data_dir() / "work" / sha8 / "harness"
-    work.mkdir(parents=True, exist_ok=True)
+    work = mgba_ctl.session_dir(SESSION)
     for ss in ("mainmenu.ss", "race.ss"):  # the reference savestates, copied so the session dir is self-contained
         shutil.copy2(data_dir() / "work" / sha8 / "mgba" / ss, work / ss)
     (work / f"{rom.stem}.sav").unlink(missing_ok=True)  # "boot" starts from a fresh save

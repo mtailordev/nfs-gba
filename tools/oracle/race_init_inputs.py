@@ -1,20 +1,16 @@
 """The race start's inputs from the previous scene (docs/engine/race-init.md): every RAM, I/O and VRAM byte that
 race_start_from_table_a reads before writing it, found by running the game's code in the function oracle with a
-read hook on a capture (tools/race_init_capture.py).
+read hook on a capture (`record.py race-init`).
 
-    .venv/Scripts/python.exe tools/race_init_inputs.py [NAME]      # default: career
+    .venv/Scripts/python.exe tools/oracle/cases.py race-init-inputs [NAME]      # default: career
 
 Prints the read-before-write ranges grouped by region, and saves them as NAME_inputs.txt next to the capture.
 """
-import sys
-from pathlib import Path
 
 import unicorn
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "oracle"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import data_dir  # noqa: E402
-from oracle import Gba  # noqa: E402
+from common import data_dir
+from oracle import Gba
 
 WORK = data_dir() / "work" / "e5298b24" / "race-init"
 
@@ -47,8 +43,8 @@ def inputs(name):
     return runs
 
 
-if __name__ == "__main__":
-    name = (sys.argv[1:] or ["career"])[0]
+def main(argv: list[str]) -> None:
+    name = (argv or ["career"])[0]
     runs = inputs(name)
     lines = [f"{a:#010x}..={b:#010x} ({b - a + 1} bytes)" for a, b in runs]
     (WORK / f"{name}_inputs.txt").write_text("\n".join(lines) + "\n")

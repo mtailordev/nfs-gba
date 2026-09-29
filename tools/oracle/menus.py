@@ -1,20 +1,17 @@
 """Oracle cases for the menu port (crates/nfsgba-formats/src/menu.rs): runs the game's own functions in unicorn
 (tools/oracle) on generated inputs and saves the cases as JSONL under $NFSGBA_DATA/work/<sha8>/menus/.
 
-    .venv/Scripts/python.exe tools/ui_menu_oracle.py [fades] [...]
+    .venv/Scripts/python.exe tools/oracle/cases.py menus [fades] [...]
 
 Each case holds the inputs and every byte the game's code changed, so the Rust tests replay them without unicorn.
 """
 import json
 import random
 import struct
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "oracle"))
-from oracle import REGS, Gba, _r, _w  # noqa: E402
+from oracle import REGS, Gba, _r, _w
 
-from common import data_dir  # noqa: E402
+from common import data_dir
 
 OUT = data_dir() / "work" / "e5298b24" / "menus2"  # menus-2 cases (menus/ keeps the first menu port's)
 BUF, TARGET = 0x0201_0000, 0x0201_0400  # scratch EWRAM for palette buffers (restored after every call)
@@ -477,5 +474,3 @@ def main(which):
         print(f"{name}: {len(cases)} cases -> {path}")
 
 
-if __name__ == "__main__":
-    main(sys.argv[1:])

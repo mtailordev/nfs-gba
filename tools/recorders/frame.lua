@@ -1,4 +1,4 @@
--- Frame probe for the race renderer, loaded next to tools/mgba_remote.lua (NFSGBA_MGBA_SCRIPTS). Writing a line
+-- Frame probe for the race renderer, loaded next to tools/mgba_remote.lua (NFSGBA_MGBA_EXTRA). Writing a line
 -- `NAME [ADDR=VALUE ...]` into probe.txt arms it. At the next start of draw_visible_sectors (IWRAM 0x030048C8,
 -- after the camera and the visible list) it first applies the optional 16-bit writes (hex; to steer the renderer
 -- into a path the data does not reach on its own), then keeps IWRAM and EWRAM; at that call's end (0x03004964) it

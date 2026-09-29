@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import trace_race  # noqa: E402
+from recorders import car as trace_race  # noqa: E402
 
 LUA = (Path(__file__).resolve().parent / "mgba_remote.lua").read_text(encoding="utf-8")
 

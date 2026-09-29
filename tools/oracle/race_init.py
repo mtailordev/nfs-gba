@@ -1,21 +1,18 @@
 """Reference states for the race start (docs/engine/race-init.md).
 
-    .venv/Scripts/python.exe tools/race_init_oracle.py            # every capture in work/<sha8>/race-init/
-    .venv/Scripts/python.exe tools/race_init_oracle.py sprint
+    .venv/Scripts/python.exe tools/oracle/cases.py race-init            # every capture in work/<sha8>/race-init/
+    .venv/Scripts/python.exe tools/oracle/cases.py race-init sprint
 
-For each NAME_pre capture (tools/race_init_capture.py) it runs the game's own race_start_from_table_a in the
+For each NAME_pre capture (`record.py race-init`) it runs the game's own race_start_from_table_a in the
 function oracle (no IRQs) and saves the result as NAME_oracle.<domain>.bin; crates/nfsgba-game/tests/race_init.rs
 compares the port with it. It also finds the number of VBlank IRQs that ran before setup_race_cars read the tick
 counter as the rand seed: the one count for which the oracle equals mGBA's NAME_post outside the IRQs' own writes
 (IRQ_WRITES), saved as NAME_seed.txt; the Rust test then compares the port with mGBA directly.
 """
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "oracle"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import data_dir  # noqa: E402
-from oracle import REGIONS, Gba  # noqa: E402
+from common import data_dir
+from oracle import REGIONS, Gba
 
 WORK = data_dir() / "work" / "e5298b24" / "race-init"
 # What the VBlank and VCount IRQs write while the race start runs (vblank_irq, the sound mix, the counters), the
@@ -78,7 +75,7 @@ def run(name):
     return len(fits) == 1
 
 
-if __name__ == "__main__":
-    names = sys.argv[1:] or sorted(p.name[:-len("_pre.wram.bin")] for p in WORK.glob("*_pre.wram.bin"))
+def main(argv: list[str]) -> None:
+    names = argv or sorted(p.name[:-len("_pre.wram.bin")] for p in WORK.glob("*_pre.wram.bin"))
     ok = all([run(n) for n in names])
     sys.exit(0 if ok else 1)

@@ -1,6 +1,6 @@
 """Oracle cases for car-step functions that no recording reaches in all their branches (docs/engine/physics.md).
 
-    .venv/Scripts/python.exe tools/trace_calls.py [COUNT]    # default 1500 cases per function
+    .venv/Scripts/python.exe tools/oracle/cases.py calls [COUNT]    # default 1500 cases per function
 
 Each function is called directly in the function oracle on real states of the recorded car traces, with random
 inputs, and vehicle-physics/calls.jsonl gets per case the function, trace, step, inputs, return value and every RAM
@@ -18,11 +18,8 @@ byte it changed, for crates/nfsgba-sim/tests/trace.rs. Seeded: reruns give the s
 import json
 import random
 import struct
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import trace_oracle as base  # noqa: E402
+import car as base
 
 TRACES = ["drive", "long", "start", "hunter", "wingman"]
 
@@ -86,7 +83,8 @@ def lap(gba, r, entities, sections):
 FUNCTIONS = {"spawn": (0x08143D48, spawn), "wingman": (0x0814078C, wingman), "lap": (0x0813F098, lap)}
 
 
-def main(count: int) -> None:
+def main(argv: list[str]) -> None:
+    count = int(argv[0]) if argv else 1500
     work = base.session()
     rng = random.Random(0x0814078C)
     lengths = {name: sum(1 for _ in base.ram_states(work, name)) for name in TRACES}
@@ -131,5 +129,3 @@ def main(count: int) -> None:
     print(f"wrote {len(cases)} cases to {out}: {sorted(seen.items())}")
 
 
-if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 1500)

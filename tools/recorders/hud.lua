@@ -1,4 +1,4 @@
--- Race HUD trace for mGBA (nightly), started by tools/ui_hud_trace.py. See docs/formats/ui.md ("HUD logic").
+-- Race HUD trace for mGBA (nightly), a probe of tools/recorders (`record.py hud`). See docs/formats/ui.md ("HUD logic").
 -- Loads savestate $NFSGBA_TRACE_STATE and records every race frame around the HUD: tag 0 at the call of
 -- hud_update in race_frame_update (0x0813aa9c), tag 1 after the sprite_screen_update that follows it
 -- (0x0813aaa8). Stops after $NFSGBA_TRACE_FRAMES frames, or 600 frames after the last HUD frame (race over),

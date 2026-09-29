@@ -1,6 +1,6 @@
 """Oracle cases for the suspension step FUN_0814de40 (docs/engine/physics.md), which no race reaches.
 
-    .venv/Scripts/python.exe tools/trace_suspension.py [COUNT]    # default 3000 cases
+    .venv/Scripts/python.exe tools/oracle/cases.py suspension [COUNT]    # default 3000 cases
 
 Runs the game's function in the function oracle (tools/oracle) on the reference race (snapshot mgba/race: mid-race,
 every car allocated) with random inputs, and writes
@@ -12,11 +12,8 @@ after the call, and every other RAM byte the call changed. Random, but seeded: r
 import json
 import random
 import struct
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "oracle"))
-from oracle import Gba, canonical, data_dir  # noqa: E402
+from oracle import Gba, canonical, data_dir
 
 FN = 0x0814DE40
 WORLD = 0x030000C0
@@ -67,7 +64,8 @@ def case(gba: Gba, rng: random.Random, entities: int, player_physics: list[int])
             "writes": writes}
 
 
-def main(count: int) -> None:
+def main(argv: list[str]) -> None:
+    count = int(argv[0]) if argv else 3000
     gba = Gba("mgba/race")
     entities = struct.unpack("<I", gba.read_base(WORLD + 0x3C, 4))[0]
     physics = [struct.unpack("<I", gba.read_base(entities + 0xA4 * k + 0x8C, 4))[0] for k in range(4)]
@@ -81,5 +79,3 @@ def main(count: int) -> None:
     print(f"wrote {count} cases to {out}")
 
 
-if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 3000)

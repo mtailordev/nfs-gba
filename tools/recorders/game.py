@@ -1,25 +1,25 @@
 """Record game-frame traces for the game loop (docs/engine/game-loop.md) and store them compactly.
 
-    .venv/Scripts/python.exe tools/game_trace.py record drive        # mGBA running with mgba_game_trace.lua
-    .venv/Scripts/python.exe tools/game_trace.py pack drive          # NAME.frames.bin -> NAME.base.bin + NAME.delta
+    .venv/Scripts/python.exe tools/record.py game record drive       # starts mGBA with the probe game.lua
+    .venv/Scripts/python.exe tools/record.py game pack drive         # NAME.frames.bin -> NAME.base.bin + NAME.delta
 
 `record` loads the scenario's savestate (copy it into the session directory first), arms
-tools/mgba_game_trace.lua for the scenario's game frames (`racing`: from the first race frame the game loop runs
+the probe game.lua for the scenario's game frames (`racing`: from the first race frame the game loop runs
 whole, i.e. after the countdown) and plays its keys. `pack` keeps the first machine state as NAME.base.bin and every later
 state as the byte runs that differ from the one before (NAME.delta: per state a u32 run count, then per run u32
 offset, u32 length and the bytes), then deletes NAME.frames.bin. A state is EWRAM, IWRAM, palette, VRAM and OAM
 (0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400 bytes). Rerunning gives identical files (the emulator is
 deterministic from the savestate).
 """
-import os
 import struct
-import sys
 import time
 
 import numpy as np
 
 import mgba_ctl
-from common import data_dir
+from recorders import running
+
+SESSION = "game-loop"
 
 STATE = 0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400
 SCENARIOS = {
@@ -55,22 +55,22 @@ SCENARIOS = {
 
 
 def session():
-    return data_dir() / "work" / "e5298b24" / (os.environ.get("NFSGBA_MGBA_SESSION") or "mgba")
+    return mgba_ctl.session_dir(SESSION)
 
 
 def record(name):
     state, arming, frames, keys, *pre = SCENARIOS[name]
-    work = session()
-    mgba_ctl.main([f"load {state}", *(pre[0] if pre else [])])
-    (work / "gtrace.tmp").write_text(f"{name} {frames} {arming}\n")
-    (work / "gtrace.tmp").replace(work / "gtrace.txt")
-    mgba_ctl.main(keys)
-    log = work / "gtrace_log.txt"
-    for _ in range(1200):
-        if log.exists() and f"recorded {name}" in log.read_text():
-            return
-        time.sleep(0.5)
-    sys.exit(f"{name}: not finished (see {log})")
+    with running(SESSION, ["game"]) as (work, _):
+        mgba_ctl.send(f"load {state}", *(pre[0] if pre else []), session=SESSION)
+        (work / "gtrace.tmp").write_text(f"{name} {frames} {arming}\n")
+        (work / "gtrace.tmp").replace(work / "gtrace.txt")
+        mgba_ctl.send(*keys, session=SESSION)
+        log = work / "gtrace_log.txt"
+        for _ in range(1200):
+            if log.exists() and f"recorded {name}" in log.read_text():
+                return
+            time.sleep(0.5)
+        raise SystemExit(f"{name}: not finished (see {log})")
 
 
 def pack(name):
@@ -95,5 +95,5 @@ def pack(name):
     print(f"{name}: {len(states)} states packed")
 
 
-if __name__ == "__main__":
-    {"record": record, "pack": pack}[sys.argv[1]](sys.argv[2])
+def main(argv: list[str]) -> None:
+    {"record": record, "pack": pack}[argv[0]](argv[1])

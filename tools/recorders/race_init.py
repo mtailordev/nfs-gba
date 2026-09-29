@@ -1,20 +1,17 @@
 """Capture machine states around the race start (docs/engine/race-init.md), in the mGBA session `race-init`.
 
-    .venv/Scripts/python.exe tools/race_init_capture.py            # every scenario
-    .venv/Scripts/python.exe tools/race_init_capture.py sprint
+    .venv/Scripts/python.exe tools/record.py race-init            # every scenario
+    .venv/Scripts/python.exe tools/record.py race-init sprint
 
-Each scenario loads a savestate, arms tools/race_init_capture.lua with its name and presses keys until the race
+Each scenario loads a savestate, arms the probe race_init.lua with its name and presses keys until the race
 starts; the Lua saves NAME_pre.<domain>.bin at the entry of race_start_from_table_a and NAME_post.<domain>.bin at
 its return. The savestates are copied into the session from the sessions that made them (listed below).
 """
-import os
 import shutil
-import sys
 import time
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import ROOT, data_dir  # noqa: E402
+import mgba_ctl
+from recorders import running
 
 SESSION = "race-init"
 # savestate (session/name), keys; "b" variants start the same race after a different menu history.
@@ -42,17 +39,19 @@ SCENARIOS = {
 
 
 def ctl(*cmds):
-    import mgba_ctl
-    mgba_ctl.main(list(cmds))
+    mgba_ctl.send(*cmds, session=SESSION)
 
 
 def run(names):
-    work = data_dir() / "work" / "e5298b24" / SESSION
-    work.mkdir(parents=True, exist_ok=True)
+    with running(SESSION, ["race_init"]) as (work, _):
+        capture(work, names)
+
+
+def capture(work, names):
     for name in names:
         src, keys = SCENARIOS[name]
         state = src.split("/")[1]
-        shutil.copyfile(data_dir() / "work" / "e5298b24" / f"{src}.ss", work / f"{state}.ss")
+        shutil.copyfile(work.parent / f"{src}.ss", work / f"{state}.ss")
         ctl(f"load {state}", "wait 2")
         (work / "raceinit.tmp").write_text(name + "\n")
         (work / "raceinit.tmp").replace(work / "raceinit.txt")
@@ -64,9 +63,5 @@ def run(names):
         print(name, "captured" if post.exists() else "NOT captured (the race did not start?)")
 
 
-if __name__ == "__main__":
-    os.environ["NFSGBA_MGBA_SESSION"] = SESSION
-    os.environ.setdefault("NFSGBA_MGBA", str(Path("E:/Games/rewrites/nfs_gba/ext/mgba-dev/mGBA.exe")))
-    os.environ.setdefault("NFSGBA_MGBA_SCRIPTS", str(ROOT / "tools" / "race_init_capture.lua"))
-    names = sys.argv[1:] or list(SCENARIOS)
-    run(names)
+def main(argv: list[str]) -> None:
+    run(argv or list(SCENARIOS))

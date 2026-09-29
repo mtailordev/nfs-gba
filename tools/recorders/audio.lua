@@ -1,4 +1,4 @@
--- LS_Play sound-engine trace for mGBA (nightly), started by tools/audio_trace.py. See docs/formats/audio.md.
+-- LS_Play sound-engine trace for mGBA (nightly), a probe of tools/recorders (`record.py audio`). See docs/formats/audio.md.
 -- Loads savestate $NFSGBA_TRACE_STATE, then records the engine around every call of the per-frame update
 -- FUN_08151b10 (called from the VBlank handler at 0x0812ac4a): tag 0 on entry, tag 1 when it has returned
 -- (0x0812ac4e). Calls into the engine's API made outside the update are logged as tag 2. Stops after

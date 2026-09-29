@@ -1,6 +1,6 @@
 """Oracle cases for the car step on perturbed real states (docs/engine/physics.md): paths no recording reaches.
 
-    .venv/Scripts/python.exe tools/trace_fuzz.py [COUNT]    # default 2000 cases
+    .venv/Scripts/python.exe tools/oracle/cases.py fuzz [COUNT]    # default 2000 cases
 
 Takes steps of the recorded car traces (vehicle-physics/<name>.ramdelta) and runs the game's car handler
 FUN_0814bd4c (or, outside hunter races, an opponent's handler FUN_0814a2a0) on them in the function oracle (as
@@ -18,13 +18,10 @@ import json
 import math
 import random
 import struct
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import trace_ai_oracle as ai  # noqa: E402
-import trace_oracle as base  # noqa: E402
-from unicorn import UC_HOOK_CODE  # noqa: E402
+import ai
+import car as base
+from unicorn import UC_HOOK_CODE
 
 TRACES = ["wall", "drive", "long", "reverse", "hunter", "tipped", "start"]
 # Opponents (handler 0x29, FUN_0814a2a0) only outside hunter races, whose AI part is not ported.
@@ -102,7 +99,8 @@ def init_cases(work, count: int, seen: dict) -> list[dict]:
     return out
 
 
-def main(count: int) -> None:
+def main(argv: list[str]) -> None:
+    count = int(argv[0]) if argv else 2000
     work = base.session()
     rng = random.Random(0x0814DBBC)
     lengths = {name: sum(1 for _ in base.ram_states(work, name)) for name in TRACES}
@@ -161,5 +159,3 @@ def main(count: int) -> None:
     print(f"wrote {len(cases)} cases to {out}; paths reached {seen}")
 
 
-if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 2000)
