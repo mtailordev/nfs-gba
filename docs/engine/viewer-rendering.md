@@ -232,3 +232,194 @@ The scripts are in the session scratchpad `vsp/`: `verify_sky.py`, `verify_s15.p
 **symbols.csv:** no new functions.
 
 **Viewer-local ROM reader:** `grid_headings` (route table `0x7F2798` → template entities `+0x2C`) lives in the viewer. It could move to `nfsgba_formats::Route` as `headings`.
+
+## Game camera, portal pass, walls and racers (viewer-geometry)
+
+This part makes the race view the game's view: the camera, the projection, what is drawn and the racers. It covers FIDELITY R8, R10, R11, R14, R15, R19, R22 and R23 in the viewer, and adds the original-resolution frame.
+
+### Modes and inputs
+
+- **Race setups** (`src/game.rs`, `RaceSetup`):
+  - `NFSGBA_DUMP=<dir/name>` loads an mGBA race dump from `$NFSGBA_DATA/work/e5298b24/`. It provides the racers' entities (`+0x0C`…`+0x88`), the cars, paints and player record, and the camera state; the reference race is `mgba/race`.
+  - `NFSGBA_ROUTE=<n>` (or R) builds a Quick Play race on a route's grid with a new profile. The player drives car 2 with its default record. The opponents are dealt by `atlas::pick_opponent_cars` from rand index `0x11` (the only index of the 256 that deals the reference race's racers; derived, not traced) and dressed by `atlas::look`.
+  - `nfsgba_formats::Route` now carries the template entities' 8.8 `positions`, `headings` (`+0x2C >> 8`) and start `sectors` (`+0x78`). `Wall::piece` exposes `+0x2A`.
+- **Game camera and free camera:** the game camera is the default in a race. G switches to the free camera (Bevy `FreeCamera`), which is a non-game mode; without a race the viewer starts in it.
+- **Original-resolution frame:** O shows the game's own frame, drawn on the CPU with `render::draw_world` into the sky layer's 240×160 index screen, over the skyline. With a dump the frame includes the cars, from the dump's `render::Scene` (entities, sector heads, matrix slots, EWRAM atlases). On a grid it shows the world alone.
+
+### Game camera (R11)
+
+`game::Chase::step` is one frame of `camera_update` (`0x08137cb0`) in the chase view (view 2). Its literals are resolved from the ROM:
+
+1. **Focal:** it eases back up to 150 by 4 per frame. The speed effect is not modelled (driver `+0x4D1`; see NOT 1:1).
+2. **Teleport:** a camera more than 1024 units from the player jumps onto it.
+3. **Look yaw** `0x03000214 = atan(player − camera)`, from the previous frame's camera position, using the IWRAM atan `0x03004470`. This is the "lag" of the reference race: the camera stands exactly 344 units behind the player (dz = 0), and the game's polynomial atan gives `atan(344, 0) = 0xFFD`, not 0x1000.
+4. **Orbit yaw** `0x03005F94` eases towards the driver's heading (`*(entity + 0x8C)`):
+   - the step is `yaw −= clamp(angle_diff(heading, yaw), ±0x600) >> 3`;
+   - it is skipped while `0x03006148` is set;
+   - the result is wrapped to ±0x4000.
+5. **Position:** `player + (sin, cos)(orbit yaw) · d` in 8.8.
+   - `d = table[view]·256 + (0x80 − focal)·0x200`. Chase: −300·256 − 22·512 = −88064, i.e. 344 units behind.
+   - The view tables are `0x7F39BC` (x, all 0), `0x7F39D4` (height, 8.8: −100, −140, −150, −115, −80, −105) and `0x7F39EC` (distance: 0, −290, −300, −150, 200, −120).
+6. **Wall push** (`FUN_08137744`): the camera is pushed out of the blocking walls of its sector to 80 units.
+7. **Camera sector** `0x03005614`:
+   - the camera position must be reachable from the previous sector (else the player's sector is taken);
+   - then the sector 72 units ahead along the look yaw (`vᵀR(look)`, `FUN_081608fc`) is taken, when found.
+8. **Matrix:** `rotation(−look)` (`FUN_08160624`: `[cos, 0, −sin, 0, 0x4000, 0, sin, 0, cos]`).
+   - Translation: `(−x >> 8, −(h >> 8) − (y_player >> 8) − 16, −z >> 8)`.
+   - Screen centre (120, 79), rectangle (0, 240, 0, 159), list entry 0 = the camera sector.
+
+**Checked:**
+- From the reference race's own state, one step leaves the camera state unchanged (`0x03005F94`, `0x03000214`, `0x030056A0`, `0x030000A4`, `0x03005614`). It gives the dump's matrix `0x030057A0` exactly (`[18, 0, 16383, 0, 16384, 0, −16383, 0, 18, −118039, −30, 64321]`) and camera sector 760.
+- A camera settled from scratch behind the dump's player (`Chase::behind`) is the same state.
+- Test: `game::tests::chase_camera_reproduces_the_race`.
+
+**Projection** (`game::GbaProjection`, a Bevy custom projection, in free mode too):
+- `sx = 120 + focal·x/(d + 1)` and `sy = 79 + focal·y/(d + 1)` on the 240×160 screen, which the window shows whole (960×640 = 4×).
+- The optical axis falls on the top-left corner of pixel (120, 79).
+- Points nearer than 64 units are clipped; depth is reversed and infinite.
+- The viewer camera is placed at the frame's eye (`game::frame_transform`).
+- Tests: `projection_matches_the_game`, `frame_transform_matches_the_render_camera`.
+
+### Portal pass and walls (R10, R8, R14, R19, R22)
+
+**Decision: the GPU draws the game's per-frame visibility, not an approximation of it.** Every frame in the game camera:
+
+1. `render::visible_sectors` runs from the camera sector. Entries whose sector `render::transform_walls` rejects (a corner deeper than 0x5FFF) are dropped, as `draw_sector` drops them.
+2. For each remaining entry, `render::setup_wall_spans` runs on that entry, and `walls_drawn` (`src/main.rs`) decides which walls of the sector the game draws through it. These are the checks of `draw_sector_walls`:
+   - material 0;
+   - open portal (flag bit 0, or the moving piece's flags);
+   - span flag 4;
+   - deferred walls beyond the 8-bit defer mask;
+   - rows outside the entry;
+
+   plus the early returns of `raster_wall_columns` (fewer than 2 column pairs, before or after clipping to the entry's pairs).
+3. The list and a 128-bit wall mask per entry go to a 32×2 `Rgba32Sint` texture that every city material reads. City vertices carry their sector and wall index (`UV_1`). A fragment is drawn only inside the span of an entry of its sector, and a wall only when that entry's mask has it.
+4. Hidden surfaces come from the depth buffer rather than the game's painter's order.
+
+**Checked:**
+- The reference frame's list is the dump's 9 entries.
+- `walls_drawn_matches_the_rasteriser`: over the chase frames of all 43 routes, 279 walls kept and 56 dropped. Each agrees with `render::raster_wall_columns` drawing that wall alone on a blank screen (opaque textures; the others are checked for "never passed to the rasteriser").
+
+**Moving pieces** (world `+0x18`, 122 walls name one; R21): all 20 captured race dumps (routes 18 and 23) have every piece at zero offsets with flags 1, so these walls are open (not drawn, not blocking).
+- `game::race_runtime` builds that state.
+- It feeds every `render` call (without it `Runtime::default()` panics on any wall that names a piece), the mesh and the camera's wall push.
+
+**Walls and flats (R8, R19):**
+- Every wall with material ≠ 0 and effective flag bit 0 clear is drawn, solid or portal; a portal wall is a step, kerb or fence over its own top..bottom.
+- Counts: 1,644 solid, 661 portal by the ROM flags, 539 in races.
+- Facing follows `setup_wall_spans`:
+  - the front (start left of end on screen) is drawn unless flag 2;
+  - the back only with flag 2 or 0x2000, as a deferred wall that the 8-bit mask drops at countdown index 8 and up;
+  - the city materials cull back faces in the shader.
+  - 12 walls have a back side and none is lost to the mask.
+- Flats use `Wall::floor_y` / `ceiling_y` (`+0x38`/`+0x3A`), both faces.
+
+**Transparent walls (R14):** textures whose first texel is 0 draw in the pairs of the 240-column grid. The shader steps u along the screen (`dpdx`) to the left edges of the fragment's pair and drops the fragment unless both texels are non-zero.
+- On route 22's start frame the rule changes 215 GBA pixels, all on the railing and the left roadside barrier.
+- In the railing region, agreement with the original frame goes from 23.00% to 23.43% exact and from 59.86% to 60.52% within one pixel. The rest of that region is the embankment behind, sampled at 4×.
+
+**Row 159 (R22):** the entries' rows are `top .. bottom` = 0..159, so the world never draws row 159.
+- The GPU shot's row 159 equals the original frame on 240/240 pixels.
+- It equals s15 on 106/106 pixels outside the HUD.
+
+**Screen spans at high resolution:** the game rounds its projected portal ends down and draws walls in 2-pixel pairs, so its surfaces meet on whole pixels. The viewer's geometry is continuous, so the span test keeps `left ..= right`.
+- Clipping walls to pairs opened a one-GBA-pixel seam at an entry edge on route 22.
+- The exclusive right edge still left a one-window-pixel hairline.
+- Both showed the backdrop.
+
+### Racers (R23)
+
+- **Dealt as the game deals them:** `RaceSetup::grid` deals cars, paints and the new-profile record (`0x7EEA33`), the far model (`+0x36`: car table `+0x14` + 1 for the player, `0x7EEA44` for opponents) and the spoiler (`+0x64`: `i16 0x7F0636[car·0x10 + record[0]]`). For route 23 all of these equal the dump's (test).
+- **Player atlas:** `atlas::player_atlas` plus the rim at angle 0 (race start). With a dump, the atlas is taken from EWRAM (entity `+0x84`).
+- **Opponents:** their raw `look` material.
+- **Models:** each racer has meshes for its near body (`+0x36 − 1`), far body (`+0x36`) and spoiler.
+  - `Racer::models_at(depth)` picks per frame as `draw_sector_entities` does:
+    - none at depth ≥ 0x2000, without a matrix slot, or beyond 0x1000 without flag bit 6;
+    - flag bit 1 forces the near body;
+    - the far body from 0x200.
+  - A racer shows only when its sector is in the drawn list.
+  - The high model is never used in a race.
+- **Poses:** with a dump, cars stand exactly as their vehicle matrix slot (world `+0xFC`) puts them relative to the game camera (pitch and roll included). On a grid they stand level on the floor fan (D2).
+- **Light tint (R15):** `apply_sector_light_to_palette` reads the player's position with the **camera** sector `0x03005614`, not a player sector. The viewer now takes that sector from the chase camera, so the tint's sector is exact in the game camera.
+
+### Pixel agreement at the reference camera
+
+Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160 grid by each GBA pixel's centre (`crates/nfsgba-viewer/diff_shots.py`).
+- **HUD boxes** (excluded where noted): (0, 0)–(96, 40), (0, 94)–(64, 160), (170, 94)–(240, 160).
+- **Original frame vs s15:** 25,716 of 25,716 non-HUD pixels equal (100.00%), the car included. Of the whole frame, 28,745 of 38,400 are equal; the rest is HUD.
+- **GPU vs original frame:** 18,745 of 38,400 equal (48.82%); 31,764 (82.72%) equal within one pixel.
+- **GPU vs s15 outside the HUD:** 12,779 of 25,716 (49.69%); 21,089 (82.01%) within one pixel.
+- **Route 22 grid start, GPU vs original frame** (cars excluded): 49.31% exact, 77.20% within one pixel.
+- **What the differences are:**
+  - Sampling the GPU shot at other points of each GBA pixel moves the exact agreement only between 47.2% and 49.8%, so there is no systematic offset.
+  - The differences are texture sampling: 4× sampling against the game's per-column and per-pair integer sampling, and 120-wide floors.
+  - Edges round 1 pixel differently.
+  - Sub-pixel surfaces appear at 4× that the 240×160 rasteriser drops, for example route 22's road-edge strip.
+  - The sky and backdrop are equal.
+
+### Not 1:1
+
+- **R10:** the depth buffer, not the painter's order, hides surfaces.
+- **High resolution (R16):**
+  - continuous edges, with spans kept at `left ..= right`;
+  - surfaces thinner than a GBA pixel can appear;
+  - textures are sampled per window pixel;
+  - floors are not 120 wide.
+
+  The original-resolution frame is the exact image.
+- **R11:**
+  - the speed effect is not modelled: with driver `+0x4D1` set, focal eases by 4 towards `150 − max(0, (0x800 − g) >> 5)`, where `g = |angle_diff(heading, atan(driver +0x11C >> 8, +0x124 >> 8))|`, the angle between heading and travel;
+  - the camera wall push takes the height limit `*0x03005778` (a smoothed `floor_height` `0x0814ca84` at the camera) as passed;
+  - the sector search's second fallback `find_sector_far` is not applied;
+  - the free camera pitches (a non-game mode).
+- **R12 in the viewer:**
+  - cars are not clipped to their portal span, and the screen-row cull is not applied;
+  - on a grid the original frame has no cars (the vehicle matrices come from `draw_vehicle` / `FUN_0814eba0`).
+- **R13 in race:** the rim is at angle 0 on a grid (the game redraws it by wheel angle); a dump's atlas is as dumped. R24 is unchanged.
+- **R14:** at high resolution a fragment keeps its own texel, and the pair test uses its row. Index 0 on car models is dropped per pixel.
+- **R21:** the runtime tables are as every captured race has them; their writers are not decoded.
+- **D2:** grid racers stand on the floor fan; the camera then sits a few units off.
+- **Grid assumptions:**
+  - the rand index `0x11` is derived, not traced (the seed `*0x03000044 & 0xFF` = 3 is 14 draws earlier; open);
+  - the draw flags are the reference race's (player 0x0D, opponents 0x22).
+
+## Integration notes (viewer-geometry)
+
+**FIDELITY.md:**
+- **R8 → Closed (viewer):** "Portal walls with flag bit 0 clear and material ≠ 0 are drawn as solid walls, and a moving piece's flags replace the wall's. 1,644 solid and 661 portal walls by the ROM flags, 539 in races. Per-entry wall visibility is exact against `render::raster_wall_columns` (279 kept and 56 dropped over all 43 routes' chase frames)."
+- **R10 → narrowed:** "The viewer draws the game's per-frame visible list: entries past `transform_walls`, clipped to their spans; per entry, the walls `draw_sector_walls`/`raster_wall_columns` draw. Open: hidden surfaces come from the depth buffer, not the painter's order."
+- **R11 → narrowed:** "Chase camera exact (`game::Chase::step` reproduces the dump's camera state and matrix `0x030057A0`); projection focal 150, centre (120, 79), `d + 1`, near 64. Open:
+  - the speed effect (driver `+0x4D1`, rule known);
+  - the wall-push height limit (`floor_height` smoothing);
+  - `find_sector_far`;
+  - integer rounding at high resolution."
+- **R14 → Closed for walls:** "Transparent walls draw in pairs of the 240-column grid (both texels non-zero). Open: car models' index 0."
+- **R15 → Closed:** "The tint's sector is the camera sector `0x03005614` (`apply_sector_light_to_palette` reads it with the player's position), taken from the chase camera. The free camera's point-in-polygon search is a non-game mode."
+- **R19 → Closed.**
+- **R22 → Closed:** "Row 159 shows the backdrop: 240/240 against the original frame, 106/106 against s15 outside the HUD."
+- **R23 → Closed:** "Racers dealt by `pick_opponent_cars`/`look` from rand index `0x11` (derived: the only index giving the reference racers). Player atlas from `atlas`, LOD models and spoiler as `draw_sector_entities`. With a dump, poses come from the vehicle matrices."
+- **New:** "High resolution: continuous edges (spans kept `left ..= right`), sub-GBA-pixel surfaces visible, textures sampled per window pixel. The original-resolution frame (`render::draw_world`) is exact: 100% of s15 outside the HUD."
+- **R21:** add "In every captured race (routes 18 and 23, 20 dumps) all 122 moving pieces are at zero offsets with flags 1 (open); the viewer uses that state (`game::race_runtime`)."
+- **New D (grid deal):** "The rand index at `pick_opponent_cars` (0x11 for the reference race) is derived, not traced; the seed `*0x03000044 & 0xFF` = 3 comes 14 draws earlier."
+
+**address-map.md:**
+- `0x03005614`: correct to "camera sector (written by `camera_update`, searched 72 units ahead of the camera; `apply_sector_light_to_palette` reads it with the player's position; 760 in the reference race)".
+- `0x03000214`: add "look yaw = `atan(player − camera)` from the previous frame's camera position (`0x03004470`); 0xFFD in the reference race, the atan's value at (344, 0)".
+- `0x03005F94`: chase orbit yaw; eases towards the driver's heading by `clamp(diff, ±0x600) >> 3` unless `0x03006148`.
+- `0x030056A0` / `0x030000A4`: camera x / z, 8.8.
+- `0x03005778`: smoothed floor height at the camera (`floor_height`), the height limit for flag-0x4000 walls in the camera wall push.
+- `0x03005FA4`: add "= view height table entry (chase −150·256)".
+- `0x7F39BC` / `0x7F39D4` / `0x7F39EC`: per-view camera x offset (all 0), height 8.8 (−100, −140, −150, −115, −80, −105) and distance (0, −290, −300, −150, 200, −120). The orbit distance is `distance·256 + (0x80 − focal)·0x200`.
+- Driver struct `+0x00`: the heading the chase camera follows (0x1000 in the reference race); `+0x11C`/`+0x124`: travel vector (speed effect; hypothesis).
+- Route template entity `+0x78`: start sector.
+- World `+0x18` in races: every piece zero, flags 1.
+
+**symbols.csv** (new rows; `atan2_fast`, `angle_diff`, `floor_height`, `find_sector_far` and `cos_q14` exist already):
+
+```
+0x08160624,rotation_y,function,3x4 matrix: rotation about y by an angle (cos 0 -sin / 0 0x4000 0 / sin 0 cos), zero translation
+0x08160668,rotation_z,function,3x4 matrix: rotation about z by an angle, zero translation
+0x081607e0,transform_point,function,out = (v · M >> 14) + translation (row vector times the 3x3, then m9..m11)
+0x081608fc,rotate_vector,function,out = v · M >> 14 (row vector times the 3x3, no translation)
+0x08137744,camera_push_out_of_walls,function,pushes the camera out to 80 units from flag-0x1000 (or low 0x4000) walls of the camera sector
+```

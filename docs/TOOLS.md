@@ -21,6 +21,10 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 | CMake | 3.31.8 | already installed, `C:\Program Files\CMake` | BSD-3-Clause | `cmake --version` | |
 | LLVM / clang | 23.1.2 | scoop `llvm`; `bin` on user PATH; user env `LIBCLANG_PATH`, `LLVM_LIB_DIR` | Apache-2.0 WITH LLVM-exception | `clang -shared t.c` inside `vcvars64.bat` -> dll | Also gives `llvm-objdump` (ARM-capable) |
 | Rust | 1.98.1 stable msvc (already installed) | rustup, `~\.cargo\bin` | MIT OR Apache-2.0 | see MSVC row | |
+| function oracle | — | `tools/oracle/oracle.py` (unicorn in `.venv`); checker `tools/oracle/rust-check` | ours (unicorn GPL-2.0) | `tools/test_oracle.py`; 93,169 cases vs the Rust ports, 0 mismatches | Calls any ROM/IWRAM function on an mGBA dump; returns registers and every changed byte; stops on unaligned access (unicorn does not rotate like the ARM7TDMI). `docs/engine/harness.md` |
+| function coverage | — | `tools/coverage.py` + `tools/coverage.lua` | ours | 4 scenarios, about 3 min | mGBA breakpoints on every function entry; `data/out/coverage/e5298b24/` |
+| ROM attribution | — | `tools/rom_attribution.py` | ours | `tools/test_rom_attribution.py` | Who owns each ROM byte |
+| notes merge | — | `tools/notes_merge.py` | ours | `tools/test_notes_merge.py` | Merges agents' `docs/engine/notes/symbols.<agent>.csv` / `addresses.<agent>.csv`; dry run unless `--write` |
 | Python venv | CPython 3.14.7; capstone 5.0.9, unicorn 2.1.4, numpy 2.5.3, pillow 12.3.0 | `uv venv .venv` in repo (gitignored); pins in `tools\requirements.txt` | BSD-3 / GPL-2.0 (unicorn) / BSD-3 / MIT-CMU | script: capstone Thumb `0x4770` -> `bx lr`; unicorn ARM `mov r0,#1` -> r0 == 1 | `capstone.__version__` reports 5.0.7 (upstream string lag); the wheel is 5.0.9 |
 | ImHex | 1.38.1 | scoop `imhex` (extras): `~\scoop\apps\imhex\current\imhex.exe` | GPL-2.0 | `imhex --version` | Hex editor with pattern language, for format RE |
 
@@ -36,6 +40,8 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 Lua API: `callbacks:add("frame", fn)`, `emu:currentFrame()`, `emu:readRegister("pc")`, `emu:read32(addr)`, standard `io` for writing trace files.
 
 **Remote control for the canonical ROM:** `python tools/mgba_ctl.py start`, then batches such as `python tools/mgba_ctl.py "hold A 10" "wait 120" "shot x" "dump x" "save x"`, then `stop`. Output goes to `$NFSGBA_DATA\work\<sha1-8>\mgba\`.
+
+**Extra emulator scripts:** `NFSGBA_MGBA_SCRIPTS=<path>` makes `mgba_ctl.py start` load more Lua next to the remote (`NFSGBA_MGBA_EXTRA` does the same from inside `mgba_remote.lua`; `tools/trace_race_rules.lua` is the race-rule tracer with an autopilot, `tools/oracle_race_rules.py` generates oracle cases). `tools/mgba_frame_probe.lua`: write `NAME [ADDR=VALUE …]` to `probe.tmp` in the session folder and rename it to `probe.txt`; it saves the renderer's inputs at the start of `draw_visible_sectors` (`NAME.iwram.bin`, `NAME.wram.bin`, `NAME.vram.bin`) and the finished page a frame later (`NAME.final.bin`), optionally after patching RAM. `emu:setBreakpoint` works on IWRAM ARM code. Physics traces: the `trace NAME [SKIP]` command logs full RAM per car step (`docs/engine/physics.md`).
 - **Menus** need presses of at least 10 frames.
 - **Route to a race from a fresh save:** A (language: English) → A → A → START → A (intro screens) → profile name (DOWN, A, START) → main menu → A (Quick Play) → A (Random) → A → A.
 - **Savestates** `mainmenu.ss` and `race.ss` are kept in the work folder.

@@ -18,16 +18,16 @@ address,name,kind,comment
 0x03000978,transform_walls,function,rotates wall points by the camera matrix and fills the wall draw buffer
 0x03000b44,clip_flat_outline,function,clips the floor/ceiling outline to the portal's columns
 0x030013ac,setup_wall_spans,function,projects wall ends and heights; wall u0/u1 and v setup
-0x03001ae4,sort_sector_entities,function,depth-sorts a sector's entity list
-0x03001cf0,draw_sector_entities,function,draws entities (vehicles) of a sector: LOD and material selection
+0x03001ae4,sort_sector_entities,function,sorts a sector's entities farthest first by (x'^2+d^2)>>8 into +0x04; runs handlers
+0x03001cf0,draw_sector_entities,function,per entity: clip span, depth/row culls, LOD +0x36-1 / +0x36, 0x1000 cut (bit 6), material, texture, body + spoiler
 0x03002084,draw_sector_walls,function,draws the sector's walls; defers span-flag-2 walls (8-bit mask)
 0x0300224c,draw_sector,function,scene: draws a sector (walls, floor, ceiling, entities) and recurses containers
 0x03002da0,draw_flat_textured,function,floor/ceiling textured pass
 0x03003180,draw_flat_fill,function,floor/ceiling solid-colour pass
-0x03003808,raster_polygon,function,textured polygon rasteriser for models
-0x03004018,transform_model_vertices,function,rotates/translates model vertices and projects them (reciprocal table)
-0x03004190,draw_model_polygons,function,per polygon: size byte, indices, backface cull, raster_polygon
-0x03004e24,collect_sector_entities,function,gathers entities of a sector for drawing
+0x03003808,raster_polygon,function,outcode, clip, edges from the top corner, spans
+0x03004018,transform_model_vertices,function,projects a model's vertices; drops the model if a vertex depth > 0x6000
+0x03004190,draw_model_polygons,function,back-face cull (cross >= 0 drawn) then raster_polygon per polygon
+0x03004e24,collect_sector_entities,function,resets the draw list and sorts the sector's (or a container's children's) entities
 0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)
 0x0816a708,__divsi3,function,libgcc signed divide (truncating; x/0 = 0)
 0x0816a7e4,__modsi3,function,libgcc signed remainder
@@ -72,7 +72,7 @@ address,name,kind,comment
 0x081378cc,camera_init,function,camera init: view 4/5, shake = 0, yaw from player
 0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre; fixed camera looking at the player (focal 150)
 0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre; chase camera: matrix, focal effect, screen centre, start sector, list entry 0
-0x0814bc30,draw_vehicle,function,(name tentative) vehicle draw; sets the horizon shift from the player's pitch in views < 2
+0x0814bc30,build_player_matrices,function,player car: builds its matrix slots (body and spoiler) each frame; sets the horizon shift from the player's pitch in views < 2
 0x08149b94,save_probe_profile,function,boot: read EEPROM slot, checksum+version 9, copy name and language
 0x08149d84,save_load_profile,function,read EEPROM, checksum, decode (save_decode) and rebuild unlocks
 0x08149fd8,save_write_profile,function,encode (save_encode) and write 64 EEPROM blocks
@@ -261,7 +261,7 @@ address,name,kind,comment
 0x08145ca8,car_walls,function,wall test at the point ahead of the car; scrape/crash sounds
 0x081459b8,car_wall_search,function,walls of a sector; recursing once through open portals
 0x081457b8,car_wall_response,function,wall impulse with clamped restitution; side flags; hunter hit
-0x0814136c,hunter_wall_hit,function,hunter races: wall impulse costs hunter life (physics +0x4E8)
+0x0814136c,hunter_wall_hit,function,hunter races: wall impulse costs hunter life (physics +0x4E8) (= career::hunter_drain(.., 0, ..))
 0x0813b5a0,break_wall,function,a breakable dynamic wall and its partner (0x087F3CDA) lose the solid flag
 0x08141284,traffic_wall_hit,function,clears 0x030061F0 (non-racer hitting a wall)
 0x081410a8,is_non_racer,function,entity index > opponent count
@@ -294,7 +294,7 @@ address,name,kind,comment
 0x0813e93c,route_along_line,function,how far along its waypoint line a car is
 0x0814032c,car_route_progress,function,a car's distance along the route (physics +0xAC)
 0x0813f234,route_track_segment,function,main route / side segment switching by sector (0x087F37D8)
-0x0813edd8,route_track_waypoint,function,waypoint advance; wrong-way counter physics +0x4EC
+0x0813edd8,route_track_waypoint,function,waypoint advance; wrong-way counter physics +0x4EC; also arms the lap (driver +0x4D8 bit 1) on lap segments 1-9 and in branches
 0x0813ebac,route_gap,function,time gap to the neighbouring car (0x0300615C)
 0x081402bc,route_lateral,function,signed distance across the route at the car's waypoint
 0x08140274,nearest_lane,function,nearest of the 4 lane offsets 0x087F4120
@@ -313,3 +313,53 @@ address,name,kind,comment
 0x08137534,free_entity,function,first entity from world +0xF8 (+0xFA of them) whose flag bit 0 is clear
 0x03004470,atan2_fast,function,IWRAM ARM: atan2 via recip_div_16 (divisor clamped to 0x7FFE)
 0x03000220,iwram_divmod,function,IWRAM ARM: signed divide storing a remainder; negative divisors divide by -|a|
+0x0300514c,polygon_outcode,function,model polygon outcode: 4 if no corner inside in x or none in y; bit 0/1 outside in x/y
+0x03003d70,clip_polygon,function,Sutherland-Hodgman of a model polygon against the view rect (x then y), halfword results
+0x03003acc,clip_polygon_edge,function,clips one edge to lo..=hi on x or y with u/v; 1 visible, 2 start clipped, 4 end clipped
+0x03005320,polygon_top_corner,function,first corner with the least y
+0x03003464,polygon_edge_back,function,next polygon edge walking corners backwards: 16.16 x, u/v steps per row
+0x03003634,polygon_edge_forward,function,next polygon edge walking corners forwards
+0x030051f4,draw_polygon_span,function,textured model span: texel pointer stepped by du/dv with 8-bit fraction carries, no wrap
+0x0814eba0,assign_entity_slot,function,gives an entity drawn last frame a matrix slot (counter 0x03005394) and builds it; clears +0x0A bit 2
+0x0814da68,build_entity_matrix,function,slot matrix: rot(+0x30) * camera * rot(+0x32) (or physics matrix, bit 5) + camera-space position; only if +0x0A bit 1 or depth <= 0xDAC
+0x0814ec0c,assign_billboard_slot,function,(name tentative) slot with the camera rotation and the camera-space position
+0x0814e628,opponent_effects,function,(name tentative) rear effect sprites of a car via FUN_0814e414
+0x0814e7b0,spawn_effect_sprite,function,(name tentative) projects a point and allocates a scaled sprite object (FUN_08162048)
+0x08165134,iwram_divmod_rom,function,ROM copy of IWRAM 0x03000220 (iwram_divmod)
+0x03000298,copy32,function,ARM copy of n>>5 32-byte blocks (ldm/stm); used by obj_upload_tiles
+0x081651ac,copy32_rom,function,ROM copy of IWRAM 0x03000298 (copy32)
+0x03004b98,minimap_window_copy,function,ARM: 64x64 window of the 4bpp map into 64 OBJ tiles; byte shift with masks 0x087F5CE8
+0x08169aac,minimap_window_copy_rom,function,ROM copy of IWRAM 0x03004b98 (minimap_window_copy)
+0x08142094,hud_reset_mode0,function,objects 0/14 frame = language; 32 = language+1 in km/h; hides message element 46 (modes 0/1)
+0x081420d0,hud_reset_mode3,function,as hud_reset_mode0 (mode 3)
+0x0814210c,hud_reset_mode2,function,as hud_reset_mode0 but hides message element 54 (mode 2)
+0x08142674,hud_hunter_bars,function,hunter mode: two bar objects per racer from hunter life (driver +0x4E8)
+0x0814279c,hud_countdown_timer,function,(not called by the HUD modes) countdown *0x03006154 - race time; race state 7 at zero
+0x08142aac,hud_best_lap,function,(tentative; not called by the HUD modes) best lap driver +0xB4 or the profile record time as digits
+0x08142e44,hud_message_cancel,function,stops a message and hides its element
+0x08143010,hud_toggle,function,1: hud_reset; else hides every object; then hud_message_hide (pause 0 / continue 1)
+0x0814305c,hud_message_show_default,function,hud_message_show(msg, time, 0)
+0x081430f0,hud_message_show_player,function,hud_message_show(msg, time, 0) when the entity is the player (*0x03000060)
+0x0814310c,hud_message_force_player,function,hud_message_show(msg, time, 1) when the entity is the player
+0x08143128,hud_message2_player,function,hud_message_show(2, time, 0) when the entity is the player
+0x08143094,hud_units_frame,function,(tentative; not called by the HUD modes) a units panel frame by language
+0x08143248,hud_message_entry,function,message table entry: 0x087F437D (modes 0/1) / 0x087F43FD (2) / 0x087F43BD (3) + 4*msg
+0x08161a34,obj_tile_address,function,0x06010000 + 32*(tile + *0x030064E0) when DISPCNT OBJ 1-D mapping; else 0
+0x0816165c,obj_palette_write,function,copies n colours to OBJ palette RAM from index k (-1 when out of range)
+0x08160624,rotation_y,function,3x4 matrix: rotation about y by an angle (cos 0 -sin / 0 0x4000 0 / sin 0 cos), zero translation
+0x08160668,rotation_z,function,3x4 matrix: rotation about z by an angle, zero translation
+0x081607e0,transform_point,function,out = (v · M >> 14) + translation (row vector times the 3x3, then m9..m11)
+0x081608fc,rotate_vector,function,out = v · M >> 14 (row vector times the 3x3, no translation)
+0x08137744,camera_push_out_of_walls,function,pushes the camera out to 80 units from flag-0x1000 (or low 0x4000) walls of the camera sector
+0x0814d078,ai_drive,function,AI driver: stuck/respawn checks, racing-line advance 0x0814D21C..0x0814D3AA (arms the lap; shortcuts by rand vs 0x087BFCD4[difficulty]), then steering
+0x0813f008,racer_finish,function,racer finishes: +0xBC = lap start, result time 0x03005670+4*id, +0x4A = 2; elimination quirk on the camera car
+0x0813ea04,update_places,function,places: 1 + racers ahead on progress (ties by index) or finished, knocked-out cars ignored; 0x03000048 == 9 keeps entity order
+0x081390b0,sprint_line,function,sprints: lapped flag 0, racing line one slot up with extrapolated end points, counts and links adjusted
+0x081391f4,rebuild_line_links,function,clears the route's links and relinks each branch's ends to the nearest point of the other sections
+0x08138f30,build_line_planes,function,plane table *0x03005FB4 (0x20 per waypoint) and back table *0x03005FB8 for the lap, then branches
+0x08138dc4,build_branch_planes,function,planes of a branch forked into from a lap point (recursive); back[branch] = fork index
+0x08138c24,line_plane_row,function,one plane row from four waypoints: direction, slopes, crossing-line normal and offset, length
+0x0812e8e4,rank_results,function,bubble-sorts the ranked results 0x03005730 by time (key 1), byte +0xC (2) or life (4)
+0x0812e860,swap_result_rows,function,swaps two slots of every array of the ranked results 0x03005730
+0x0812eaac,fill_results,function,(tentative) copies hunter life, times (finish estimate if 0) and best laps into the results 0x03005650
+0x081413b0,hunter_drain_b,function,hunter life -= *0x030061A0 * amount >> 8 unless finished; clears physics +0x4F0 (called from FUN_08145dac)
