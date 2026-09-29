@@ -53,6 +53,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **ai-traffic:** D4's AI part: opponent handler 0x29 and traffic handler 0x36, trace-exact. Owns new `nfsgba-sim` modules (`ai.rs`, `traffic_ai.rs`), `docs/engine/ai.md`.
 - **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
 - **menus:** U3/U4: the top-level state machine and every menu screen, oracle-first. Owns `ui.rs`, `menu.rs`, `docs/formats/ui.md`, `tools/ui_*`, `docs/engine/notes/*.menus.csv`.
+- **game-loop:** new crate `nfsgba-game`: one exact game frame (main_frame order, IRQs) composing sim, render, paint, sky, hud and audio; a drivable race from a dump in the viewer (`NFSGBA_PLAY=1`), verified frame by frame against a recorded mGBA input run. Owns `crates/nfsgba-game`, `crates/nfsgba-viewer`, `docs/engine/game-loop.md`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
