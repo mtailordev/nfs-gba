@@ -69,7 +69,8 @@ A race from the ROM alone needs the boot and menu code that produce these fields
 
 `race_start` returns the race's typed `World` (`nfsgba-game/src/world.rs`), which `Game` runs on. The heap arena is the
 one byte image left (`World::heap`, R24): the start allocates in it as the game's heap does and writes what lies around
-the atlases and rim buffers; the level's other blocks are typed in the `World` and hold zeros there.
+the atlases and rim buffers, then stores the typed blocks' declared fields in it (the entities, pieces, tables, sprite
+screen); their undeclared bytes are zero there (checked: every level block equals the game's but 18 to 128 bytes).
 
 ## Timing
 

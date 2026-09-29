@@ -10,8 +10,9 @@
 //!
 //! NOT 1:1 (R24): one byte image remains, the heap arena (`World::heap`): the start allocates in it exactly as the
 //! game's heap does (the node table the menus left decides where the atlases land) and writes what lies around the
-//! atlases and rim buffers (the freed decoder rings and material buffers, the level's 4 KiB table). The level's
-//! other blocks are typed in the `World` and hold zeros here.
+//! atlases and rim buffers (the freed decoder rings and material buffers, the level's 4 KiB table, and the typed
+//! blocks' declared fields); a block's undeclared bytes are zero there (18 to 128 bytes in the entity, waypoint and
+//! older blocks, none next to an atlas).
 
 use nfsgba_formats::{
     atlas,
@@ -120,8 +121,8 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
     let sector = |k: u32| sectors_at + 0x30 * k;
     let with_offsets: Vec<u32> = (0..n_sectors).filter(|&k| m.u16(sector(k) + 0xA) != 0xFFFF).collect();
     let alloc = |m: &mut Mem, size: u32| heap::alloc_zeroed(m, size);
-    alloc(&mut m, with_offsets.len() as u32 * 0x14);
-    alloc(&mut m, (pieces_at.len() as u32) << 5);
+    let at_offsets = alloc(&mut m, with_offsets.len() as u32 * 0x14);
+    let at_pieces = alloc(&mut m, (pieces_at.len() as u32) << 5);
     // FUN_08138b80: the moving pieces get the wall's flags; the sector offsets the sector's flags and plane.
     let pieces: Vec<Piece> = pieces_at
         .iter()
@@ -143,18 +144,18 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
         })
         .collect();
     alloc(&mut m, n_materials << 3);
-    alloc(&mut m, n_sectors << 1);
-    alloc(&mut m, (n_entities + 0x20) * 0xA4);
-    alloc(&mut m, 0x50);
-    alloc(&mut m, 0x1800);
+    let at_heads = alloc(&mut m, n_sectors << 1);
+    let at_entities = alloc(&mut m, (n_entities + 0x20) * 0xA4);
+    let at_sections = alloc(&mut m, 0x50);
+    let at_line = alloc(&mut m, 0x1800);
     let sprint = mode == 3;
     let route = build_route(&m, rom, route_at, &mut g, sprint)?;
     alloc(&mut m, 0x1A00);
     alloc(&mut m, 0x400);
     heap::alloc(&mut m, 0x2000);
     alloc(&mut m, 0x780);
-    alloc(&mut m, 0x2000);
-    alloc(&mut m, 0x400);
+    let at_planes = alloc(&mut m, 0x2000);
+    let at_back = alloc(&mut m, 0x400);
 
     // race_load_palettes: the city palette, the view, the level's 4 KiB table (copied), the matrix slots.
     let mut palette: Vec<u16> = {
@@ -266,7 +267,7 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
     let bank = ui::sprite_bank(rom, (level - 0x0800_0000) as usize);
     let count = bank.screens[w.hud.screen as usize].count;
     oam_hide(&mut oam, 0, 0x37);
-    heap::alloc_zeroed(&mut m, 0x370);
+    let at_objects = heap::alloc_zeroed(&mut m, 0x370);
     let listed = m.u16(m.u32(level + 0x2C) + w.hud.screen as u32 * 8 + 6) as usize;
     w.hud.objects = vec![Object::default(); view::hud::OBJECTS as usize];
     for o in w.hud.objects.iter_mut().take(listed.min(0x37)) {
@@ -341,7 +342,7 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
     // The effect sprites, the glass colour of the player's car, the car palettes again.
     w.pool = vec![Sprite::default(); 0x20];
     w.pool_first = 0x7F;
-    heap::alloc_zeroed(&mut m, 0x20 * 0x14);
+    let at_pool = heap::alloc_zeroed(&mut m, 0x20 * 0x14);
     w.paints[0] = w.records[w.slots[0].e.car as usize].glass as i8;
     load_car_palettes(rom, &mut palette, &w);
     w.palette_fade = palette.clone();
@@ -386,6 +387,51 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
     traffic_init(&m, &mut w);
     if w.g.u_5388 != 0 {
         moving_pieces_init(&m, &mut w, walls_base, n_walls);
+    }
+    // NOT 1:1 (R24): the typed blocks' declared fields into the arena, where they lie next to the atlases and the
+    // rim buffers (the block before an atlas is a table or the sprite screen). Undeclared bytes stay zero.
+    for (k, o) in w.offsets.iter().enumerate() {
+        o.store(&mut m, at_offsets + 0x14 * k as u32);
+    }
+    for (k, p) in w.pieces.iter().enumerate() {
+        p.store(&mut m, at_pieces + 0x20 * k as u32);
+        m.set_i16(at_pieces + 0x20 * k as u32 + 0x16, w.piece_kind[k]);
+    }
+    for (k, &h) in w.heads.iter().enumerate() {
+        m.set_u16(at_heads + 2 * k as u32, h);
+    }
+    for (k, sl) in w.slots.iter().enumerate() {
+        sl.e.store(&mut m, at_entities + 0xA4 * k as u32);
+    }
+    for (k, sec) in w.route.line.sections.iter().enumerate() {
+        let rec = SectionRec {
+            count: sec.count,
+            flags: sec.flags,
+            first: sec.first,
+        };
+        rec.store(&mut m, at_sections + 8 * k as u32);
+    }
+    for (k, (p, x)) in w.route.line.points.iter().zip(&w.route.extra).enumerate() {
+        let rec = WaypointRec {
+            x: p.x,
+            z: p.z,
+            heading: x.heading,
+            link_section: p.link_section,
+            link_index: p.link_index,
+            distance: p.distance,
+            sector: x.sector,
+        };
+        rec.store(&mut m, at_line + 0x18 * k as u32);
+    }
+    for (k, plane) in w.route.planes.iter().enumerate() {
+        plane.store(&mut m, at_planes + 0x20 * k as u32);
+    }
+    w.route.back.store(&mut m, at_back);
+    for (k, o) in w.hud.objects.iter().enumerate() {
+        o.store(&mut m, at_objects + 0x10 * k as u32);
+    }
+    for (k, sp) in w.pool.iter().enumerate() {
+        sp.store(&mut m, at_pool + 0x14 * k as u32);
     }
     w.heap = m.ewram;
     Ok(w)
