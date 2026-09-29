@@ -46,7 +46,7 @@ pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
                 m.set_u32(0x0300_57D0, index);
             }
         }
-        0 => return Err(Unported("FUN_0814b98c (car init)")),
+        0 => crate::init::car_init(sim, e)?,
         0x100 => racing_step(sim, e)?,
         _ => {}
     }

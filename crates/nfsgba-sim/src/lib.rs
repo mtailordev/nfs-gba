@@ -11,6 +11,8 @@
 pub mod body;
 pub mod car;
 pub mod contact;
+pub mod heap;
+pub mod init;
 pub mod math;
 pub mod mem;
 pub mod route;

@@ -31,11 +31,20 @@ impl Mem {
         }
     }
 
-    fn slot_mut(&mut self, addr: u32) -> (&mut [u8], usize) {
+    /// Writes below EWRAM (BIOS, unmapped) are ignored, as on the GBA; the game does write there through null
+    /// pointers.
+    fn slot_mut(&mut self, addr: u32) -> Option<(&mut [u8], usize)> {
         match addr >> 24 {
-            0x02 => (&mut self.ewram, (addr & 0x3_FFFF) as usize),
-            0x03 => (&mut self.iwram, (addr & 0x7FFF) as usize),
+            0x00 | 0x01 => None,
+            0x02 => Some((&mut self.ewram, (addr & 0x3_FFFF) as usize)),
+            0x03 => Some((&mut self.iwram, (addr & 0x7FFF) as usize)),
             _ => panic!("write to non-RAM address {addr:#010x}"),
+        }
+    }
+
+    fn write(&mut self, addr: u32, bytes: &[u8]) {
+        if let Some((m, o)) = self.slot_mut(addr) {
+            m[o..o + bytes.len()].copy_from_slice(bytes);
         }
     }
 
@@ -62,19 +71,16 @@ impl Mem {
     }
 
     pub fn set_u8(&mut self, addr: u32, v: u8) {
-        let (m, o) = self.slot_mut(addr);
-        m[o] = v;
+        self.write(addr, &[v]);
     }
     pub fn set_u16(&mut self, addr: u32, v: u16) {
-        let (m, o) = self.slot_mut(addr);
-        m[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        self.write(addr, &v.to_le_bytes());
     }
     pub fn set_i16(&mut self, addr: u32, v: i16) {
         self.set_u16(addr, v as u16);
     }
     pub fn set_u32(&mut self, addr: u32, v: u32) {
-        let (m, o) = self.slot_mut(addr);
-        m[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        self.write(addr, &v.to_le_bytes());
     }
     pub fn set_i32(&mut self, addr: u32, v: i32) {
         self.set_u32(addr, v as u32);
@@ -95,7 +101,6 @@ impl Mem {
         &m[o..o + len]
     }
     pub fn set_bytes(&mut self, addr: u32, data: &[u8]) {
-        let (m, o) = self.slot_mut(addr);
-        m[o..o + data.len()].copy_from_slice(data);
+        self.write(addr, data);
     }
 }
