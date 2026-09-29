@@ -335,8 +335,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005FA4` | camera height offset (8.8) = the view's height table entry (chase −150·256) |
 | `0x03005FB0` | camera: -1 at camera_init (4) |
 | `0x03005FB4` | pointer to the plane table (malloc 0x2000; 0x20 per waypoint: direction, widening, crossing plane, length); built with the lapped flag the previous scene left, so skipped rows keep old contents |
-| `0x03005FB8` | pointer to the back table (256 × i32: lap index where a branch leaves; −1 none) |
-| `0x03005FB8` | pointer to the backward-step table for branch starts (`racing_line_step`) |
+| `0x03005FB8` | pointer to the back table (256 × i32: lap index where a branch leaves; −1 none), used by `racing_line_step` for backward steps from a branch start |
 | `0x03005FD0` | +0x0A = 0 and +0x0C = 8 at race start (meaning unknown) (0x10) |
 | `0x03005FEC` | i8 paint per racer ([0] = player record `[6]`, also at `0x030000B8`) |
 | `0x03006000` | 5 words: the player's upgrade totals; `+0x10` nitro level × 10 |

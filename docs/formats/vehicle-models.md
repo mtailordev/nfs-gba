@@ -49,7 +49,7 @@
 - **Texel pointer:** world `+0x04` (record `+0x0C` = `0x370550`) + material `+0x08`. Most materials are **BIOS-LZ77 blobs** (size = w×h + 8), which the game unpacks to RAM (entity `+0x84`). The 36 materials of 128×100 are not LZ77 (format unknown).
 - **Material sizes:** 0 is 16×16; **1–45 are the car atlases (256×200)**; 46–60 are 40×40; the rest are odd sizes (decals? UI?).
 - **Atlas colours:** atlases use indices 0–31. The game loads pixel `i` into palette slot `192 + (i ^ 16)` (verified against the race RAM). So atlas 0–15 is the **body**: a paint ramp that the game **generates at runtime** from the chosen colour (the reference race's red ramp is in no ROM table). Atlas 16–31 holds glass, lights and trim.
-- **Paint presets:** `0x7E6EEC` holds 20 × 0x80-byte entries whose first 32 colours have the same layout (entries 16–31 paint, 0–15 trim). **Hypothesis:** paint-shop presets. The viewer uses them as stand-ins.
+- ~~Paint presets at `0x7E6EEC`~~ **Corrected:** those are 19 portrait palettes (64 colours each) for menu materials 0x40–0x52 ([ui.md](ui.md)). Car colours come from the paint ramps at `0x36C95C` ([car-paint.md](car-paint.md)); the old `paint_palettes`/`car_palette` stand-ins are removed.
 - **UVs:** `u16 u, u16 v` in **1.15 fixed point, 32,768 = the whole texture**. **Verified:** the Cobalt's polygon UVs, drawn over its atlas, land on the top, front, rear and side views.
 - **Choosing a material:** `FUN_03001cf0` computes it per entity: `world[9] + (entity[+0x48] + optional LOD step + entity[+0x46] + entity[+0x44] >> 8) × 0x24`.
 

@@ -164,20 +164,6 @@ pub fn vehicle_textures(rom: &[u8]) -> Vec<Texture> {
         .collect()
 }
 
-/// The 20 paint presets at `0x7E6EEC` (0x80 apart), as 32-colour RGBA palettes indexed by atlas pixel value.
-/// The game loads a car's atlas pixel `i` as colour `i ^ 16`: 0..15 are the body (paint ramp, preset entries
-/// 16..31), 16..31 glass, lights and trim (entries 0..15). In a race the paint ramp is generated at runtime
-/// from the chosen colour, so these presets are only a stand-in (hypothesis: paint-shop presets).
-pub fn paint_palettes(rom: &[u8]) -> Vec<Vec<[u8; 4]>> {
-    (0..20)
-        .map(|k| {
-            (0..32)
-                .map(|i| bgr555(u16_at(rom, 0x7E_6EEC + 0x80 * k + 2 * (i ^ 16))))
-                .collect()
-        })
-        .collect()
-}
-
 /// A race route from the route table at `0x7F2798` (0x14-byte records, read by `FUN_08139454`):
 /// `+0x00` four template entities (0xA4 bytes each: `+0x0C/+0x10/+0x14` 8.8 position, `+0x2C` 8.8 heading, `+0x78`
 /// start sector; `race_spawn_template_entities` copies them into the entity array), `+0x04` the racing-line
@@ -283,30 +269,6 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
             }
         })
         .collect()
-}
-
-/// A car palette for atlas pixels 0..31: the body ramp generated from `paint` (0..31 per channel, BGR555 scale)
-/// and the trim (glass, lights) from paint preset `trim_preset`.
-///
-/// The game builds the body ramp at runtime from the chosen colour. This reconstruction reproduces the ramp in
-/// the reference race's RAM (red Cobalt): pixel 0 dark grey, 1..8 highlights blending from ~52% towards white
-/// down to ~16%, 9 the paint itself, 10..15 fading to black. The generator itself is not decoded.
-pub fn car_palette(rom: &[u8], paint: [u8; 3], trim_preset: usize) -> Vec<[u8; 4]> {
-    let shade = |c: [f32; 3]| {
-        let [r, g, b] = c.map(|v| (v.clamp(0.0, 31.0).round() as u16).min(31));
-        bgr555(r | g << 5 | b << 10)
-    };
-    let base = paint.map(f32::from);
-    let body = (0..16).map(|i| match i {
-        0 => shade([4.0; 3]),
-        1..=8 => {
-            let t = 0.52 - (i - 1) as f32 * 0.052;
-            shade(base.map(|c| c + (31.0 - c) * t))
-        }
-        _ => shade(base.map(|c| c * (15 - i) as f32 / 6.0)),
-    });
-    let trim = paint_palettes(rom)[trim_preset][16..].to_vec();
-    body.chain(trim).collect()
 }
 
 /// One edge of a sector: from this wall's point to the next wall's point (the last wraps to the first).
