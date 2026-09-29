@@ -304,3 +304,88 @@ fn replay_matches_the_trace() {
         );
     }
 }
+
+/// Real steps with the car given extreme speeds (`tools/trace_fuzz.py`): the game's own step, run in the function
+/// oracle, reaches paths no recording does (`find_sector_far`, the push-back when the car leaves every sector). The
+/// port must write the same RAM bytes and make the same sound calls.
+#[test]
+fn perturbed_steps_match_the_oracle() {
+    let Some(dir) = trace_dir() else {
+        eprintln!("traces not found; skipped");
+        return;
+    };
+    let Ok(text) = fs::read_to_string(dir.join("fuzz.jsonl")) else {
+        eprintln!("fuzz cases not found (tools/trace_fuzz.py); skipped");
+        return;
+    };
+    let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let mut traces: HashMap<String, Trace> = HashMap::new();
+    let (mut failures, mut paths) = (Vec::new(), HashMap::<String, usize>::new());
+    for (n, c) in cases.iter().enumerate() {
+        let name = c["trace"].as_str().unwrap();
+        let trace = traces
+            .entry(name.to_owned())
+            .or_insert_with(|| load(&dir, name).expect("trace"));
+        let mut mem = trace.state(c["step"].as_u64().unwrap() as usize);
+        for p in c["patch"].as_array().unwrap() {
+            mem.set_bytes(p[0].as_u64().unwrap() as u32, &hex(p[1].as_str().unwrap()));
+        }
+        let mut sim = Sim::new(mem);
+        let index = c["entity"].as_u64().unwrap_or(0) as u32;
+        let e = sim.mem.u32(W_ENTITIES) + 0xA4 * index;
+        let before = sim.mem.clone();
+        // The player's car handler, or the opponent handler (0x29) with its 2D-effects call.
+        let result = if index == 0 {
+            car::handler(&mut sim, e).map(|()| None)
+        } else {
+            nfsgba_sim::ai::handler(&mut sim, e)
+                .map(|fx| fx.map(|f| format!("effects({},{},{},{})", f.entity, f.heading, f.view, f.size)))
+        };
+        let fx = match result {
+            Ok(fx) => fx,
+            Err(err) => {
+                failures.push(format!("case {n}: {err}"));
+                continue;
+            }
+        };
+        let (writes, mut sounds) = effects(&before, &sim);
+        sounds.extend(fx);
+        let want: Vec<(u32, u8)> = c["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                let (a, v) = w.as_str().unwrap().split_once('=').unwrap();
+                (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
+            })
+            .collect();
+        let want_sounds: Vec<String> = c["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect();
+        let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
+        let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
+        if !extra.is_empty() || !missing.is_empty() || sounds != want_sounds {
+            failures.push(format!(
+                "case {n} ({name} step {}, paths {:?}): extra {extra:x?} missing {missing:x?} sounds {sounds:?} want {want_sounds:?}",
+                c["step"], c["paths"]
+            ));
+        }
+        for path in c["paths"].as_array().unwrap() {
+            *paths.entry(path.as_str().unwrap().to_owned()).or_default() += 1;
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures[..failures.len().min(10)].join("\n")
+    );
+    eprintln!(
+        "perturbed steps: {} oracle cases exact; paths reached {paths:?}",
+        cases.len()
+    );
+}

@@ -901,13 +901,12 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     let (y, sector) = (m.i32(e + 0x10) >> 8, m.u16(e + 0x78) as u32);
     crate::walls::walls(sim, e, x, z, y, sector, false)?;
     let m = &mut sim.mem;
+    let start = m.vec3(e + 0xC);
     body::integrate(m, b, dt << 1);
     let rot: [i32; 9] = std::array::from_fn(|k| m.i32(p + 0x128 + 4 * k as u32));
     let offset = mat_mul([0, m.i32(p + 0x43C), m.i32(p + 0x440)], &rot);
     m.set_vec3(e + 0xC, sub(m.vec3(p + 0xD0), offset));
     m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    // With no sector found the game halves the move up to 6 times (the push-back loop); `find_sector` stops first
-    // (`find_sector_far` is not ported), so that loop is never reached here.
     let s = world::find_sector(
         m,
         m.u16(e + 0x78) as u32,
@@ -916,6 +915,28 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.i32(e + 0x14),
     )?;
     m.set_u16(e + 0x78, s as u16);
+    if s & 0xFFFF == NONE {
+        // Out of every sector: halve the move up to 6 times, searching from the sector the step started in; if all
+        // fail, back to that sector. Unlike the player's step there is no pull-back. The body position follows.
+        let mut mv = sub(m.vec3(e + 0xC), start);
+        let mut found = false;
+        for _ in 0..6 {
+            mv = crate::math::scale(mv, 0x800);
+            m.set_u16(W_QUERY_SECTOR, old_sector);
+            m.set_u16(e + 0x78, old_sector);
+            m.set_vec3(e + 0xC, crate::math::add(mv, start));
+            let s = world::find_sector(m, old_sector as u32, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
+            m.set_u16(e + 0x78, s as u16);
+            if s & 0xFFFF != NONE {
+                found = true;
+                break;
+            }
+        }
+        if !found && m.u16(e + 0x78) as u32 == NONE {
+            m.set_u16(e + 0x78, old_sector);
+        }
+        m.set_vec3(p + 0xD0, crate::math::add(m.vec3(e + 0xC), offset));
+    }
     if m.u16(e + 8) & 4 != 0 {
         crate::walls::racers(sim, e, dt)?;
     }

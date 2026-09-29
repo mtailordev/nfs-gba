@@ -15,7 +15,7 @@ use crate::route;
 use crate::sound::Command;
 use crate::walls;
 use crate::world::{self, AUTOMATIC, DT, INPUT, NONE, PLAYER, PROFILE, RACE_PHASE, W_SEGMENTS, WORLD, control, entity};
-use crate::{Result, Sim, Unported};
+use crate::{Result, Sim};
 use nfsgba_formats::career::{self, Race, Racer};
 
 /// Handling records (0x158 bytes), one per car: `+0x54` top gear, `+0x68` idle rpm, `+0x11C` drag,
@@ -577,6 +577,7 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     m.set_u32(p + 0x448, m.u32(p + 0x448) & 8);
     walls::collide(sim, e)?;
     let m = &mut sim.mem;
+    let start = m.vec3(e + 0xC);
     body::integrate(m, b, dt);
     body::integrate(m, b, dt);
 
@@ -590,7 +591,26 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let s = world::find_sector(m, sector, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
     m.set_u16(e + 0x78, s as u16);
     if s as u16 as u32 == NONE {
-        return Err(Unported("car outside every sector: the push-back loop at 0x0813DF98"));
+        // Out of every sector (0x0813DF98): halve the step's move up to 6 times, searching from the sector the
+        // step started in, then pull the car back 0x6400 along the move and rebuild the body position.
+        let mut mv = sub(m.vec3(e + 0xC), start);
+        for _ in 0..6 {
+            mv = scale(mv, 0x800);
+            m.set_u16(WORLD + 0xEA, old_sector);
+            m.set_u16(e + 0x78, old_sector);
+            m.set_vec3(e + 0xC, crate::math::add(mv, start));
+            let s = world::find_sector(m, old_sector as u32, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
+            m.set_u16(e + 0x78, s as u16);
+            if s as u16 as u32 != NONE {
+                break;
+            }
+        }
+        normalize(m, &mut mv);
+        m.set_vec3(e + 0xC, sub(m.vec3(e + 0xC), scale(mv, 0x6400)));
+        m.set_vec3(p + 0xD0, crate::math::add(m.vec3(e + 0xC), offset));
+        if m.u16(e + 0x78) as u32 == NONE {
+            m.set_u16(e + 0x78, old_sector);
+        }
     }
 
     // "Drag": the game scales the vector in the stack slot that held the normalised velocity, but by now

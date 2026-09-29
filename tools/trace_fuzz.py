@@ -1,0 +1,101 @@
+"""Oracle cases for the car step on perturbed real states (docs/engine/physics.md): paths no recording reaches.
+
+    .venv/Scripts/python.exe tools/trace_fuzz.py [COUNT]    # default 2000 cases
+
+Takes steps of the recorded car traces (vehicle-physics/<name>.ramdelta), gives the player's car a random body
+velocity (+0x11C, log-uniform magnitude, any direction in x/z, sometimes y) and sometimes a random angular velocity
+(+0x158), and runs the game's car handler FUN_0814bd4c on it in the function oracle (as tools/trace_oracle.py).
+Such speeds carry the car two portals in a step (`find_sector_far`, FUN_0814dbbc) or out of every sector (the
+push-back loop in FUN_0813d1f0), which no recording does. Writes vehicle-physics/fuzz.jsonl for
+crates/nfsgba-sim/tests/fuzz.rs: per case the trace, step, patch, every RAM byte the step changed, its sound calls,
+and which of those two paths ran. Seeded: reruns give the same file.
+"""
+import json
+import math
+import random
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import trace_ai_oracle as ai  # noqa: E402
+import trace_oracle as base  # noqa: E402
+from unicorn import UC_HOOK_CODE  # noqa: E402
+
+TRACES = ["wall", "drive", "long", "reverse", "hunter", "tipped", "start"]
+# Opponents (handler 0x29, FUN_0814a2a0) only outside hunter races, whose AI part is not ported.
+AI_TRACES = {"wall", "drive", "long", "reverse", "start"}
+OPPONENT = 0x0814A2A0
+# The player's push-back loop, and the opponent's (in FUN_0813c5a8).
+PATHS = {0x0814DBBC: "far", 0x0813DF98: "pushback", 0x0813CFBC: "ai-pushback"}
+
+
+def perturb(rng: random.Random, p: int) -> list[tuple[int, bytes]]:
+    mag = int(2 ** rng.uniform(8, 21))
+    a = rng.uniform(0, 2 * math.pi)
+    v = [int(mag * math.sin(a)), rng.choice([0, 0, rng.randint(-mag, mag)]), int(mag * math.cos(a))]
+    patch = [(p + 0x11C, struct.pack("<3i", *v))]
+    if rng.random() < 0.3:
+        patch.append((p + 0x158, struct.pack("<3i", *[rng.randint(-0x4000, 0x4000) for _ in range(3)])))
+    return patch
+
+
+def main(count: int) -> None:
+    work = base.session()
+    rng = random.Random(0x0814DBBC)
+    lengths = {name: sum(1 for _ in base.ram_states(work, name)) for name in TRACES}
+    picks = sorted((name, rng.randrange(1, lengths[name] - 1), i) for i in range(count)
+                   for name in [rng.choice(TRACES)])
+    cases = [None] * count
+    seen = {}
+    for name in TRACES:
+        wanted = {}
+        for n, k, i in picks:
+            if n == name:
+                wanted.setdefault(k, []).append(i)
+        if not wanted:
+            continue
+        gba = base.Gba(f"{work.name}/{name}")
+        entity = struct.unpack("<I", gba.read_base(base.WORLD + 0x3C, 4))[0]
+        for k, state in enumerate(base.ram_states(work, name)):
+            for i in wanted.get(k, []):
+                gba.poke(0x02000000, state[:0x40000].tobytes())
+                gba.poke(0x03000000, state[0x40000:].tobytes())
+                rng_case = random.Random(i * 7919 + k)
+                # The player's car, or (outside hunter races) an opponent with its physics struct allocated.
+                index = rng_case.randrange(1, 4) if name in AI_TRACES and rng_case.random() < 0.5 else 0
+                e = entity + 0xA4 * index
+                p = struct.unpack("<I", gba.read_base(e + 0x8C, 4))[0]
+                if not 0x02000000 <= p < 0x02040000:
+                    index, e = 0, entity
+                    p = struct.unpack("<I", gba.read_base(e + 0x8C, 4))[0]
+                patch = perturb(rng_case, p)
+                for addr, data in patch:
+                    gba.poke(addr, data)
+                hit = set()
+                hooks = [gba.uc.hook_add(UC_HOOK_CODE, lambda uc, a, s, tag: hit.add(tag), user_data=tag,
+                                         begin=addr, end=addr) for addr, tag in PATHS.items()]
+                try:
+                    if index == 0:
+                        r, calls = base.run_step(gba, entity)
+                        changed = [(a + j, v) for a, b in r.writes if base.RAM[0] <= a < base.RAM[1]
+                                   for j, v in enumerate(b)]
+                    else:
+                        changed, calls = ai.call(gba, OPPONENT, e, entity)
+                finally:
+                    for h in hooks:
+                        gba.uc.hook_del(h)
+                for tag in hit:
+                    seen[tag] = seen.get(tag, 0) + 1
+                writes = [f"{a:08x}={v:02x}" for a, v in changed]
+                cases[i] = {"trace": name, "step": k, "entity": index, "patch": [(a, d.hex()) for a, d in patch],
+                            "writes": writes, "calls": calls, "paths": sorted(hit)}
+    out = work / "fuzz.jsonl"
+    with out.open("w", encoding="utf-8") as f:
+        for c in cases:
+            f.write(json.dumps(c) + "\n")
+    print(f"wrote {count} cases to {out}; paths reached {seen}")
+
+
+if __name__ == "__main__":
+    main(int(sys.argv[1]) if len(sys.argv) > 1 else 2000)
