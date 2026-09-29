@@ -1,0 +1,33 @@
+address,name,kind,comment
+0x0814397c,map_enter,function,map screens: cursor from profile +0x1FB (x2) on 0xE else 0; view (0x100 0xC0); map_zone_palettes
+0x081439c0,map_select,function,map cursor = arg; moved flag +9 = 1 (state 0x03006230)
+0x08143284,map_zone_palettes,function,(not ported) the map's zone colours into the second base palette (unlock 0x118.. per zone)
+0x081435c4,map_draw,function,(not ported) scrolls the map view towards the cursor and draws the map and its markers
+0x081633cc,number_text,function,decimal text of n into a buffer (millions down; leading zeros dropped); remainders via the IWRAM divider
+0x0812d62c,thousands_separator,function,thousands separator for n > 999 (French space; German and Italian dot) inserted digits-3 from the left
+0x08162fc0,time_text_colons,function,"mm:ss:cc" of |centiseconds| capped at 0x57E3F
+0x0812fc00,time_text,function,time_text_colons then the last colon becomes a dot (fr de es) or comma (it)
+0x0812cf48,hint_due,function,(screen; event) 1 when a career hint (screen 0x28/0x2B) is due: hints seen +0x1F8+0x1F9 per zone and screen; clears +0x1FA
+0x0812eb70,copy_results_to_ranked,function,copies the 0x40-byte results 0x03005650 to the ranked copy 0x03005730
+0x0812f180,check_record_time,function,new track record (profile +0x218) from the best lap of a finished known-mode race; flags +0x3B4 +0x4A8
+0x0812ec68,draw_unlock_messages,function,race results page 0xB: heading 0xD6 and the unlock texts in profile +0x4AA.. (0x31A skipped)
+0x08135640,message_box_open,function,(type; text; arg) opens a message box when none is open; swallows the keys; 1 if opened
+0x081348e8,page_script,function,hint/story page script: sections [id; commands; 0xFFFF]; commands 0xFFF5..0xFFFD (sounds waits music flash grid pictures portraits)
+0x08134cc0,tutorial_race_setup,function,(0..2) one of the three tutorial races (career mode 2; car 5 with fixed upgrades; route 1 or 3); picks opponents
+0x0813609c,stop_music,function,music id 0x0300003C = -1; snd_stop_music
+0x08164bec,fill_rect8,function,(rect x0 y0 x1 y1; page; pitch; colour x 0x01010101) fills a rectangle of an 8bpp page (byte stores at odd edges)
+0x08141c88,text_box,function,(font; text key or pointer; x; y; width; lines; colour) text in a box through FUN_08162B6C; key per language table
+0x08160d18,copy_mem,function,(dst; src; bytes; width 0x20/0x10/8) forward copy in words/halfwords/bytes; nothing for null pointers
+0x08160c64,copy_words,function,copies n words forward
+0x08160c40,copy_halfwords,function,copies n halfwords forward
+0x08160c1c,copy_bytes,function,copies n bytes forward
+0x0815e04c,fill_bg_palette,function,(start; colour; count) BG palette entries from start set to colour
+0x08161754,scale_obj_palette,function,(source; r; g; b; first; n) OBJ palette entries = source channels x factor / 256 capped at 31
+0x081372d8,menu_scene_teardown,function,every menu kind's exit handler: FUN_08139B7C(world)
+0x0812d564,garage_copy_car_record,function,copies the car record of 0x03005718: bytes 0..6 to 0x03005700 and 7..16 to 0x03005707
+0x0812c81c,unlock_state,function,(tentative; stub in menu.rs) (unlock id) 1 owned; 2 locked; 0 or 3 not affordable: drives the car-select and crew prompts
+0x0812c8a8,buy_unlock,function,(tentative; stub) (unlock id) buys a car after the confirmed message box
+0x0812c5c4,unlock_owned,function,(tentative; stub) (unlock id) nonzero when owned (car select shows no price)
+0x081300e0,list_item_new,function,(tentative; stub) (screen; item) nonzero: the item gets a "new" mark
+0x081302c4,upgrades_changed,function,(tentative; stub) (not the performance page) nonzero when the upgrades changed (0x03005954; save question 0x376)
+0x08133d30,car_stats_draw,function,(tentative; stub) (car; x; y; 0) the car-select stat bars
