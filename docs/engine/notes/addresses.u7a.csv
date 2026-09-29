@@ -1,2 +1,0 @@
-region,address,size,what,doc
-rom,0x141648,20,"text function language jump table (text_menu, text_menu_7, _wrapped_colour, text_box): language variable 0..4 reads text-table rows 1, 2, 4, 3, 5",docs/formats/ui.md

@@ -21,6 +21,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x12B640` | 49 × 4 | screen exit jump table (run when the menus are left for a race) | formats/ui |
 | `0x12B980` | 49 × 4 | screen update jump table | formats/ui |
 | `0x12D370` | 49 × 4 | screen draw jump table | formats/ui |
+| `0x141648` | 20 | text function language jump table (text_menu, text_menu_7, _wrapped_colour, text_box): language variable 0..4 reads text-table rows 1, 2, 4, 3, 5 | docs/formats/ui.md |
 | `0x14FC38`, `0x165154`, `0x168264` | | ARM code copied to IWRAM for races (`0x03000000 + off − 0x164F14` etc.) | below |
 | `0x151E34` | | the loader's `"GBAMOD30"` literal (not a module) | formats/audio |
 | `0x153BB4` | | note → period table, linear pitch mode (unused by Carbon) | formats/audio |
