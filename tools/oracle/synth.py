@@ -1,11 +1,11 @@
 """Synthesized race states (bake-off B1): a race start for a setup no capture has.
 
-    cases.py synth make NAME ENV ROUTE MODE CAR   # NAME_pre.* = race-init/circuit_pre with the setup poked in
-    cargo run -p nfsgba-game --example synth_race -- NAME   # our race_start -> synth/NAME.<domain>.bin
+    cargo run -p nfsgba-game --example synth_race -- NAME ENV ROUTE MODE CAR
+                                                  # pokes the setup into race-init/circuit_pre (race_init::apply_setup),
+                                                  # writes synth/NAME_pre.* and our race_start as synth/NAME.*
     cases.py synth check NAME                     # the game's race_start in the oracle == ours, byte for byte;
                                                   # then the car handler on the player of synth/NAME, both racers
-Files in $NFSGBA_DATA/work/<sha8>/synth/. Setup inputs poked: environment 0x0300006C, route number and route
-index 0x03005388/0x03005720, mode 0x030056E0, player car cars[0] 0x0300611C.
+Files in $NFSGBA_DATA/work/<sha8>/synth/.
 """
 import struct
 import sys
@@ -14,22 +14,6 @@ from car import EXTERNAL, HANDLER, WORLD, run_step
 from oracle import REGIONS, Gba, canonical, data_dir
 
 SYNTH = data_dir() / "work" / canonical()[1] / "synth"
-SRC = data_dir() / "work" / canonical()[1] / "race-init" / "circuit_pre"
-PATCH = lambda env, route, mode, car: [(0x0300006C, env), (0x03005388, route), (0x03005720, route),  # noqa: E731
-                                       (0x030056E0, mode)]
-
-
-def make(name, env, route, mode, car):
-    SYNTH.mkdir(parents=True, exist_ok=True)
-    for dom, base, size in REGIONS:
-        f = SRC.with_name(SRC.name + f".{dom}.bin")
-        d = bytearray(f.read_bytes()) if f.exists() else bytearray(size)
-        if dom == "iwram":
-            for a, v in PATCH(env, route, mode, car):
-                d[a - base:a - base + 4] = struct.pack("<I", v)
-            d[0x0300611C - base] = car
-        (SYNTH / f"{name}_pre.{dom}.bin").write_bytes(d)
-    print("wrote", SYNTH / f"{name}_pre.*")
 
 
 def check(name):
@@ -60,5 +44,6 @@ def check(name):
 
 
 def main(argv):
-    cmd, name, *a = argv
-    make(name, *map(int, a)) if cmd == "make" else check(name)
+    cmd, name = argv
+    assert cmd == "check", "usage: synth.py check NAME (make: cargo run -p nfsgba-game --example synth_race)"
+    check(name)

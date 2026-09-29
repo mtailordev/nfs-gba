@@ -1,16 +1,10 @@
-//! Bake-off B1: `race_start` on a synthesized pre-state; writes `synth/NAME.<domain>.bin` (an oracle snapshot).
-//! `tools/oracle/synth.py` makes the pre-state and checks the result against the game's own code.
+//! Bake-off B1: a synthesized race start. `synth_race NAME ENV ROUTE MODE CAR` pokes the setup into
+//! `race-init/circuit_pre` (`race_init::apply_setup`), writes that pre-state as `synth/NAME_pre.<domain>.bin`, runs
+//! `race_start` and writes the result as `synth/NAME.<domain>.bin` (oracle snapshots). `tools/oracle/synth.py check`
+//! compares it with the game's own code.
 use nfsgba_game::{Machine, race_init};
 
-fn main() {
-    let name = std::env::args().nth(1).expect("NAME");
-    let rom = nfsgba_testkit::rom().expect("rom");
-    let dir = nfsgba_testkit::fixture("synth").expect("synth");
-    let mut g = Machine::load_dump(rom, &dir.join(format!("{name}_pre"))).unwrap();
-    let mut io: race_init::Io = std::fs::read(dir.join(format!("{name}_pre.io.bin"))).unwrap()[..0x400]
-        .try_into()
-        .unwrap();
-    race_init::race_start(&mut g, &mut io, 0).unwrap();
+fn write(dir: &std::path::Path, name: &str, g: &Machine, io: &race_init::Io) {
     for (d, b) in [
         ("wram", &g.mem.ewram[..]),
         ("iwram", &g.mem.iwram[..]),
@@ -21,5 +15,22 @@ fn main() {
     ] {
         std::fs::write(dir.join(format!("{name}.{d}.bin")), b).unwrap();
     }
-    println!("wrote synth/{name}.*");
+}
+
+fn main() {
+    let a: Vec<String> = std::env::args().collect();
+    let [name, env, route, mode, car] = &a[1..] else {
+        panic!("usage: synth_race NAME ENV ROUTE MODE CAR")
+    };
+    let n = |s: &String| s.parse::<u32>().expect("number");
+    let rom = nfsgba_testkit::rom().expect("rom");
+    let src = nfsgba_testkit::dump("race-init/circuit_pre").expect("race-init/circuit_pre");
+    let dir = src.parent().unwrap().parent().unwrap().join("synth");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut g, mut io) = race_init::load_pre(rom, &src).unwrap();
+    race_init::apply_setup(&mut g, n(env), n(route), n(mode), n(car) as u8);
+    write(&dir, &format!("{name}_pre"), &g, &io);
+    race_init::race_start(&mut g, &mut io, 0).unwrap();
+    write(&dir, name, &g, &io);
+    println!("wrote synth/{name}_pre.* and synth/{name}.*");
 }
