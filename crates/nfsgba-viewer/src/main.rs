@@ -520,8 +520,15 @@ fn setup(
             ..default()
         },
     ));
-    let dump = std::env::var("NFSGBA_DUMP").ok();
     let start_route: Option<u32> = std::env::var("NFSGBA_ROUTE").ok().and_then(|s| s.parse().ok());
+    // A route wins over a dump left in the environment.
+    let dump = std::env::var("NFSGBA_DUMP").ok().filter(|d| {
+        let keep = start_route.is_none();
+        if !keep {
+            warn!("NFSGBA_ROUTE is set: ignoring NFSGBA_DUMP={d}");
+        }
+        keep
+    });
     let running = std::env::var("NFSGBA_PLAY").is_ok();
     let race_game = match &dump {
         Some(prefix) => play::Play::load(data.clone(), prefix, hud.clone(), running)
