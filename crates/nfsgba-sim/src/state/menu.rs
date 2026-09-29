@@ -55,6 +55,11 @@ layout! {
         0x0300_59F0 message_box: i32,
         0x0300_59F4 message_result: i32,
         0x0300_611C race_car: u8,
+        /// The map screens' state: view x/y (8.8), the cursor and "moved".
+        0x0300_6230 map_x: i32,
+        0x0300_6234 map_y: i32,
+        0x0300_6238 map_cursor: i8,
+        0x0300_6239 map_moved: u8,
         0x0300_64C0 keys: u16,
         0x0300_64C8 rand_index: u32,
     }
@@ -65,6 +70,8 @@ layout! {
         0x10 career_car: i8,
         0x11 car: i8,
         0x12 u_12: u16,
+        /// The career district (zone) selected on the map.
+        0x1FB zone: u8,
         0x2EE music: i8,
         0x2F6 u_2f6: u16,
         0x2F8 u_2f8: u32,

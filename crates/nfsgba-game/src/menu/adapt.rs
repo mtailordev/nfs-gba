@@ -6,7 +6,7 @@ use nfsgba_sim::{Mem, state::MenuState};
 use super::*;
 
 /// Runs `f` on the typed state loaded from `g` and stores it back.
-fn typed<R>(g: &mut Gba, f: impl FnOnce(&mut MenuState, &mut GbaHost) -> R) -> R {
+pub(super) fn typed<R>(g: &mut Gba, f: impl FnOnce(&mut MenuState, &mut GbaHost) -> R) -> R {
     let mut st = load_state(g);
     let r = f(&mut st, &mut GbaHost(g));
     store_state(g, &st);
@@ -31,7 +31,7 @@ fn store_state(g: &mut Gba, st: &MenuState) {
 
 /// The typed flow's [`flow::Host`] on a `Gba`: handlers that are not typed yet run on the RAM image between a
 /// store of the state and a load.
-struct GbaHost<'a>(&'a mut Gba);
+pub(super) struct GbaHost<'a>(&'a mut Gba);
 
 impl GbaHost<'_> {
     fn on_ram<R>(&mut self, st: &mut MenuState, f: impl FnOnce(&mut Gba) -> R) -> R {
@@ -50,13 +50,16 @@ impl flow::Host for GbaHost<'_> {
         self.0.unported(function, args)
     }
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32 {
+        if flow::is_typed(kind, phase) {
+            return flow::run_typed(st, self, kind, phase, args);
+        }
         self.on_ram(st, |g| run_handler(g, kind, phase, args))
     }
     fn career_opponents(&mut self, st: &mut MenuState) {
         self.on_ram(st, career_opponents);
     }
-    fn map_select(&mut self, cursor: u8) {
-        map_select(self.0, cursor);
+    fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32) {
+        self.on_ram(st, |g| menu_scene_setup(g, material, palette, sprite));
     }
     fn black_bg_palette(&mut self) {
         fill_bg_palette(self.0, 0, 0, 0x100);

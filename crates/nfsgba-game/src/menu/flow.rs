@@ -5,7 +5,7 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, exit_kind, update_kind};
+use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, exit_kind, map, update_kind};
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
@@ -22,8 +22,8 @@ pub trait Host {
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32;
     /// `career_opponents` (screen 15's entry).
     fn career_opponents(&mut self, st: &mut MenuState);
-    /// `map_select` (cursor): moves the map cursor and marks it moved.
-    fn map_select(&mut self, cursor: u8);
+    /// `menu_scene_setup` (material, palette, sprite screen): the screen's background, palettes and sprite screen.
+    fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32);
     /// Black BG palette RAM (`fill_bg_palette(0, 0, 0x100)`).
     fn black_bg_palette(&mut self);
     /// `copy_mem(dst, src, n, width)`.
@@ -261,7 +261,7 @@ pub fn menu_frame(st: &mut MenuState, h: &mut impl Host) -> u32 {
         }
         if st.profile.map_mode == 3 && st.g.screen == 0x11 {
             st.profile.map_mode = 2;
-            h.map_select(0);
+            map::select(st, 0);
         } else {
             menu_back(st, h);
         }
@@ -276,6 +276,11 @@ fn tick_repeats(st: &mut MenuState) {
     for d in st.profile.repeats.iter_mut().filter(|d| **d > 0) {
         *d -= 1;
     }
+}
+
+pub fn rom_u16(rom: &[u8], addr: u32) -> u16 {
+    let o = (addr & 0x1FF_FFFF) as usize;
+    u16::from_le_bytes([rom[o], rom[o + 1]])
 }
 
 fn rom_u32(rom: &[u8], addr: u32) -> u32 {
@@ -413,4 +418,19 @@ pub fn main_frame(st: &mut MenuState, h: &mut impl Host) {
     }
     h.call(0x0812_B040, &[]);
     h.call(0x0814_2090, &[]);
+}
+
+/// Whether a kind's handler runs on typed state ([`run_typed`]); the others still run on the RAM image.
+pub fn is_typed(kind: Kind, phase: usize) -> bool {
+    matches!((kind, phase), (Kind::Kind7, 0..=2))
+}
+
+/// A typed handler (see [`is_typed`]).
+pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize, _args: &[u32]) -> u32 {
+    match (kind, phase) {
+        (Kind::Kind7, 0) => map::enter(st, h),
+        (Kind::Kind7, 1) => map::update(st, h),
+        (Kind::Kind7, 2) => map::draw(st, h),
+        _ => unreachable!("{kind:?} phase {phase} is not typed"),
+    }
 }

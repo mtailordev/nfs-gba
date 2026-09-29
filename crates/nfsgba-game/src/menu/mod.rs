@@ -190,6 +190,7 @@ fn vram_offset(addr: u32) -> usize {
 
 mod adapt;
 pub mod flow;
+mod map;
 pub use adapt::*;
 
 /// The eight kinds of menu screen. Each has an enter, update, draw and exit handler; the screens share them
@@ -265,14 +266,14 @@ pub fn enter_kind(screen: u32) -> Option<Kind> {
 /// Runs a screen handler (`phase`: 0 enter, 1 update, 2 draw, 3 exit): the ported ones in Rust, the others as
 /// `Gba::unported` calls.
 pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
+    if flow::is_typed(kind, phase) {
+        return typed(g, |st, h| flow::run_typed(st, h, kind, phase, args));
+    }
     let full = args.first().copied().unwrap_or(0);
     match (kind, phase) {
         (Kind::Intro, 0) => intro_enter(g),
         (Kind::Intro, 1) => intro_update(g),
         (Kind::Intro, 2) => intro_draw(g),
-        (Kind::Kind7, 0) => kind7_enter(g),
-        (Kind::Kind7, 1) => kind7_update(g),
-        (Kind::Kind7, 2) => kind7_draw(g, full),
         (Kind::Event, 0) => event_enter(g),
         (Kind::Event, 1) => event_update(g),
         (Kind::Event, 2) => event_draw(g, full),
@@ -923,171 +924,6 @@ fn language_select(g: &mut Gba) {
         mark_screen_changed(g);
     }
     pick(g);
-}
-
-// The map screens (Kind7: 7 Quick Play circuits, 8 Quick Play sprints, 0xE the career district map, 0x11 the
-// career map). Map state `0x03006230`: `+0`/`+4` view x/y (8.8), `+8` cursor (i8), `+9` moved.
-const MAP: u32 = 0x0300_6230;
-const MAP_PALETTES: u32 = 0x0814_3284; // (): the map's zone colours into the second base palette
-const MAP_DRAW: u32 = 0x0814_35C4; // (): scrolls the view towards the cursor and draws the map and its markers
-/// Page records of the map screens (`0x7E50A4`, 0x14 bytes: `+2`/`+4` button prompts).
-const MAP_PAGES: u32 = 0x087E_50A4;
-
-/// `kind7_enter` (`0x0812E80C`): background 0xDA, menu palette 7; the map state (`FUN_0814397C`).
-pub fn kind7_enter(g: &mut Gba) -> u32 {
-    menu_scene_setup(g, 0xDA, 7, 0xFFFF);
-    // FUN_0814397C: the cursor starts on the district of profile +0x1FB (×2) on screen 0xE, else 0; view (1, 0.75).
-    let cursor = if g.u32(SCREEN) == 0xE {
-        (g.u8(g.u32(PROFILE) + 0x1FB) as i8 as u8).wrapping_shl(1)
-    } else {
-        0
-    };
-    g.set_u8(MAP + 8, cursor);
-    g.set_u8(MAP + 9, 1);
-    g.set_u32(MAP, 0x100);
-    g.set_u32(MAP + 4, 0xC0);
-    g.unported(MAP_PALETTES, &[]);
-    1
-}
-
-/// `FUN_081439C0` (cursor): moves the map cursor and marks it moved.
-fn map_select(g: &mut Gba, cursor: u8) {
-    g.set_u8(MAP + 8, cursor);
-    g.set_u8(MAP + 9, 1);
-}
-
-/// `kind7_update` (`0x0812E3D4`). Left/right move the cursor over 12 entries (18 on screen 8, and on 0x11 in mode
-/// 2; step 2 on 0xE). A depends on profile `+0x404`: 0 picks a track (screen 7: slot `0x7E472C[cursor]`, route
-/// number `0x7E4A70`; 8: sprint `cursor + 0x18`) if its district (unlock `0x117 +` cursor/2 or /3) is open and goes to
-/// screen 0x2D; 1 picks the district on 0xE (profile `+0x1FB`); 2 sets mode 3; 3 goes back.
-pub fn kind7_update(g: &mut Gba) -> u32 {
-    let step = if g.u32(SCREEN) == 0xE {
-        g.set_u8(MAP + 8, g.u8(MAP + 8) & 0xFE);
-        2
-    } else {
-        1
-    };
-    let profile = g.u32(PROFILE);
-    let s = g.u32(SCREEN);
-    let count: i8 = if s == 8 || (s == 0x11 && g.u8(profile + 0x404) == 2) {
-        18
-    } else {
-        12
-    };
-    if g.u16(KEYS) == 1 {
-        let cursor = g.i8(MAP + 8) as i32;
-        match g.u8(profile + 0x404) {
-            0 => {
-                let open = if g.u32(SCREEN) == 7 {
-                    unlock_is_locked(g, (cursor >> 1) + 0x117) == 0
-                } else {
-                    unlock_is_locked(g, nfsgba_fixed::div(cursor, 3) as i8 as i32 + 0x117) == 0
-                };
-                if !open {
-                    g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
-                    return 1; // the locked beep skips the left/right handling
-                }
-                let slot = if g.u32(SCREEN) == 7 {
-                    g.u16(0x087E_472C_u32.wrapping_add((cursor as u32).wrapping_mul(2))) as u32
-                } else {
-                    (cursor + 0x18) as u32
-                };
-                g.set_u32(ROUTE, g.u16(0x087E_4A72_u32.wrapping_add(slot.wrapping_mul(4))) as u32);
-                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
-                goto_screen(g, 0x2D);
-            }
-            1 => {
-                if unlock_is_locked(g, (cursor >> 1) + 0x117) == 0 {
-                    g.set_u8(g.u32(PROFILE) + 0x1FB, (cursor >> 1) as u8);
-                    g.unported(CARBON_PLAY_SOUND, &[2, 1]);
-                    menu_back(g);
-                } else {
-                    g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
-                }
-            }
-            2 => {
-                g.set_u8(g.u32(PROFILE) + 0x404, 3);
-                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
-                map_select(g, 0);
-            }
-            3 => {
-                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
-                menu_back(g);
-            }
-            _ => {}
-        }
-        mark_screen_changed(g);
-    }
-    if g.u16(KEYS) & 0x20 != 0 {
-        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
-        let v = (g.u8(MAP + 8) as u32).wrapping_sub(step) as u8;
-        g.set_u8(MAP + 8, if (v as i8) < 0 { (count - 1) as u8 } else { v });
-        map_select(g, g.u8(MAP + 8));
-    }
-    if g.u16(KEYS) & 0x10 != 0 {
-        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
-        let v = g.u8(MAP + 8).wrapping_add(step as u8);
-        g.set_u8(MAP + 8, if count <= v as i8 { 0 } else { v });
-        map_select(g, g.u8(MAP + 8));
-    }
-    1
-}
-
-/// `kind7_draw` (`0x0812E5AC`): the map (`FUN_081435C4`), the heading (500; 0x1F5 on 0xE; 0x2E4 and a mode text on
-/// 0x11), the arrows (lit while their key-repeat delay runs) and the prompts; A's prompt reads 0x15A over a
-/// locked district.
-pub fn kind7_draw(g: &mut Gba, _full: u32) -> u32 {
-    let early = g.i8(MAP + 8) as i32;
-    let page = MAP_PAGES
-        + 0x14
-            * match g.u32(SCREEN) {
-                8 => 1,
-                0xE => 2,
-                0x11 => 3,
-                _ => 0,
-            };
-    g.unported(MAP_DRAW, &[]);
-    let mut left = g.u16(page + 2) as i16 as i32 as u32;
-    let neg1 = u32::MAX;
-    let district = match g.u32(SCREEN) {
-        0xE => {
-            g.unported(TEXT_MENU, &[0xC, 0x1F5, 2, 2, 0, 0]);
-            Some((early >> 1) + 0x117)
-        }
-        0x11 => {
-            g.unported(TEXT_MENU, &[0xC, 0x2E4, 2, 2, 0, 0]);
-            let key = if g.u8(g.u32(PROFILE) + 0x404) == 2 { 0x209 } else { 0xD3 };
-            g.unported(TEXT_MENU, &[0xC, key, 0xE6, 2, neg1, 0]);
-            None
-        }
-        s @ (7 | 8) => {
-            g.unported(TEXT_MENU, &[0xC, 500, 2, 2, 0, 0]);
-            let cursor = g.i8(MAP + 8) as i32;
-            Some(
-                if s == 7 {
-                    cursor >> 1
-                } else {
-                    nfsgba_fixed::div(cursor, 3) as i8 as i32
-                } + 0x117,
-            )
-        }
-        _ => None,
-    };
-    if let Some(id) = district
-        && unlock_is_locked(g, id) != 0
-    {
-        left = 0x15A;
-    }
-    if g.i32(MESSAGE_BOX) < 0 {
-        let profile = g.u32(PROFILE);
-        let lit = |g: &Gba, off: u32| g.i8(profile + off) >= 1;
-        let m = if lit(g, 0x33C) { 0xA8 } else { 0xA7 };
-        g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 1, 0x48]);
-        let m = if lit(g, 0x33D) { 0xAA } else { 0xA9 };
-        g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 0xDF, 0x48]);
-        g.unported(MENU_BUTTON_PROMPTS, &[left, g.u16(page + 4) as i16 as i32 as u32, neg1]);
-    }
-    0
 }
 
 // Helpers the career screens share.
