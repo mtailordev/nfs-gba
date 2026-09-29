@@ -5,7 +5,9 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, list, map, results, setup, update_kind};
+use super::{
+    Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, hints, list, map, results, setup, update_kind,
+};
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
@@ -26,6 +28,14 @@ pub trait Host {
     fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32);
     /// `menu_scene_setup_a` (`first`) or `_b`, chosen by the caller.
     fn scene_setup_ab(&mut self, st: &mut MenuState, first: bool, material: u32, palette: u32, sprite: u32);
+    /// The world's current base palette pointer (`WORLD + 0x30`).
+    fn world_palette(&self) -> u32;
+    /// The drawing page's pointer (`**(WORLD + 0x50)`).
+    fn page_buffer(&self) -> u32;
+    /// Fills both frame buffers with colour 1 (`fill32` over the screen size).
+    fn clear_frame_buffers(&mut self);
+    /// Fills the drawing page with colour 1.
+    fn fill_page(&mut self);
     /// Black BG palette RAM (`fill_bg_palette(0, 0, 0x100)`).
     fn black_bg_palette(&mut self);
     /// `copy_mem(dst, src, n, width)`.
@@ -464,7 +474,7 @@ pub fn is_typed(kind: Kind, phase: usize) -> bool {
     matches!(
         (kind, phase),
         (
-            Kind::Kind7 | Kind::Event | Kind::Career | Kind::List | Kind::Setup,
+            Kind::Kind7 | Kind::Event | Kind::Career | Kind::List | Kind::Setup | Kind::Kind38,
             0..=2
         )
     )
@@ -482,6 +492,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Career, 0) => results::enter(st, h),
         (Kind::Career, 1) => results::update(st, h),
         (Kind::Career, 2) => results::draw(st, h),
+        (Kind::Kind38, 0) => hints::enter(st, h),
+        (Kind::Kind38, 1) => hints::update(st, h),
+        (Kind::Kind38, 2) => hints::draw(st, h),
         (Kind::Setup, 0) => setup::enter(st, h),
         (Kind::Setup, 1) => setup::update(st, h),
         (Kind::Setup, 2) => setup::draw(st, h),

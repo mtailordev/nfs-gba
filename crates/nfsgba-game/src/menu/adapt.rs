@@ -64,6 +64,22 @@ impl flow::Host for GbaHost<'_> {
     fn scene_setup_ab(&mut self, st: &mut MenuState, first: bool, material: u32, palette: u32, sprite: u32) {
         self.on_ram(st, |g| menu_scene_setup_ab(g, first, material, palette, sprite));
     }
+    fn world_palette(&self) -> u32 {
+        self.0.u32(WORLD + 0x30)
+    }
+    fn page_buffer(&self) -> u32 {
+        self.0.u32(self.0.u32(WORLD + 0x50))
+    }
+    fn clear_frame_buffers(&mut self) {
+        for buffer in [0x0300_641C, 0x0300_6420] {
+            let (dst, n) = (self.0.u32(buffer), screen_bytes(self.0));
+            fill32(self.0, dst, 0x0101_0101, n);
+        }
+    }
+    fn fill_page(&mut self) {
+        let (page, n) = (self.0.u32(self.0.u32(WORLD + 0x50)), screen_bytes(self.0));
+        fill32(self.0, page, 0x0101_0101, n);
+    }
     fn black_bg_palette(&mut self) {
         fill_bg_palette(self.0, 0, 0, 0x100);
     }
@@ -170,7 +186,14 @@ pub fn main_frame(g: &mut Gba) {
     typed(g, |st, h| flow::main_frame(st, h));
 }
 
-/// For Kind38 (still on the RAM image).
-pub(super) fn career_opponents(g: &mut Gba) {
-    typed(g, |st, h| super::setup::career_opponents(st, h));
+/// `fill32` (IWRAM `0x030002C0`, through `*0x0300649C`): `n >> 5` blocks of 32 bytes of `value`.
+fn fill32(g: &mut Gba, dst: u32, value: u32, n: u32) {
+    for i in 0..(n >> 5) * 8 {
+        g.set_u32(dst + 4 * i, value);
+    }
+}
+
+/// The screen size (`0x03006410`: width, height) for the frame-buffer fills.
+fn screen_bytes(g: &Gba) -> u32 {
+    (g.u16(0x0300_6410) as i16 as i32 * g.u16(0x0300_6412) as i16 as i32) as u32
 }

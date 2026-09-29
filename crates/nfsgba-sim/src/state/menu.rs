@@ -80,6 +80,7 @@ layout! {
         0x0300_64C0 keys: u16,
         /// The options screen's globals: units, sound flag, music and sound volumes (x8), and scratch the
         /// settings copy (`MenuProfile::settings`).
+        0x0300_003C music_id: u32,
         0x0300_0040 units: u32,
         0x0300_0050 u_0050: u32,
         0x0300_53E4 u_53e4: u32,
@@ -87,6 +88,8 @@ layout! {
         0x0300_578C music_volume: u32,
         0x0300_53A4 sound_volume: u32,
         0x0300_5994 u_5994: u32,
+        /// The frame counter value the hint wait page (0x29) and script sounds wait for.
+        0x0300_59E8 page_wait: i32,
         /// The settings differ from the profile's copy (set by A on a settings screen).
         0x0300_5998 settings_changed: u32,
         /// Frame counter of the blinking cursors (bit 4) and PRESS START.
@@ -171,6 +174,8 @@ layout! {
         0x4A8 new_record: u16,
         0x4AA unlock_messages: [u16; 14],
         /// `+0x256`: a career zone step is due; `+0x258`: the upgrades save question is open.
+        /// The hint page's map grid cell (`+0x254`).
+        0x254 map_grid: u16,
         0x256 zone_step: u16,
         0x258 upgrades_saving: u16,
         0x2EE music: i8,
