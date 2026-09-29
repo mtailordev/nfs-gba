@@ -64,7 +64,7 @@ pub fn collide(sim: &mut Sim, e: u32) -> Result<()> {
 
 /// `FUN_081459b8`: test (`x`, `z`) against the walls of `sector`, recursing once through open portals; returns
 /// the largest impulse applied (0 for none). The unused `_y` is the game's fifth argument.
-fn walls(sim: &mut Sim, e: u32, x: i32, z: i32, _y: i32, sector: u32, recurse: bool) -> Result<i32> {
+pub(crate) fn walls(sim: &mut Sim, e: u32, x: i32, z: i32, _y: i32, sector: u32, recurse: bool) -> Result<i32> {
     let m = &mut sim.mem;
     let p = m.u32(e + 0x8C);
     let s = sector_addr(m, sector);

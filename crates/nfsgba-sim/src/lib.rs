@@ -8,6 +8,7 @@
 // the same precedence as C, so the parentheses clippy asks for would only add noise.
 #![allow(clippy::precedence)]
 
+pub mod ai;
 pub mod body;
 pub mod car;
 pub mod contact;
@@ -18,6 +19,7 @@ pub mod mem;
 pub mod route;
 pub mod sound;
 pub mod traffic;
+pub mod traffic_ai;
 pub mod walls;
 pub mod world;
 

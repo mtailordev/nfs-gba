@@ -110,7 +110,7 @@ fn upgrades(m: &mut Mem, e: u32) {
 }
 
 /// `FUN_0814f198`: the nitro tank and factors.
-fn nitro_setup(m: &mut Mem, e: u32, p: u32) {
+pub(crate) fn nitro_setup(m: &mut Mem, e: u32, p: u32) {
     let mut v = m.i32(p + 0x404).wrapping_mul(10);
     if e == m.u32(W_ENTITIES) {
         m.set_i32(PLAYER_UPGRADES + 0x10, v);
@@ -134,7 +134,7 @@ fn nitro_setup(m: &mut Mem, e: u32, p: u32) {
 }
 
 /// `FUN_0814b2a8`: engine, gearbox, rigid body and wheels from the handling record `h`, with the upgrades.
-fn setup_handling(m: &mut Mem, e: u32, h: u32) {
+pub(crate) fn setup_handling(m: &mut Mem, e: u32, h: u32) {
     let p = m.u32(e + 0x8C);
     let hw = |m: &Mem, k: u32| m.i32(h + 4 * k);
     let (mut up, mut max) = ([0i32; 5], [0i32; 5]);
@@ -342,7 +342,7 @@ fn matrix_quat(m: &Mem, r: &[i32; 9]) -> [i32; 4] {
 }
 
 /// `FUN_0813e430`: race-controller globals for the start, then 20 settling steps of the car on the ground.
-fn race_start_setup(sim: &mut Sim, e: u32) -> Result<()> {
+pub(crate) fn race_start_setup(sim: &mut Sim, e: u32) -> Result<()> {
     let m = &mut sim.mem;
     let p = m.u32(e + 0x8C);
     let b = p + 0xC8;

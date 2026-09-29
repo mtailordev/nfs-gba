@@ -93,7 +93,7 @@ fn racing_step(sim: &mut Sim, e: u32) -> Result<()> {
 }
 
 /// `FUN_0814b098`: drain the nitro tank (`+0x4C8`) while nitro is on (`+0x4D1`).
-fn nitro(m: &mut Mem, e: u32) {
+pub(crate) fn nitro(m: &mut Mem, e: u32) {
     let rate = div(600, div(m.i32(DT) << 6, 0x1C));
     let p = m.u32(e + 0x8C);
     if m.u8(p + 0x4D1) == 0 {
@@ -118,7 +118,7 @@ fn nitro(m: &mut Mem, e: u32) {
 
 /// A piecewise-linear curve: `+0x00` point count, `+0x04` x of the first point, `+0x08` x of the last, `+0x0C`
 /// pointer to the y values (`FUN_0813d1f0` inlines this for the tables at 0x087F4164 and 0x087F41A0).
-fn curve(m: &Mem, table: u32, x: i32) -> i32 {
+pub(crate) fn curve(m: &Mem, table: u32, x: i32) -> i32 {
     let (count, x0, x1, ys) = (m.i32(table), m.i32(table + 4), m.i32(table + 8), m.u32(table + 0xC));
     let step = div(x1 - x0, count - 1);
     let k = div(x - x0, step);
@@ -161,7 +161,7 @@ fn gear_changed(m: &mut Mem, p: u32) {
 }
 
 /// `FUN_0813c02c`: the automatic gearbox, at most one shift every 5 steps (`+0x9C`).
-fn auto_shift(m: &mut Mem, e: u32) {
+pub(crate) fn auto_shift(m: &mut Mem, e: u32) {
     let p = m.u32(e + 0x8C);
     if m.i32(p + 0x9C) > 0 {
         return;
