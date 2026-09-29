@@ -42,6 +42,10 @@ SCENARIOS = {
     # the player twice between steps).
     "hunter": ["load hunter-info", *AUTOPILOT, "wait 30", "trace", "hold A 10", "wait 60", "luax AUTOPILOT.target=3",
                'luax AUTOPILOT.mode="ram"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
+    # Hunter race, the autopilot hunting the nearest opponent: collisions tip the player's car over.
+    # (Chaotic: A pressed one frame earlier or later and the car stays upright, hence this command order.)
+    "tipped": [AUTOPILOT[0], "load hunter-info", "trace", AUTOPILOT[1], "hold A 5", "wait 60", "luax AUTOPILOT.hunt=4000",
+               'luax AUTOPILOT.mode="race"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
 }
 
 # Entity 0 fields for --summary: name, offset, size (see docs/engine/physics.md)
