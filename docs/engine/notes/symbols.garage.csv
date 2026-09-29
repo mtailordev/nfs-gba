@@ -1,0 +1,11 @@
+address,name,kind,comment
+0x0812c24c,unlock_car_group,function,(unlock id) the part group of an id: 0..9 by id range below 0x79; above: 0..12 or -1 (menu/garage.rs group)
+0x0812c984,unlock_new_part,function,(unlock id) id of a part the career car can now unlock ("new"); 0 none; case group 5 draws rand_table
+0x0812d69c,unlock_part_installed,function,(unlock id) 1 when the career car has exactly this part level installed
+0x0812c75c,unlock_mark_owned,function,(unlock id) sets the owned bit of a table id (car extras / profile +0xF5) or the car bit in profile +0x12
+0x0812d5e8,garage_part_levels,function,(unlock id; out[4]) the four 2-bit levels of the group's byte in the working copy; returns their sum
+0x0812d5bc,garage_part_level,function,(unlock id) the working copy's level byte of the id's group
+0x0812d4e4,garage_set_part_level,function,(unlock id; reload) writes the working copy's level; reloads the atlas and palette by group
+0x0812c494,car_stat_bars,function,(car; out base[3]; out with parts[3]) base speed/accel/handling from 0x7F0BD8+0x52 plus the installed parts' weights (0x7E46EC) capped at 100
+0x0812c3e0,garage_rating,function,() the working copy's build rating (100 plus the parts' shares)
+0x08133e74,district_completion_text,function,(buffer; zone) completion percent of a district's events as "N%" (a space before % in French and Italian)
