@@ -270,6 +270,10 @@ pub fn enter_kind(screen: u32) -> Option<Kind> {
     update_kind(screen).filter(|_| !matches!(screen, 40..=42 | 48))
 }
 
+// The screens are all typed (`list`, `setup`, `hints`, `intro`, `map`, `event`, `results` on `MenuState`); what stays on
+// `Gba` is the scene setup, the palette and VRAM helpers below (menu drawing, FIDELITY U7), the garage screens'
+// (Kind18) unported handlers and the oracle-test adapter (`adapt.rs`).
+
 /// Runs a screen handler (`phase`: 0 enter, 1 update, 2 draw, 3 exit): the ported ones in Rust, the others as
 /// `Gba::unported` calls.
 pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
