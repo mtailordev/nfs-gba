@@ -1,8 +1,11 @@
 -- Race HUD trace for mGBA (nightly), started by tools/ui_hud_trace.py. See docs/formats/ui.md ("HUD logic").
 -- Loads savestate $NFSGBA_TRACE_STATE and records every race frame around the HUD: tag 0 at the call of
 -- hud_update in race_frame_update (0x0813aa9c), tag 1 after the sprite_screen_update that follows it
--- (0x0813aaa8). Stops after $NFSGBA_TRACE_FRAMES frames and writes done.txt. $NFSGBA_TRACE_KEYS optionally
--- holds keys: "START:LEN:KEY[+KEY],..." (frames counted from the savestate).
+-- (0x0813aaa8). Stops after $NFSGBA_TRACE_FRAMES frames, or 120 frames after the last HUD frame (race over),
+-- and writes done.txt. $NFSGBA_TRACE_KEYS optionally holds keys: "START:LEN:KEY[+KEY],..." (frames counted
+-- from the savestate). $NFSGBA_TRACE_POKES optionally holds HUD inputs to set just before hud_update (so the
+-- tag-0 record holds them): "START:LEN:TARGET[/SIZE]=VALUE,...", TARGET an address, "E<i>+off" (entity i) or
+-- "D<i>+off" (entity i's driver), SIZE 1, 2 or 4 (default).
 -- Record: u32 tag, u32 frame; IWRAM 0x03000000..0x03000200 and 0x03005300..0x03006900; the sprite screen's
 -- 0x37 objects (0x10 each, at *0x03000178); entities 0..3 (0xA4 each, at *(0x030000C0 + 0x3C)); for each
 -- entity u32 driver pointer then 0x500 bytes of the driver (zeros when null); u32 profile +0x402 byte;
@@ -18,11 +21,43 @@ for start, len, keys in (os.getenv("NFSGBA_TRACE_KEYS") or ""):gmatch("(%d+):(%d
   for k in keys:gmatch("%u+") do mask = mask | (1 << assert(KEYS[k], "unknown key " .. k)) end
   table.insert(presses, {tonumber(start), tonumber(start) + tonumber(len), mask})
 end
-local recorded, started, frame0 = 0, false, 0
+local pokes = {}
+for start, len, target, size, value in (os.getenv("NFSGBA_TRACE_POKES") or ""):gmatch(
+    "(%d+):(%d+):([^=,/]+)/?(%d?)=([^,]+)") do
+  table.insert(pokes, {tonumber(start), tonumber(start) + tonumber(len), target, tonumber(size) or 4,
+                       math.tointeger(tonumber(value))})
+end
+local recorded, started, frame0, last = 0, false, 0, nil
 local ZEROS = string.rep("\0", 0x500)
+
+local function address(target)
+  local kind, i, off = target:match("^([ED])(%d)%+(.+)$")
+  if not kind then return tonumber(target) end
+  local entity = emu:read32(0x030000C0 + 0x3C) + 0xA4 * tonumber(i)
+  return (kind == "E" and entity or emu:read32(entity + 0x8C)) + tonumber(off)
+end
+
+local function finish()
+  out:close()
+  out = nil
+  local f = assert(io.open(dir .. "/done.txt", "w"))
+  f:write("trace done")
+  f:close()
+end
 
 local function record(tag)
   if not out then return end
+  if tag == 0 then
+    local t = emu:currentFrame() - frame0
+    for _, p in ipairs(pokes) do
+      if t >= p[1] and t < p[2] then
+        local a, v = address(p[3]), p[5]
+        if p[4] == 1 then emu:write8(a, v & 0xFF) elseif p[4] == 2 then emu:write16(a, v & 0xFFFF)
+        else emu:write32(a, v & 0xFFFFFFFF) end
+      end
+    end
+  end
+  last = emu:currentFrame()
   out:write(string.pack("<I4I4", tag, emu:currentFrame()))
   out:write(emu:readRange(0x03000000, 0x200), emu:readRange(0x03005300, 0x1600))
   out:write(emu:readRange(emu:read32(0x03000178), 0x370))
@@ -38,13 +73,7 @@ local function record(tag)
   out:write(string.pack("<I2", emu:read16(0x04000000)))
   if tag == 1 then
     recorded = recorded + 1
-    if recorded >= frames then
-      out:close()
-      out = nil
-      local f = assert(io.open(dir .. "/done.txt", "w"))
-      f:write("trace done")
-      f:close()
-    end
+    if recorded >= frames then finish() end
   end
 end
 
@@ -56,6 +85,8 @@ callbacks:add("frame", function()
     emu:setBreakpoint(function() record(0) end, 0x0813aa9c)
     emu:setBreakpoint(function() record(1) end, 0x0813aaa8)
   end
+  -- Race over: no HUD frame for 120 frames ends the trace after a whole tag-0/tag-1 pair.
+  if out and last and emu:currentFrame() - last > 120 and recorded > 0 then finish() end
   local t, mask = emu:currentFrame() - frame0, 0
   for _, p in ipairs(presses) do
     if t >= p[1] and t < p[2] then mask = mask | p[3] end

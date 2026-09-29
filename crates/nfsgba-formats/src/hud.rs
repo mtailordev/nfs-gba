@@ -702,6 +702,58 @@ mod tests {
         }
     }
 
+    /// The state after the port's `hud_update` + `update_sprites` for one frame.
+    struct Run {
+        g: Globals,
+        messages: Messages,
+        objects: Vec<Object>,
+        oam: Oam,
+        palette: Vec<u16>,
+        vram: Vec<u8>,
+    }
+
+    /// Runs the port from `pre` with the race time read as `frames`; the result's race time is `after` (the
+    /// value the IRQ left, as in the post record).
+    fn run(
+        rom: &[u8],
+        bank: &ui::SpriteBank,
+        pre: &Snap,
+        screen: usize,
+        tile_base: u16,
+        frames: i32,
+        after: i32,
+    ) -> Run {
+        let mut g = Globals {
+            frames,
+            ..pre.globals()
+        };
+        let (mut messages, mut objects, mut palette) = (pre.messages(), pre.objects.clone(), pre.palette.clone());
+        let minimap = update(rom, &mut g, &pre.racers, &mut objects, &mut messages, &mut palette);
+        let mut oam = pre.oam();
+        let uploads = update_sprites(rom, bank, screen, &mut objects, &mut oam, false, tile_base);
+        let mut vram = pre.vram.to_vec();
+        let mut write = |tile: usize, bytes: &[u8]| {
+            let o = 32 * tile - 0x4000;
+            vram[o..o + bytes.len()].copy_from_slice(bytes);
+        };
+        if let Some(tiles) = minimap {
+            let e = bank.elements[bank.screens[screen].first + 38];
+            write(e.tile.wrapping_add(tile_base) as usize, &tiles);
+        }
+        for u in &uploads {
+            write(u.tile, &rom[u.src..u.src + u.len]);
+        }
+        g.frames = after;
+        Run {
+            g,
+            messages,
+            objects,
+            oam,
+            palette,
+            vram,
+        }
+    }
+
     /// Replays a trace: every frame, from the state before `hud_update`, the port must reproduce the state
     /// after `hud_update` + `sprite_screen_update`: objects, globals, message slots, shadow OAM, OBJ palette
     /// and OBJ VRAM (tiles 0x200..0x3FF: the minimap and every uploaded HUD frame). Returns frames checked.
@@ -712,7 +764,7 @@ mod tests {
             .ok()?;
         assert_eq!(trace.len() % (2 * RECORD), 0, "{name}: truncated trace");
         let bank = sprite_bank(rom, LEVEL_TABLE);
-        let mut frames = 0;
+        let (mut frames, mut features) = (0, std::collections::BTreeSet::new());
         for pair in trace.chunks(2 * RECORD) {
             let (pre, post) = (Snap::parse(&pair[..RECORD]), Snap::parse(&pair[RECORD..]));
             // A game frame can straddle a VBlank, so the two records' video frames may differ by one.
@@ -725,63 +777,82 @@ mod tests {
             // The race time (0x03005800) is counted by the VBlank IRQ and can tick while the HUD runs; the HUD
             // then read the old or the new value. It never writes it.
             let (pre_g, post_g) = (pre.globals(), post.globals());
-            let results: Vec<String> = [pre_g.frames, post_g.frames]
+            // What this frame exercises, reported per trace.
+            let d = pre.racers[pre_g.player].driver.unwrap_or_default();
+            let (x, y) = (
+                div(pre.racers[0].x >> 8, 499) + 0x86,
+                div(pre.racers[0].z.wrapping_neg() >> 8, 499) + 0x79,
+            );
+            for (seen, what) in [
+                (
+                    true,
+                    format!(
+                        "mode {} hud {} units {} language {}",
+                        pre_g.mode, pre_g.hud, pre_g.units, pre_g.language
+                    ),
+                ),
+                (pre_g.wingman != 0, "wingman".into()),
+                (pre_g.arrow != 0, format!("arrow {}", pre_g.arrow.signum())),
+                (pre.messages().iter().any(|s| s[2] != 0), "message running".into()),
+                (
+                    pre.racers.iter().any(|r| r.driver.is_some_and(|d| d.hunter_life > 0)),
+                    "hunter life".into(),
+                ),
+                (
+                    !(0..=0x1C0).contains(&x) || !(0..=0x1C0).contains(&y),
+                    "minimap clamped".into(),
+                ),
+                (
+                    pre.racers.iter().any(|r| r.driver.is_some_and(|d| d.flags & 8 != 0)),
+                    "eliminated".into(),
+                ),
+                (true, format!("position {}", d.position)),
+                (true, format!("gear {}", d.gear)),
+                (pre_g.split < 0, "negative split".into()),
+                (pre_g.frames != post_g.frames, "race time ticked".into()),
+            ] {
+                if seen {
+                    features.insert(what);
+                }
+            }
+            // The race time (0x03005800) is counted by the VBlank IRQ, which can land anywhere in the HUD update:
+            // each element read the old or the new value (the timer, portrait and arrow read it; nothing writes
+            // it). So every object, OAM entry and VRAM tile must equal the port's result for one of the two.
+            let runs: Vec<Run> = [pre_g.frames, post_g.frames]
                 .into_iter()
                 .take(if pre_g.frames == post_g.frames { 1 } else { 2 })
-                .map(|t| {
-                    let mut g = Globals {
-                        frames: t,
-                        ..pre_g.clone()
-                    };
-                    let (mut messages, mut objects, mut palette) =
-                        (pre.messages(), pre.objects.clone(), pre.palette.clone());
-                    let minimap = update(rom, &mut g, &pre.racers, &mut objects, &mut messages, &mut palette);
-                    let mut oam = pre.oam();
-                    let uploads = update_sprites(rom, &bank, screen, &mut objects, &mut oam, false, tile_base);
-                    let mut vram = pre.vram.to_vec();
-                    let mut write = |tile: usize, bytes: &[u8]| {
-                        let o = 32 * tile - 0x4000;
-                        vram[o..o + bytes.len()].copy_from_slice(bytes);
-                    };
-                    if let Some(tiles) = minimap {
-                        let e = bank.elements[bank.screens[screen].first + 38];
-                        write(e.tile.wrapping_add(tile_base) as usize, &tiles);
-                    }
-                    for u in &uploads {
-                        write(u.tile, &rom[u.src..u.src + u.len]);
-                    }
-                    g.frames = post_g.frames;
-                    let mut diff = Vec::new();
-                    if g != post_g {
-                        diff.push(format!("globals {g:?}"));
-                    }
-                    if messages != post.messages() {
-                        diff.push(format!("message slots {messages:?} != {:?}", post.messages()));
-                    }
-                    for (k, (got, want)) in objects
-                        .iter()
-                        .zip(&post.objects)
-                        .enumerate()
-                        .filter(|(_, (a, b))| a != b)
-                    {
-                        diff.push(format!("object {k}: {got:?} != {want:?}"));
-                    }
-                    if let Some(i) = (0..128).find(|&i| oam[i] != post.oam()[i]) {
-                        diff.push(format!("OAM entry {i}: {:x?} != {:x?}", oam[i], post.oam()[i]));
-                    }
-                    if palette != post.palette {
-                        diff.push("OBJ palette".into());
-                    }
-                    if let Some(i) = (0..vram.len()).find(|&i| vram[i] != post.vram[i]) {
-                        diff.push(format!("OBJ VRAM at tile {:#x} (+{})", 0x200 + i / 32, i % 32));
-                    }
-                    diff.join("; ")
-                })
+                .map(|t| run(rom, &bank, &pre, screen, tile_base, t, post_g.frames))
                 .collect();
-            assert!(results.iter().any(String::is_empty), "{at}: {results:#?}");
+            let one_of = |same: &dyn Fn(&Run) -> bool| runs.iter().any(same);
+            assert!(
+                one_of(&|r| r.g == post_g),
+                "{at}: globals {:?} != {post_g:?}",
+                runs[0].g
+            );
+            assert!(one_of(&|r| r.messages == post.messages()), "{at}: message slots");
+            for (k, want) in post.objects.iter().enumerate() {
+                let got = runs.iter().map(|r| r.objects[k]).collect::<Vec<_>>();
+                assert!(got.contains(want), "{at}: object {k}: {got:?} != {want:?}");
+            }
+            let oam = post.oam();
+            for (i, want) in oam.iter().enumerate() {
+                assert!(
+                    one_of(&|r| r.oam[i] == *want),
+                    "{at}: OAM entry {i}: {:x?} != {want:x?}",
+                    runs[0].oam[i]
+                );
+            }
+            assert!(one_of(&|r| r.palette == post.palette), "{at}: OBJ palette");
+            for (tile, want) in post.vram.chunks(32).enumerate() {
+                assert!(
+                    one_of(&|r| &r.vram[32 * tile..32 * tile + 32] == want),
+                    "{at}: OBJ VRAM tile {:#x}",
+                    0x200 + tile
+                );
+            }
             frames += 1;
         }
-        eprintln!("{name}: {frames} frames replayed exactly");
+        eprintln!("{name}: {frames} frames replayed exactly; seen: {features:?}");
         Some(frames)
     }
 
@@ -798,6 +869,25 @@ mod tests {
         let Some(rom) = rom() else { return };
         if let Some(n) = replay(&rom, "circuit") {
             assert!(n >= 600, "{n} frames");
+        }
+    }
+
+    /// The reference race with HUD inputs set by the trace (`tools/ui_hud_trace.py`, pokes in docs/formats/ui.md):
+    /// km/h, every language, a wingman with portrait blink and bar values, the arrow both ways, first place,
+    /// a negative split, the needle's other scale and the HUD switched off.
+    #[test]
+    fn hud_replays_poked_inputs() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "inputs") {
+            assert!(n >= 900, "{n} frames");
+        }
+    }
+
+    #[test]
+    fn hud_replays_a_hunter_race() {
+        let Some(rom) = rom() else { return };
+        if let Some(n) = replay(&rom, "hunter") {
+            assert!(n >= 900, "{n} frames");
         }
     }
 }
