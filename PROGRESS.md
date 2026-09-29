@@ -44,6 +44,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **viewer-sky-paint** (started after the first merges): viewer parts of R3/R5/R6. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
 - **car-atlas:** R13, the player's decals and overlays, and how opponents' cars, paints and materials are chosen. Owns `paint.rs` (+ `atlas.rs`), `docs/formats/car-paint.md`.
 - **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
+- **entity-draw:** R12, the exact car/entity draw on top of `render::draw_world`, checked against every pixel of reference frames. Owns `render.rs` (+ `render_entities.rs`), `docs/engine/renderer.md`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
