@@ -1,0 +1,10 @@
+[package]
+name = "nfsgba-audio"
+version = "0.1.0"
+edition = "2024"
+description = "The LS_Play sound engine (GBAMOD30 music, sound effects, mixer) of NFS Carbon: Own the City, rewritten"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+nfsgba-formats = { path = "../nfsgba-formats" }
