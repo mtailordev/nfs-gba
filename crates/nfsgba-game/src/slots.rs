@@ -22,7 +22,6 @@ const PHASE: u32 = 0x0300_0048;
 const PLAYER: u32 = 0x0300_0060;
 const VIEW: u32 = 0x0300_0080;
 const PHYSICS_ORIENTATION: u32 = 0x0300_610C;
-const RECIP: u32 = 0x087C_45F0;
 const CAR_TABLE: u32 = 0x087F_0BD8;
 const EFFECT_MATERIALS: u32 = 0x0836_CF5C;
 
@@ -207,10 +206,6 @@ fn put_sprite(m: &mut Mem, kind: u8, frame: i16, scale: i16, size: i16, x: i16, 
     m.set_u8(s + 0x13, m.u16(material + 0x20) as u8);
 }
 
-fn recip(m: &Mem, k: i32) -> i32 {
-    m.i32(RECIP.wrapping_add((k as u32).wrapping_mul(4)))
-}
-
 fn view_centre(m: &Mem) -> (i16, i16) {
     (m.i16(VIEW + 8), m.i16(VIEW + 0xA))
 }
@@ -234,7 +229,9 @@ fn light(m: &mut Mem, slot: u32, p: [i32; 3], radius: i32, frame: i32, size: i32
     if (out[2] as u32).wrapping_sub(0x100) > 0x166F {
         return;
     }
-    let s = m.i32(VIEW + 0x1C).wrapping_mul(recip(m, out[2]) >> 8);
+    let s = m
+        .i32(VIEW + 0x1C)
+        .wrapping_mul(nfsgba_fixed::recip(&m.rom, out[2]) >> 8);
     if !on_screen(s, out, cx as i32, cy as i32) {
         return;
     }
@@ -266,14 +263,16 @@ fn spawn_effect_sprite(m: &mut Mem, slot: u32, p: [i32; 3], radius: i32, frame: 
     if (out[2] as u32).wrapping_sub(8) > 0xF97 {
         return;
     }
-    let s = m.i32(VIEW + 0x1C).wrapping_mul(recip(m, out[2]) >> 8);
+    let s = m
+        .i32(VIEW + 0x1C)
+        .wrapping_mul(nfsgba_fixed::recip(&m.rom, out[2]) >> 8);
     if !on_screen(s, out, cx as i32, cy as i32) {
         return;
     }
     let material = EFFECT_MATERIALS + material * 0x24;
     let t = s.wrapping_mul(out[0].wrapping_sub(radius));
     let w = (s.wrapping_mul(radius.wrapping_add(out[0])) >> 16) - (t >> 16);
-    let scale = (recip(m, w) >> 10) as i16;
+    let scale = (nfsgba_fixed::recip(&m.rom, w) >> 10) as i16;
     let mut half = (w >> 1) as i16;
     if size == 1 {
         half = half.wrapping_sub(0x10);
@@ -294,13 +293,15 @@ fn billboard(m: &mut Mem, slot: u32, radius: i32, frame: i16, size: i16) {
     if (out[2] as u32).wrapping_sub(8) > 0xF97 {
         return;
     }
-    let s = m.i32(VIEW + 0x1C).wrapping_mul(recip(m, out[2]) >> 8);
+    let s = m
+        .i32(VIEW + 0x1C)
+        .wrapping_mul(nfsgba_fixed::recip(&m.rom, out[2]) >> 8);
     if !on_screen(s, out, 0x70, 0x50) {
         return;
     }
     let t = s.wrapping_mul(out[0].wrapping_sub(radius));
     let w = (s.wrapping_mul(radius.wrapping_add(out[0])) >> 16) - (t >> 16);
-    let scale = (recip(m, w) >> 10) as i16;
+    let scale = (nfsgba_fixed::recip(&m.rom, w) >> 10) as i16;
     let half = ((w >> 1) as i16).wrapping_sub(8);
     let x = ((t as u32 >> 16) as i16).wrapping_add(0x70).wrapping_add(half);
     let y = ((s.wrapping_mul(out[1].wrapping_sub(radius)) as u32 >> 16) as i16)

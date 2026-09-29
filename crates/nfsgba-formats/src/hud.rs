@@ -7,6 +7,8 @@
 
 use super::{div, u32_at};
 use crate::ui::{self, Object};
+/// The IWRAM divide routine the HUD calls through `*0x03006494` (the game only passes positive `d` here).
+use nfsgba_fixed::iwram_divmod as divmod;
 
 /// The IWRAM variables the HUD reads and writes. Each field names its address.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -94,23 +96,6 @@ const DIGIT_SHIFT: usize = 0x7F_4378;
 const MINIMAP_MASKS: usize = 0x7F_5CE8;
 /// HUD material 135, the 512×384 4bpp city map (raw rows of 256 bytes).
 const MAP_MATERIAL: usize = 135;
-
-/// The IWRAM divide routine the HUD calls through `*0x03006494` (`0x03000220`, ROM copy `0x08165134`):
-/// shift-and-subtract on the magnitudes, the quotient signed by `n ^ d`, the remainder (stored at
-/// `0x03006480`) `n − |q|·d`, so a negative `n` gives an off remainder. The game only passes positive `d`.
-pub fn divmod(n: i32, d: i32) -> (i32, i32) {
-    debug_assert!(d > 0, "the routine mishandles d <= 0");
-    let q = n.unsigned_abs() / d as u32;
-    let rem = n.wrapping_sub((q as i32).wrapping_mul(d));
-    (
-        if (n ^ d) < 0 {
-            (q as i32).wrapping_neg()
-        } else {
-            q as i32
-        },
-        rem,
-    )
-}
 
 /// The message table of a race mode (`FUN_08143248`): 16 × (slot, element, frame, 0); slot 0xFF = none.
 /// Other modes read an uninitialised register in the game; they never occur.
@@ -379,7 +364,10 @@ fn minimap(rom: &[u8], g: &Globals, racers: &[Racer; 4], o: &mut [Object]) -> Ve
         }
         let dx = div(r.x >> 8, 499) - cx + off_x;
         let dy = div(r.z.wrapping_neg() >> 8, 499) - cz + off_y;
-        let (c, s) = (ui::cos(rom, a), ui::sin(rom, a));
+        let (c, s) = (
+            nfsgba_fixed::cos_q14(rom, a as i32),
+            nfsgba_fixed::sin_q14(rom, a as i32),
+        );
         let px = (dx.wrapping_mul(c) >> 14) + (dy.wrapping_mul(s) >> 14) + 0x1C;
         let py = (dx.wrapping_mul(s.wrapping_neg()) >> 14) + (dy.wrapping_mul(c) >> 14) + 0x1C;
         // No lower bound on x (kept).

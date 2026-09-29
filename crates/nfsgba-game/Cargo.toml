@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+nfsgba-fixed = { path = "../nfsgba-fixed" }
 nfsgba-formats = { path = "../nfsgba-formats" }
 nfsgba-sim = { path = "../nfsgba-sim" }
 nfsgba-audio = { path = "../nfsgba-audio" }

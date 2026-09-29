@@ -9,13 +9,7 @@ use super::{LEVEL_TABLE, i16_at, ptr, u16_at, u32_at};
 mod entities;
 pub use entities::{Entity, Scene, draw_entities, project_model};
 
-/// Reciprocal table (ROM `0x7C45F0`, 32,767 entries): entry k = 2^24 / (k + 1).
-const RECIP: usize = 0x7C_45F0;
-
-/// Entry `k` of the reciprocal table. The game indexes it without bounds checks, so `k` is taken as is.
-pub fn recip(rom: &[u8], k: i32) -> i32 {
-    u32_at(rom, (RECIP as i64 + 4 * k as i64) as usize) as i32
-}
+pub use nfsgba_fixed::recip;
 
 /// `FUN_03004ca4`: `a / (b + 1)` as `(a * recip[b]) >> 24` in 64 bits.
 pub fn div_recip(rom: &[u8], a: i32, b: i32) -> i32 {
@@ -241,6 +235,11 @@ pub struct MaterialState {
 impl Runtime {
     fn piece(&self, index: u16) -> Option<Piece> {
         (index != 0xFFFF).then(|| self.pieces[index as usize])
+    }
+
+    /// A wall's flags (`+0x2E`) as the renderer sees them: its moving piece's (`+0x2A`) when it names one.
+    pub fn wall_flags(&self, piece: u16, flags: u16) -> u16 {
+        self.piece(piece).map_or(flags, |p| p.flags)
     }
 
     fn material(&self, slot: u16) -> MaterialState {
@@ -540,7 +539,7 @@ pub fn draw_sector_walls(
         if u16_at(rom, material_at(rom, material)) == 0 {
             continue; // material 0
         }
-        let flags = piece.map_or(u16_at(rom, w + 0x2E), |p| p.flags);
+        let flags = rt.wall_flags(u16_at(rom, w + 0x2A), u16_at(rom, w + 0x2E));
         let draw = flags & 1 == 0
             && match deferred {
                 None if s.flags & 4 != 0 => false,
@@ -1168,9 +1167,7 @@ pub fn camera_sector(rom: &[u8], rt: &Runtime, sector: u16, x: i32, z: i32) -> O
     let (walls, count) = sector_walls(rom, sector);
     (0..count).find_map(|k| {
         let w = walls + 0x44 * k;
-        let flags = rt
-            .piece(u16_at(rom, w + 0x2A))
-            .map_or(u16_at(rom, w + 0x2E), |p| p.flags);
+        let flags = rt.wall_flags(u16_at(rom, w + 0x2A), u16_at(rom, w + 0x2E));
         let next = u16_at(rom, w + 0x32);
         if flags & 0x1000 != 0 || next == 0xFFFF || !point_in_sector(rom, next, x, z) {
             return None;

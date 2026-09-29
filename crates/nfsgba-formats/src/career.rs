@@ -4,6 +4,7 @@
 //! profile struct is `*0x030056EC` (`0x02000808` in the reference run).
 
 use super::{div, i16_at, ptr, u16_at, u32_at};
+pub use nfsgba_fixed::{isqrt, rand_table};
 use std::io;
 
 /// 66 event records of 8 bytes: zones 1–5 have 12 events each, zone 6 has 6 (`FUN_0812da08`).
@@ -439,22 +440,6 @@ impl RacingLine {
     }
 }
 
-/// `FUN_0815fa54`: floor square root, 16 two-bit steps; 0 gives 1.
-pub fn isqrt(mut v: u32) -> i32 {
-    let (mut rem, mut root) = (0u32, 0u32);
-    for _ in 0..16 {
-        rem = rem * 4 + (v >> 30);
-        v <<= 2;
-        let trial = root << 2 | 1;
-        root <<= 1;
-        if trial <= rem {
-            rem -= trial;
-            root += 1;
-        }
-    }
-    root.max(1) as i32
-}
-
 /// `FUN_08138c24`: one plane-table row from four consecutive waypoints.
 fn plane(prev: LinePoint, cur: LinePoint, next: LinePoint, next2: LinePoint) -> Plane {
     let unit = |dx: i32, dz: i32| {
@@ -779,10 +764,10 @@ impl Default for Race {
     }
 }
 
-/// `rand_table` (`FUN_0815fcfc`): the next of 256 `u16` at `0x7C03F0`, index `0x030064C8`.
-pub fn rand_table(rom: &[u8], index: &mut u32) -> u32 {
-    *index = (*index + 1) & 0xFF;
-    u32::from(u16_at(rom, 0x7C_03F0 + 2 * *index as usize))
+/// `event_status` (`FUN_08135d4c`): the 2-bit status of career event `event` in the profile's event bytes
+/// (`+0x205`): 1 won, 2 second place, 3 not done.
+pub fn event_status(events: &[u8], event: usize) -> u8 {
+    events[event >> 2] >> ((event & 3) * 2) & 3
 }
 
 /// Per difficulty, the roll (`rand & 0xFF`) an AI must beat to take a shortcut (`0x7BFCD4`).
@@ -1273,7 +1258,7 @@ impl Save {
 
     /// 1 won, 2 second place, 3 not done (a new profile has every event at 3) (`FUN_08135d4c`).
     pub fn event_status(&self, event: usize) -> u8 {
-        self.events[event >> 2] >> ((event & 3) * 2) & 3
+        event_status(&self.events, event)
     }
 
     /// The unlock bitfield (profile `+0x42D`, 40 bytes, bit `id` set = unlocked) that `FUN_08135958` rebuilds

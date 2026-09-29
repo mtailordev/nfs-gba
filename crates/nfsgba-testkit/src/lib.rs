@@ -64,10 +64,11 @@ pub fn fixture(rel: &str) -> Option<PathBuf> {
 }
 
 /// An mGBA dump by its prefix (`mgba/race` for `mgba/race.wram.bin`, `.iwram.bin`, …): the prefix path, when
-/// its EWRAM file exists. Every domain file present is resolved through [`fixture`].
+/// its EWRAM file exists. The domain files `nfsgba_formats::Dump::load` reads are resolved through [`fixture`]
+/// when present (the BIOS and EEPROM dumps are never read).
 pub fn dump(prefix: &str) -> Option<PathBuf> {
     fixture(&format!("{prefix}.wram.bin"))?;
-    for domain in ["iwram", "io", "palette", "vram", "oam", "bios", "eeprom"] {
+    for domain in ["iwram", "io", "palette", "vram", "oam"] {
         let rel = format!("{prefix}.{domain}.bin");
         if work_dir()?.join(&rel).exists() {
             fixture(&rel);

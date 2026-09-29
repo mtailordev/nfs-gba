@@ -183,7 +183,7 @@ fn race_init(g: &mut Machine, io: &mut Io, level: u32, seed_vblanks: u32) -> Res
     m.set_u32(0x0300_5714, 0);
     m.set_u32(0x0300_5800, 0);
     let mut rand = m.u32(RAND);
-    let r = atlas::rand_table(&m.rom, &mut rand);
+    let r = nfsgba_fixed::rand_table(&m.rom, &mut rand);
     m.set_u32(RAND, rand);
     let profile = m.u32(PROFILE);
     m.set_u8(profile + 0x2EE, (r & 3) as u8);
@@ -722,62 +722,47 @@ fn blit_material(m: &mut Mem, dst: u32, index: u32, add: u8, only: Option<(u8, u
     Ok(())
 }
 
-/// The game's decompressor (`lz77_ring_decode`, ARM `0x030042f4`): the BIOS LZ77 stream at `src` (ROM) into `dst`,
-/// through the 4 KiB ring at `ring` (0xFF-filled up to 0xFEE). It writes the header size (8 more than the image,
-/// past its block), and every byte also goes into the ring except the one that ends it; both stay in RAM.
-fn ring_decode(m: &mut Mem, src: u32, mut dst: u32, ring: u32) {
+/// The game's decompressor (`lz77_ring_decode`, ARM `0x030042f4`, the loop in `ui::ring_decode`): the BIOS LZ77
+/// stream at `src` (ROM) into `dst`, through the 4 KiB ring at `ring`, whose bytes 0..0xFEE are 0xFF-filled first
+/// (the rest keeps what the heap held). It writes the header size (8 more than the image, past its block), and
+/// the ring's final contents stay in RAM.
+fn ring_decode(m: &mut Mem, src: u32, dst: u32, ring: u32) {
+    struct Ram<'a> {
+        m: &'a mut Mem,
+        src: u32,
+        dst: u32,
+        ring: u32,
+    }
+    impl ui::RingIo for Ram<'_> {
+        fn next(&mut self) -> u8 {
+            let b = self.m.u8(self.src);
+            self.src += 1;
+            b
+        }
+        fn ring(&self, i: usize) -> u8 {
+            self.m.u8(self.ring + i as u32)
+        }
+        fn set_ring(&mut self, i: usize, b: u8) {
+            self.m.set_u8(self.ring + i as u32, b);
+        }
+        fn put(&mut self, b: u8) {
+            self.m.set_u8(self.dst, b);
+            self.dst += 1;
+        }
+    }
     let size = m.u32(src) >> 8;
-    let mut s = src + 4;
     for k in 0..0xFEE {
         m.set_u8(ring + k, 0xFF);
     }
-    let (mut written, mut left, mut pos) = (0u32, size as i32, 0xFEEu32);
-    let (mut flags, mut bit) = (7u8, 7u32);
-    let mut next = |m: &Mem| {
-        let b = m.u8(s);
-        s += 1;
-        b
-    };
-    loop {
-        flags <<= 1;
-        bit += 1;
-        if bit == 8 {
-            bit = 0;
-            flags = next(m);
-        }
-        if flags & 0x80 == 0 {
-            let b = next(m);
-            if written < size {
-                left -= 1;
-                m.set_u8(dst, b);
-                dst += 1;
-                if left < 1 {
-                    return;
-                }
-            }
-            m.set_u8(ring + pos, b);
-            written += 1;
-            pos = (pos + 1) & 0xFFF;
-            continue;
-        }
-        let (hi, lo) = (next(m) as u32, next(m) as u32);
-        let (len, disp) = ((hi >> 4) + 3, (hi & 0xF) << 8 | lo);
-        for _ in 0..len {
-            let b = m.u8(ring + (pos.wrapping_sub(disp + 1) & 0xFFF));
-            if written < size {
-                m.set_u8(dst, b);
-                dst += 1;
-                left -= 1;
-                if left < 1 {
-                    // The routine goes on with the next flag without storing this byte in the ring.
-                    break;
-                }
-            }
-            m.set_u8(ring + pos, b);
-            written += 1;
-            pos = (pos + 1) & 0xFFF;
-        }
-    }
+    ui::ring_decode(
+        &mut Ram {
+            m,
+            src: src + 4,
+            dst,
+            ring,
+        },
+        size,
+    );
 }
 
 /// `load_car_palettes(1)` (`0x0813b6d0`) through `paint::load_car_palettes`, into both base buffers.

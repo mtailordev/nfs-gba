@@ -1,7 +1,6 @@
 //! The effect-sprite list (`FUN_08161f38`, list header at `0x03000058`): 20-byte sprite objects written into the
 //! shadow OAM (`0x030064F0`) from entry `start` downwards, through the game's OAM attribute setters.
 
-use nfsgba_formats::ui;
 use nfsgba_sim::Mem;
 
 pub const SHADOW_OAM: u32 = 0x0300_64F0;
@@ -104,7 +103,10 @@ fn set_affine_index(m: &mut Mem, i: u32, matrix: u32) {
 
 /// `oam_set_affine` (`0x0816144c`): matrix `k` = scale × rotation, in the fourth halfword of entries 4k..4k+3.
 fn set_affine(rom: &[u8], m: &mut Mem, k: u32, sx: i32, sy: i32, angle: u32) {
-    let (c, s) = (ui::cos(rom, angle), ui::sin(rom, angle));
+    let (c, s) = (
+        nfsgba_fixed::cos_q14(rom, angle as i32),
+        nfsgba_fixed::sin_q14(rom, angle as i32),
+    );
     if k < 0x20 {
         let at = SHADOW_OAM + 0x20 * k;
         m.set_i16(at + 6, (sx.wrapping_mul(c) >> 14) as i16);

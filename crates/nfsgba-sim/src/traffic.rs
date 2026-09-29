@@ -6,7 +6,7 @@
 
 use crate::Result;
 use crate::heap;
-use crate::math::{div, isqrt, mul64, shr64};
+use crate::math::{div, isqrt};
 use crate::mem::Mem;
 use crate::route::CIRCUIT;
 use crate::world::{self, NONE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
@@ -23,28 +23,15 @@ const CLEARANCE2: i32 = 0x8_FFFF;
 
 /// `rand_table` (`FUN_0815fcfc`): the next entry of the 256-entry table at 0x087C03F0.
 pub fn rand(m: &mut Mem) -> u32 {
-    let k = m.u32(0x0300_64C8).wrapping_add(1) & 0xFF;
+    let mut k = m.u32(0x0300_64C8);
+    let r = nfsgba_fixed::rand_table(&m.rom, &mut k);
     m.set_u32(0x0300_64C8, k);
-    m.u16(0x087C_03F0 + k * 2) as u32
+    r
 }
 
-/// `recip_div_16` (IWRAM 0x03004D20): `a * recip_table[b] >> 8`, about `(a << 16) / (b + 1)`.
-fn recip_div_16(m: &Mem, a: i32, b: i32) -> i32 {
-    shr64(mul64(a, crate::math::recip_entry(m, b)), 8)
-}
-
-/// IWRAM 0x03004470 (ARM): the reciprocal-table version of `atan2`, divisor clamped to 0x7FFE.
+/// `atan2_fast` (IWRAM 0x03004470) on the ROM in `m`.
 pub fn atan2_fast(m: &Mem, x: i32, z: i32) -> i32 {
-    let ax = (x ^ (x >> 31)).wrapping_sub(x >> 31);
-    let clamp = |d: i32| if d == 0 { 1 } else { d.min(0x7FFE) };
-    let (r, base) = if z >= 0 {
-        (recip_div_16(m, z - ax, clamp(z + ax)) >> 1, 0x6488)
-    } else {
-        (recip_div_16(m, z + ax, clamp(ax - z)) >> 1, 0x12D9A)
-    };
-    let cube = (r.wrapping_mul(r.wrapping_mul(r) >> 15) >> 15).wrapping_mul(0x1920);
-    let a = (base + ((cube >> 15) - (r.wrapping_mul(0x7DA9) >> 15))).wrapping_mul(0x1460) >> 16;
-    if x < 0 { -a } else { a }
+    nfsgba_fixed::atan2_fast(&m.rom, x, z)
 }
 
 /// `FUN_08137534`: the first entity at world `+0xF8` and after (world `+0xFA` of them) whose flag bit 0 is clear.

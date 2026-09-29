@@ -22,8 +22,6 @@ pub const HUD_TEXELS: usize = 0x34_7B74;
 pub const OBJ_PALETTES: usize = 0x36_C75C;
 /// HUD sprite materials, 280 × 0x24 (race descriptor `+0x24`).
 pub const HUD_MATERIALS: usize = 0x36_CF5C;
-/// Half-wave sine table: 0x2000 × i16 (2.14 fixed point), a full turn is 0x4000 (`FUN_0815f948`).
-pub const SINE: usize = 0x7C_05F0;
 /// Four font descriptors, 0x18 bytes each (`FUN_08141578` picks them for font ids 0xC..0xF).
 pub const FONTS: usize = 0x7E_E974;
 /// Menu materials holding the glyphs of fonts 0..3. The text functions map font ids 0xC..0xE to materials
@@ -74,6 +72,64 @@ pub fn materials(rom: &[u8], table: usize) -> Vec<Material> {
         .collect()
 }
 
+/// Where the game's LZ77 ring decoder reads and writes: the packed stream, the 4 KiB ring and the output. `unpack`
+/// keeps them in local buffers; `nfsgba_game::race_init` keeps them in the game's RAM (its ring's side effects
+/// are part of the exact state).
+pub trait RingIo {
+    /// The next byte of the packed stream.
+    fn next(&mut self) -> u8;
+    fn ring(&self, i: usize) -> u8;
+    fn set_ring(&mut self, i: usize, b: u8);
+    /// The next output byte.
+    fn put(&mut self, b: u8);
+}
+
+/// The decode loop of the game's decompressor (`lz77_ring_decode`, ARM `0x030042f4`) for a stream of `size`
+/// output bytes (the header's size; the ring position starts at 0xFEE). Every byte also goes into the ring,
+/// except the one that ends the stream; running out inside a reference skips that byte's ring store and goes on
+/// with the next flag, and only a literal ends the routine (ported as is).
+pub fn ring_decode(io: &mut impl RingIo, size: u32) {
+    let (mut stored, mut left, mut pos) = (0u32, size as i64, 0xFEEusize);
+    let (mut flags, mut bit) = (7u32, 7u32);
+    loop {
+        flags <<= 1;
+        bit += 1;
+        if bit == 8 {
+            bit = 0;
+            flags = io.next() as u32;
+        }
+        if flags & 0x80 == 0 {
+            let b = io.next();
+            if stored < size {
+                left -= 1;
+                io.put(b);
+                if left <= 0 {
+                    return;
+                }
+            }
+            io.set_ring(pos, b);
+            stored += 1;
+            pos = (pos + 1) & 0xFFF;
+            continue;
+        }
+        let (hi, lo) = (io.next() as usize, io.next() as usize);
+        let (len, disp) = ((hi >> 4) + 3, (hi & 0xF) << 8 | lo);
+        for _ in 0..len {
+            let b = io.ring(pos.wrapping_sub(disp + 1) & 0xFFF);
+            if stored < size {
+                left -= 1;
+                io.put(b);
+                if left <= 0 {
+                    break;
+                }
+            }
+            io.set_ring(pos, b);
+            stored += 1;
+            pos = (pos + 1) & 0xFFF;
+        }
+    }
+}
+
 /// The game's decompressor (IWRAM routine at ROM `0x169208`, called by `FUN_08163d30`): the BIOS LZ77 bit
 /// stream (`10 ss ss ss` header, MSB-first flags, 2-byte references of length 3..18 and distance 1..4096),
 /// decoded through a 4 KiB ring that starts at 0xFEE with bytes 0..0xFED set to 0xFF. References before the
@@ -83,55 +139,37 @@ pub fn materials(rom: &[u8], table: usize) -> Vec<Material> {
 /// Ring bytes 0xFEE..0xFFF are uninitialised heap in the game (0xFF here); no stream in the ROM reaches
 /// them (`unpack_lowest_reference`, tested), so the output is exact.
 pub fn unpack(rom: &[u8], at: usize) -> Vec<u8> {
-    let size = (u32_at(rom, at) >> 8) as i64;
-    let mut ring = [0xFFu8; 0x1000];
-    let mut out = Vec::with_capacity(size as usize + 18);
-    let (mut src, mut pos, mut stored, mut left) = (at + 4, 0xFEEusize, 0i64, size);
-    let (mut flags, mut bit) = (7u32, 7u32);
-    let next = |src: &mut usize| {
-        let b = rom.get(*src).copied().unwrap_or(0);
-        *src += 1;
-        b
-    };
-    loop {
-        flags <<= 1;
-        bit += 1;
-        if bit == 8 {
-            bit = 0;
-            flags = next(&mut src) as u32;
+    struct Local<'a> {
+        rom: &'a [u8],
+        src: usize,
+        ring: [u8; 0x1000],
+        out: Vec<u8>,
+    }
+    impl RingIo for Local<'_> {
+        fn next(&mut self) -> u8 {
+            let b = self.rom.get(self.src).copied().unwrap_or(0);
+            self.src += 1;
+            b
         }
-        if flags & 0x80 == 0 {
-            let b = next(&mut src);
-            if stored < size {
-                left -= 1;
-                out.push(b);
-                if left <= 0 {
-                    return out;
-                }
-            }
-            ring[pos] = b;
-            stored += 1;
-            pos = (pos + 1) & 0xFFF;
-            continue;
+        fn ring(&self, i: usize) -> u8 {
+            self.ring[i]
         }
-        let (hi, lo) = (next(&mut src) as usize, next(&mut src) as usize);
-        let (len, disp) = ((hi >> 4) + 3, (hi & 0xF) << 8 | lo);
-        for _ in 0..len {
-            let b = ring[pos.wrapping_sub(disp + 1) & 0xFFF];
-            if stored < size {
-                left -= 1;
-                out.push(b);
-                // Running out inside a reference skips the ring store and goes on with the next flag, so the
-                // output can run past `size`; only a literal ends the routine (ported as is).
-                if left <= 0 {
-                    break;
-                }
-            }
-            ring[pos] = b;
-            stored += 1;
-            pos = (pos + 1) & 0xFFF;
+        fn set_ring(&mut self, i: usize, b: u8) {
+            self.ring[i] = b;
+        }
+        fn put(&mut self, b: u8) {
+            self.out.push(b);
         }
     }
+    let size = u32_at(rom, at) >> 8;
+    let mut io = Local {
+        rom,
+        src: at + 4,
+        ring: [0xFF; 0x1000],
+        out: Vec::with_capacity(size as usize + 18),
+    };
+    ring_decode(&mut io, size);
+    io.out
 }
 
 /// The lowest output position a packed stream references, relative to its first output byte, over the
@@ -366,21 +404,6 @@ pub struct Upload {
     pub len: usize,
 }
 
-/// `sin(a)` in 2.14 fixed point, a full turn = 0x4000 (`FUN_0815f948`).
-pub fn sin(rom: &[u8], a: u32) -> i32 {
-    let a = (a & 0x3FFF) as usize;
-    if a > 0x1FFF {
-        -(u16_at(rom, SINE + 2 * (a - 0x2000)) as i16 as i32)
-    } else {
-        u16_at(rom, SINE + 2 * a) as i16 as i32
-    }
-}
-
-/// `cos(a)` = `sin(a + 0x1000)` (`FUN_0815f988`).
-pub fn cos(rom: &[u8], a: u32) -> i32 {
-    sin(rom, a.wrapping_add(0x1000))
-}
-
 /// Shadow OAM as the game keeps it at `0x030064F0`: 128 entries of four u16 (attr0, attr1, attr2 and the
 /// interleaved affine parameter), copied to OAM each frame.
 pub type Oam = [[u16; 4]; 128];
@@ -452,7 +475,10 @@ pub fn update_sprites(
                 [o.scale[0] as i32, o.scale[1] as i32]
             };
             let angle = if o.angle != 0 { o.angle as u32 } else { 0 };
-            let (c, sn) = (cos(rom, angle), sin(rom, angle));
+            let (c, sn) = (
+                nfsgba_fixed::cos_q14(rom, angle as i32),
+                nfsgba_fixed::sin_q14(rom, angle as i32),
+            );
             // FUN_0816144c: pa = sx·cos, pb = sx·sin, pc = −sy·sin, pd = sy·cos (>> 14).
             for (j, v) in [(sx * c) >> 14, (sx * sn) >> 14, (sy * -sn) >> 14, (sy * c) >> 14]
                 .into_iter()

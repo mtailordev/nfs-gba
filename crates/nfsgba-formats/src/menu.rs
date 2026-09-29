@@ -85,15 +85,15 @@ pub const STACK_TEXT: u32 = 0x0300_7400;
 impl Gba {
     /// An mGBA dump (`<prefix>.{wram,iwram,io,palette,vram,oam}.bin`, `tools/mgba_ctl.py dump`).
     pub fn from_dump(rom: Vec<u8>, prefix: &std::path::Path) -> std::io::Result<Gba> {
-        let read = |d: &str| std::fs::read(format!("{}.{d}.bin", prefix.display()));
+        let d = crate::Dump::load(prefix)?.require(&["io", "palette", "vram", "oam"])?;
         Ok(Gba {
             rom,
-            ewram: read("wram")?,
-            iwram: read("iwram")?,
-            io: read("io")?,
-            pal: read("palette")?,
-            vram: read("vram")?,
-            oam: read("oam")?,
+            ewram: d.ewram,
+            iwram: d.iwram,
+            io: d.io,
+            pal: d.palette,
+            vram: d.vram,
+            oam: d.oam,
             calls: Vec::new(),
             returns: Default::default(),
             texts: Vec::new(),
@@ -1163,10 +1163,10 @@ const TEXT_BOX: u32 = 0x0814_1C88; // (font, text key or pointer, x, y, width, l
 const INTRO_PAGE_SETUP: u32 = 0x0813_64C4; // (unpack buffer): clears the page
 const DIVIDEND_REMAINDER: u32 = 0x0300_6480;
 
-/// The IWRAM divide routine (`call_via_r3(n, d, 0x03006480, *0x03006494)`, see `hud::divmod`): the quotient,
+/// The IWRAM divide routine (`call_via_r3(n, d, 0x03006480, *0x03006494)`, `nfsgba_fixed::iwram_divmod`): the quotient,
 /// with the remainder stored at `0x03006480`.
 fn iwram_div(g: &mut Gba, n: i32, d: i32) -> i32 {
-    let (q, r) = crate::hud::divmod(n, d);
+    let (q, r) = nfsgba_fixed::iwram_divmod(n, d);
     g.set_u32(DIVIDEND_REMAINDER, r as u32);
     q
 }
@@ -1255,7 +1255,8 @@ fn frames_to_centiseconds(frames: i32) -> i32 {
 /// `event_status` (`0x08135D4C`): the 2-bit status of career event `n` (profile `+0x205`; 1 won, 2 second, 3 not
 /// done).
 fn event_status(g: &Gba, n: i32) -> u32 {
-    (g.u8(g.u32(PROFILE).wrapping_add(0x205).wrapping_add((n >> 2) as u32)) as u32 >> ((n & 3) * 2)) & 3
+    let (mem, o) = g.at(g.u32(PROFILE).wrapping_add(0x205));
+    crate::career::event_status(&mem[o..], n as usize) as u32
 }
 
 /// `zone_ladder_index` (`0x0812FC34`): zone·12 plus the zone's events with status 1 or 2 (6 events in zone 5).
@@ -3322,9 +3323,10 @@ pub fn list_draw(g: &mut Gba, _full: u32) -> u32 {
 
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
-    let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
+    let mut i = g.u32(RAND_INDEX);
+    let r = nfsgba_fixed::rand_table(&g.rom, &mut i);
     g.set_u32(RAND_INDEX, i);
-    g.u16(0x087C_03F0 + 2 * i) as u32
+    r
 }
 
 /// `unlock_is_locked` (`0x0812D784`): 1 when bit `id` of the profile's unlock bits (`+0x42D`) is clear.

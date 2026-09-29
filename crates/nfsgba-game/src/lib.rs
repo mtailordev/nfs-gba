@@ -17,7 +17,7 @@ pub mod slots;
 pub mod trace;
 pub mod view;
 
-use std::{fs, io, path::Path};
+use std::{io, path::Path};
 
 use nfsgba_audio::{Engine, Rom, ram};
 use nfsgba_formats::{
@@ -96,16 +96,11 @@ impl Machine {
 
     /// From an mGBA dump (`PREFIX.wram.bin`, `.iwram.bin`, `.palette.bin`, `.vram.bin`, `.oam.bin`).
     pub fn load_dump(rom: Vec<u8>, prefix: &Path) -> io::Result<Machine> {
-        let read = |d: &str| fs::read(format!("{}.{d}.bin", prefix.display()));
-        let s = [
-            read("wram")?,
-            read("iwram")?,
-            read("palette")?,
-            read("vram")?,
-            read("oam")?,
-        ]
-        .concat();
-        Ok(Machine::from_state(rom, &s))
+        let d = nfsgba_formats::Dump::load(prefix)?.require(&["palette", "vram", "oam"])?;
+        Ok(Machine::from_state(
+            rom,
+            &[d.ewram, d.iwram, d.palette, d.vram, d.oam].concat(),
+        ))
     }
 
     pub fn state(&self) -> Vec<u8> {
@@ -657,10 +652,12 @@ impl Game {
             let speed = racers[g.player].driver.map_or(0, |d| d.speed);
             let mut v = nfsgba_formats::div(speed, 0x163C);
             if g.units == 0 {
-                v = hud::divmod(v << 8, 0x19B).0;
+                v = nfsgba_fixed::iwram_divmod(v << 8, 0x19B).0;
             }
-            let rest = hud::divmod(v, 100).1;
-            self.sim.mem.set_i32(0x0300_6480, hud::divmod(rest, 10).1);
+            let rest = nfsgba_fixed::iwram_divmod(v, 100).1;
+            self.sim
+                .mem
+                .set_i32(0x0300_6480, nfsgba_fixed::iwram_divmod(rest, 10).1);
         }
         let m = &mut self.sim.mem;
         view::store_hud_globals(m, &g);

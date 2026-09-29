@@ -693,31 +693,17 @@ mod tests {
 
     /// A race RAM dump (`NAME.iwram.bin`, `NAME.wram.bin`, `NAME.vram.bin` from `tools/mgba_remote.lua` or
     /// `tools/mgba_frame_probe.lua`): everything the renderer reads, straight from the game's memory.
-    struct Dump {
-        iwram: Vec<u8>,
-        wram: Vec<u8>,
-        vram: Vec<u8>,
-    }
+    struct Dump(crate::Dump);
 
     const WORLD: u32 = 0x0300_00C0;
 
     impl Dump {
         fn load(name: &str) -> Option<Dump> {
-            let read = |ext: &str| nfsgba_testkit::read(&format!("{name}.{ext}.bin"));
-            Some(Dump {
-                iwram: read("iwram")?,
-                wram: read("wram")?,
-                vram: read("vram")?,
-            })
+            crate::Dump::fixture(name, &["vram"]).map(Dump)
         }
 
         fn mem(&self, at: u32) -> &[u8] {
-            match at >> 24 {
-                2 => &self.wram[(at & 0x3_FFFF) as usize..],
-                3 => &self.iwram[(at & 0x7FFF) as usize..],
-                6 => &self.vram[(at & 0x1_FFFF) as usize..],
-                _ => panic!("address {at:#x}"),
-            }
+            self.0.at(at)
         }
 
         fn u32(&self, at: u32) -> u32 {
@@ -796,7 +782,7 @@ mod tests {
                 (0..64)
                     .map(|s| std::array::from_fn(|k| self.u32(mats + 0x30 * s + 4 * k as u32) as i32))
                     .collect(),
-                &self.wram,
+                &self.0.ewram,
             )
         }
 
