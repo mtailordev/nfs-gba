@@ -88,9 +88,17 @@ fn racing_step(sim: &mut Sim, e: u32) -> Result<()> {
     if m.i32(0x0300_610C) != 0 {
         return Ok(());
     }
-    Err(Unported(
-        "FUN_0814de40 (suspension step; skipped while 0x0300610C is set)",
-    ))
+    // Unreachable in Carbon: `race_init` and every dynamics step set 0x0300610C to 1 (no trace step has it 0).
+    // Four points around the car; their y is uninitialised stack in the game, but always overwritten with the
+    // floor height (the sector query falls back to the car's sector, never 0xFFFF at a car step).
+    let mut pts = [[-0x20, 0, 0x55], [0x20, 0, 0x55], [-0x20, 0, -0x2A], [0x20, 0, -0x2A]];
+    let hits = contact::suspension(m, e, &mut pts, &mut [0; 4], dt);
+    let p = m.u32(e + 0x8C);
+    m.set_i32(p + 0x48, hits);
+    let front = m.i32(p + 0x6C).wrapping_add(m.i32(p + 0x70)) >> 1;
+    let rear = m.i32(p + 0x74).wrapping_add(m.i32(p + 0x78)) >> 1;
+    m.set_i32(e + 0x10, front.wrapping_add(rear) >> 1);
+    Ok(())
 }
 
 /// `FUN_0814b098`: drain the nitro tank (`+0x4C8`) while nitro is on (`+0x4D1`).

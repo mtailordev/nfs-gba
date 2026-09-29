@@ -6,7 +6,7 @@
 //! Wheels 0 and 1 steer.
 
 use crate::body;
-use crate::math::{add, cos, isqrt, mat_mul, mul12, recip, sin};
+use crate::math::{add, cos, div, isqrt, mat_mul, mul12, recip, sin};
 use crate::mem::Mem;
 use crate::route::is_player;
 use crate::sound::Command;
@@ -19,6 +19,63 @@ pub const WHEEL_SIZE: u32 = 0x94;
 const SURFACE_GRIP: u32 = 0x087F_5904;
 /// Ride height: added to every wheel's height before the floor test.
 const RIDE_HEIGHT: u32 = 0x204;
+
+/// `FUN_0814de40`: the suspension step of the racing step (only while `0x0300610C` is 0, see `car.rs`). Each
+/// point (x, z in car axes, city units) is turned by the car's heading (`rotation_y`), and its sector and floor
+/// height looked up (the point becomes the turned offset and that floor height; `sectors` gets the sector). Then,
+/// per point `i`: vertical speed `+0x08` gains `0x320000 / dt`; height `+0x6C` moves by speed / dt and stops at
+/// the floor (the speed bounces back at −1/32, and the point counts as a hit); the spring `+0x4C` and its rate
+/// `+0x5C` follow through a 64-bit division by a quarter of the car's mass; the rate is damped to 160/256.
+/// Returns the number of hits.
+pub fn suspension(m: &mut Mem, e: u32, pts: &mut [[i32; 3]], sectors: &mut [u16], dt: i32) -> i32 {
+    let p = m.u32(e + 0x8C);
+    let k = m.i32(crate::car::HANDLING + m.u8(e + 0x89) as u32 * 0x158) >> 2;
+    let spring_rest = k.wrapping_mul(4).wrapping_add(k).wrapping_mul(2);
+    let a = m.i32(e + 0x2C) >> 8;
+    let (c, s) = (cos(m, a), sin(m, a));
+    for (pt, out) in pts.iter_mut().zip(sectors.iter_mut()) {
+        let (px, pz) = (pt[0] << 8, pt[2] << 8);
+        let x = px.wrapping_mul(c).wrapping_add(pz.wrapping_mul(s)) >> 14;
+        let z = px.wrapping_mul(s.wrapping_neg()).wrapping_add(pz.wrapping_mul(c)) >> 14;
+        m.set_i32(W_QUERY, m.i32(e + 0xC).wrapping_add(x) >> 8);
+        m.set_i32(W_QUERY + 4, m.i32(e + 0x10) >> 8);
+        m.set_i32(W_QUERY + 8, m.i32(e + 0x14).wrapping_add(z) >> 8);
+        m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
+        let mut sector = crate::world::find_sector_near_query(m);
+        if sector == NONE {
+            sector = m.u16(W_QUERY_SECTOR) as u32;
+        }
+        pt[0] = x;
+        pt[2] = z;
+        if sector != NONE {
+            pt[1] = floor_height(m, sector, m.i32(W_QUERY), m.i32(W_QUERY + 8));
+        }
+        *out = sector as u16;
+    }
+    let gravity = div(0x32_0000, dt);
+    let mut hits = 0;
+    for (i, pt) in pts.iter().enumerate() {
+        let [speed, height, spring, rate] = [0x08, 0x6C, 0x4C, 0x5C].map(|o| p + o + 4 * i as u32);
+        let v = m.i32(speed).wrapping_add(gravity);
+        m.set_i32(speed, v);
+        let mut h = m.i32(height).wrapping_add(div(v, dt));
+        if h >= pt[1] {
+            h = pt[1];
+            m.set_i32(speed, div(v.wrapping_neg(), 32));
+            hits += 1;
+        }
+        let d = div(m.i32(spring).wrapping_sub(h).wrapping_mul(-0x70), 100);
+        // __divdi3 of the 64-bit (d + rest) << 15 by a quarter of the mass (never 0: every handling record has a
+        // mass); only the low word of the quotient is used.
+        let q = ((d as i64).wrapping_add(spring_rest as i64).wrapping_shl(15) / k as i64) as i32;
+        let w = m.i32(rate).wrapping_add(div(q, dt));
+        m.set_i32(rate, w);
+        m.set_i32(spring, m.i32(spring).wrapping_add(div(w, dt)));
+        m.set_i32(rate, w.wrapping_mul(160) >> 8);
+        m.set_i32(height, h);
+    }
+    hits
+}
 
 /// The eight body corners the tipped-over car rests on (`0x087F2528`, 3 words each, car axes).
 const CORNERS: u32 = 0x087F_2528;
