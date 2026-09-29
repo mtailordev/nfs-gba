@@ -34,8 +34,8 @@ pub fn data_dir() -> PathBuf {
     if let Ok(v) = env::var("NFSGBA_DATA") {
         return v.into();
     }
-    // The nearest `.env` up from the current directory, so crate test runs and git worktrees (under
-    // `.claude/worktrees/`) find the checkout's one.
+    // The nearest `.env` up from the current directory, so crate test runs and git worktrees nested inside the
+    // checkout find the checkout's one.
     env::current_dir()
         .unwrap_or_default()
         .ancestors()

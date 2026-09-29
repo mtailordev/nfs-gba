@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def data_dir() -> Path:
-    """$NFSGBA_DATA from the environment, else from the nearest .env at or above ROOT (git worktrees under
-    .claude/worktrees/ find the checkout's), else ./data."""
+    """$NFSGBA_DATA from the environment, else from the nearest .env at or above ROOT (git worktrees nested inside the
+    checkout find the checkout's), else ./data."""
     val = os.environ.get("NFSGBA_DATA")
     env = next((d / ".env" for d in (ROOT, *ROOT.parents) if (d / ".env").exists()), None)
     if not val and env:
