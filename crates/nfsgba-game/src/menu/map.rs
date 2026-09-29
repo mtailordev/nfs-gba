@@ -3,10 +3,11 @@
 
 use nfsgba_sim::state::MenuState;
 
+use super::event::event_status;
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
+use super::text::{frames_to_centiseconds, number_text, time_text};
 use super::{MENU_BLIT_MATERIAL, TEXT_MENU, WORLD};
 
-const MAP_DRAW: u32 = 0x0814_35C4; // (): scrolls the view towards the cursor and draws the map and its markers
 /// Page records of the map screens (`0x7E50A4`, 0x14 bytes: `+2`/`+4` button prompts).
 const MAP_PAGES: u32 = 0x087E_50A4;
 
@@ -196,7 +197,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 0x11 => 3,
                 _ => 0,
             };
-    h.call(MAP_DRAW, &[]);
+    h.map_draw(st);
     let mut left = rom_u16(h.rom(), page + 2) as i16 as i32 as u32;
     let neg1 = u32::MAX;
     let district = match st.g.screen {
@@ -236,4 +237,122 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
         h.button_prompts(st, &[left, rom_u16(h.rom(), page + 4) as i16 as i32 as u32, neg1]);
     }
     0
+}
+
+const MAP_ZONES: u32 = 0x087F_5284; // per cursor: 4 halfwords (x, y of the marker; the district's other corner)
+const MAP_ZONES_SPRINT: u32 = 0x087F_52E4;
+const MAP_MATERIAL: u32 = 0x0834_5114 + 0xDA * 0x24; // the map's background material (texels: 512 wide)
+const MENU_TEXELS: u32 = 0x0816_C244;
+const DISTRICT_EVENTS: u32 = 0x087E_4714; // the two events of a cursor pair that count differently
+const CIRCUIT_TRACKS: u32 = 0x087E_472C;
+
+/// `map_draw` (`0x081435C4`): scrolls the view towards the cursor (an eighth of the way a frame, settled within 16),
+/// copies the 240x160 window of the map to the page, sets the zone colours, and labels the marked zone: a career
+/// district's name and events done, a track's name, or a career track's name and record.
+pub fn draw_map(st: &mut MenuState, h: &mut impl Host) {
+    let screen = st.g.screen;
+    let cursor = i32::from(st.g.map_cursor);
+    let table = if screen == 8 || (screen == 0x11 && st.profile.map_mode == 2) {
+        MAP_ZONES_SPRINT
+    } else {
+        MAP_ZONES
+    };
+    let read = |a: u32| rom_u16(h.rom(), a) as i16 as i32;
+    let zone = |k: u32| read(table.wrapping_add((cursor * 8) as u32) + 2 * k);
+    let (cx, cy) = if screen == 0xE {
+        (
+            nfsgba_fixed::div(zone(0) + zone(4), 2),
+            nfsgba_fixed::div(zone(1) + zone(5), 2),
+        )
+    } else {
+        (zone(0), zone(1))
+    };
+    if st.g.map_moved == 1 {
+        let dx = (cx << 8).wrapping_sub(st.g.map_x);
+        let dy = (cy << 8).wrapping_sub(st.g.map_y);
+        st.g.map_x = st.g.map_x.wrapping_add(dx >> 3);
+        st.g.map_y = st.g.map_y.wrapping_add(dy >> 3);
+        if dy.wrapping_abs() < 0x10 && dx.wrapping_abs() < 0x10 {
+            st.g.map_moved = 0;
+        }
+    }
+    let vx = ((st.g.map_x >> 8) - 0x78).clamp(0, 0x10F);
+    let vy = ((st.g.map_y >> 8) - 0x50).clamp(0, 0xDF);
+    let src = rom_u32(h.rom(), MAP_MATERIAL + 8)
+        .wrapping_add(MENU_TEXELS)
+        .wrapping_add((vy * 0x200 + vx) as u32)
+        & !1;
+    h.map_background(src);
+    zone_palettes(st, h);
+    let (x, y0) = (cx - vx, cy - vy);
+    let mut dy = -0xC;
+    match screen {
+        0xE => {
+            let district = cursor >> 1;
+            if st.profile.is_locked(district + 0x117) != 0 {
+                text1(h, 0xE, 0x15A, x, y0 + dy + 0x1C);
+                dy = -0x16;
+            }
+            text1(h, 0xD, (district + 0x3C3) as u32, x, y0 + dy);
+            let (total, done) = if district == 5 {
+                (6, (0..6).filter(|&e| event_status(&st.profile, e + 0x3C) == 1).count())
+            } else {
+                let pair = (cursor & 0xFE) as u32;
+                let odd = |k: u32| rom_u16(h.rom(), DISTRICT_EVENTS + 2 * (pair + k)) as i16 as i32;
+                (
+                    12,
+                    (0..12)
+                        .filter(|&e| {
+                            let id = district * 12 + e;
+                            let s = event_status(&st.profile, id);
+                            if odd(0) == id || odd(1) == id {
+                                s == 1
+                            } else {
+                                matches!(s, 1 | 2)
+                            }
+                        })
+                        .count(),
+                )
+            };
+            let mut s = number_text(&mut st.g.div_remainder, done as i32);
+            s.push(b'/');
+            s.extend(number_text(&mut st.g.div_remainder, total));
+            let s = h.text_arg(s);
+            text1(h, 0xE, s, x, y0 + dy + 0x14);
+        }
+        7 | 8 => {
+            text1(
+                h,
+                0xD,
+                rom_u16(h.rom(), table + cursor as u32 * 8 + 6) as u32,
+                x,
+                y0 + dy - 0x14,
+            );
+        }
+        0x11 => {
+            let track = match st.profile.map_mode {
+                2 => (cursor + 0xC) as usize,
+                3 => rom_u16(h.rom(), CIRCUIT_TRACKS + (cursor as u32).wrapping_mul(2)) as usize,
+                _ => 0, // ponytail: the game reads a stale stack word in the other modes
+            };
+            let y = y0 + dy;
+            text1(
+                h,
+                0xD,
+                rom_u16(h.rom(), table + cursor as u32 * 8 + 6) as u32,
+                x,
+                y - 0x14,
+            );
+            text1(h, 0xE, 0x1B2, x, y);
+            let cs = frames_to_centiseconds(i32::from(st.profile.records.get(track).copied().unwrap_or(0)));
+            let s = time_text(&mut st.g.div_remainder, st.g.language, cs);
+            let s = h.text_arg(s);
+            text1(h, 0xE, s, x, y + 0x14);
+        }
+        _ => {}
+    }
+}
+
+fn text1(h: &mut impl Host, font: u32, key: u32, x: i32, y: i32) {
+    h.call(TEXT_MENU, &[font, key, x as u32, y as u32, 1, 0]);
 }

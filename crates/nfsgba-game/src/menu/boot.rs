@@ -108,6 +108,27 @@ impl Host for BootHost {
             (st.g.fade + 2).min(0)
         };
     }
+    fn unlock_state(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        super::garage::state(st, &self.rom, id)
+    }
+    fn unlock_owned(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        super::garage::owned(st, &self.rom, id)
+    }
+    fn unlock_price(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        super::garage::price(st, &self.rom, id)
+    }
+    fn buy_unlock(&mut self, st: &mut MenuState, id: u32) {
+        super::garage::buy(st, &self.rom, id);
+    }
+    fn new_mark(&mut self, st: &mut MenuState, screen: u32, item: u32) -> u32 {
+        super::garage::list_item_new(st, self, screen, item)
+    }
+    fn car_stats(&mut self, st: &mut MenuState, car: u32, x: u32, y: u32, rows: u32) {
+        super::garage::car_stats_draw(st, self, car as i32, x as i32, y as i32, rows);
+    }
+    fn map_draw(&mut self, st: &mut MenuState) {
+        super::map::draw_map(st, self);
+    }
     fn button_prompts(&mut self, _st: &MenuState, _args: &[u32; 3]) {}
     fn message_box_draw(&mut self, _st: &mut MenuState) {}
     fn zone_palettes(&mut self, st: &mut MenuState) {

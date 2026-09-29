@@ -72,6 +72,9 @@ layout! {
         0x0300_59F0 message_box: i32,
         0x0300_59F4 message_result: i32,
         0x0300_611C race_car: u8,
+        /// The garage car's slot + 15 (`0x0300611D`) and the paint numbers per car (`0x03005FEC`).
+        0x0300_611D race_car_b: u8,
+        0x0300_5FEC paints: [i8; 4],
         /// The map screens' state: view x/y (8.8), the cursor and "moved".
         0x0300_6230 map_x: i32,
         0x0300_6234 map_y: i32,
@@ -124,6 +127,10 @@ layout! {
         0x0300_59F8 message_text: u32,
         0x0300_59EC message_arg: u32,
         0x0300_64C8 rand_index: u32,
+        /// The garage part page (screen 0x13): four rows of (unlock id, text key) pairs, the pick per row and the row.
+        0x0300_59A0 garage_items: [u16; 32],
+        0x0300_59E0 garage_picks: [i8; 4],
+        0x0300_59E4 garage_row: i8,
     }
 
     /// The race results, 4 slots (`results`; the ranked copy has the same layout).
@@ -174,6 +181,7 @@ layout! {
         /// The event cursor per zone.
         /// The garage upgrade pages' selection (`+0x364`, `+0x365`).
         0x364 upgrade_a: u8,
+        0x366 upgrade_c: u8,
         0x365 upgrade_b: u8,
         /// The settings screens' cursor per screen and their arrow delays (2 per item).
         0x368 setup_cursors: [u8; 6],

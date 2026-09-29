@@ -13,16 +13,9 @@ use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_BOX, TEXT_MENU, WORLD};
 const LIST_PAGES: u32 = 0x087E_544C;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
 const GARAGE_LOAD_CAR_ATLAS: u32 = 0x0812_BEEC; // ()
-const GARAGE_LOAD_CAR_PALETTE: u32 = 0x0812_BF48; // ()
 const GARAGE_DRAW_CAR: u32 = 0x0812_BFA4; // (x, y, angle)
 const QUICK_RACE_RANDOM: u32 = 0x0812_FFB0; // ()
-const UNLOCK_STATE: u32 = 0x0812_C81C; // (unlock id): 1 owned, 2 locked, 0/3 not affordable
-const BUY_UNLOCK: u32 = 0x0812_C8A8; // (unlock id)
 const UPGRADES_CHANGED: u32 = 0x0813_02C4; // (performance page?)
-const UNLOCK_OWNED: u32 = 0x0812_C5C4; // (unlock id)
-const LIST_ITEM_NEW: u32 = 0x0813_00E0; // (screen, item): a "new" mark
-const CAR_STATS_DRAW: u32 = 0x0813_3D30; // (car, x, y, 0)
-const UNLOCK_PRICE: u32 = 0x0812_D960; // (unlock id)
 
 /// An i16 ROM read, sign-extended as the game passes it.
 fn s16(h: &impl Host, a: u32) -> u32 {
@@ -59,7 +52,7 @@ fn garage_copy_car_record(st: &mut MenuState) {
 fn garage_select_car(st: &mut MenuState, h: &mut impl Host) {
     garage_copy_car_record(st);
     h.call(GARAGE_LOAD_CAR_ATLAS, &[]);
-    h.call(GARAGE_LOAD_CAR_PALETTE, &[]);
+    h.car_palette(st);
 }
 
 /// `list_enter` (`0x0812FE38`): the page's background; car select (9) starts on the career car (or Quick Play's,
@@ -282,7 +275,10 @@ fn list_action(st: &mut MenuState, h: &mut impl Host, action: i32) -> bool {
     let slot = slot(st);
     match action - 0x85 {
         0 => {
-            let state = h.call(UNLOCK_STATE, &[st.g.player_car.wrapping_add(0x108)]) as i32;
+            let state = {
+                let id = st.g.player_car.wrapping_add(0x108);
+                h.unlock_state(st, id)
+            } as i32;
             if st.g.career == 0 {
                 if state == 2 {
                     message_box_open(st, 1, 0xB4, u32::MAX);
@@ -376,9 +372,9 @@ fn confirmed_message(st: &mut MenuState, h: &mut impl Host, action: i32) {
         2 => flow::goto_screen(st, h, 0x16),
         9 => {
             let id = st.g.player_car.wrapping_add(0x108);
-            if h.call(UNLOCK_STATE, &[id]) < 2 {
+            if h.unlock_state(st, id) < 2 {
                 if st.profile.u_12 == 0 {
-                    h.call(BUY_UNLOCK, &[st.g.player_car.wrapping_add(0x108)]);
+                    h.buy_unlock(st, id);
                     st.profile.hints_a = st.profile.hints_b.wrapping_add(st.profile.hints_a);
                     st.profile.hints_b = 0;
                     h.save_write(st);
@@ -386,7 +382,7 @@ fn confirmed_message(st: &mut MenuState, h: &mut impl Host, action: i32) {
                     st.g.screen = 0;
                     flow::goto_screen(st, h, 3);
                 } else {
-                    h.call(BUY_UNLOCK, &[st.g.player_car.wrapping_add(0x108)]);
+                    h.buy_unlock(st, id);
                     h.save_write(st);
                 }
             }
@@ -441,7 +437,8 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
     let slot = slot(st);
     let page = page(st);
     let count = rom_u16(h.rom(), page + 10) as i16 as i32;
-    let profile = st.g.profile.addr;
+    let name: Vec<u8> = st.profile.name.iter().copied().take_while(|&b| b != 0).collect();
+    let profile = h.text_arg(name); // the game passes the profile's address: its name
     let second = st.g.second_palette;
     let crew = (st.g.screen == 0x2E) as i32;
     h.call(INTRO_PAGE_SETUP, &[st.g.unpack_buffer]);
@@ -463,7 +460,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
         h.call(GARAGE_DRAW_CAR, &[0x78, 0x3C, 0xFA]);
         let name = s16(h, items.wrapping_add((cur as i32 * 8) as u32));
         h.call(TEXT_BOX, &[0xC, name, 0x78, 0x74, 200, 1, 8]);
-        h.call(CAR_STATS_DRAW, &[cur as i32 as u32, 0x78, 0x54, 0]);
+        h.car_stats(st, cur as i32 as u32, 0x78, 0x54, 0);
     } else {
         arrow_y = 0x18;
         blit(h, 0xDC, x2.wrapping_sub(9), y2.wrapping_sub(10));
@@ -502,7 +499,8 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                     alt(h, pic, x2, y2);
                     let t = s16(h, item);
                     tbox(h, 0xC, t, 0x78, 0x6E, 0xB0, 8);
-                    if h.call(LIST_ITEM_NEW, &[st.g.screen, cur as i32 as u32]) != 0 {
+                    let screen = st.g.screen;
+                    if h.new_mark(st, screen, cur as i32 as u32) != 0 {
                         alt(h, 0xB1, x2.wrapping_add(0x2C), y2);
                     }
                 }
@@ -521,7 +519,8 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 } else {
                     let pic = s16(h, item + 2);
                     alt(h, pic, x, y);
-                    if h.call(LIST_ITEM_NEW, &[st.g.screen, v as u32]) != 0 {
+                    let screen = st.g.screen;
+                    if h.new_mark(st, screen, v as u32) != 0 {
                         alt(h, 0xB2, x.wrapping_add(0x20), y);
                     }
                 }
@@ -551,13 +550,14 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
             if st.profile.u_12 == 0 {
                 right = u32::MAX;
             }
-            if h.call(UNLOCK_OWNED, &[(cursor + 0x108) as u32]) == 0 {
-                let state = h.call(UNLOCK_STATE, &[(cursor + 0x108) as u32]);
+            let id = (cursor + 0x108) as u32;
+            if h.unlock_owned(st, id) == 0 {
+                let state = h.unlock_state(st, id);
                 left = if state == 2 { 0x15A } else { 0x19C };
                 let w = text(h, 0xE, 0xE3, 0x15, 0x85, 0, 0);
-                let price = h.call(UNLOCK_PRICE, &[(cursor + 0x108) as u32]) as i32;
+                let price = h.unlock_price(st, id) as i32;
                 let mut s = number_text(&mut st.g.div_remainder, price);
-                let price = h.call(UNLOCK_PRICE, &[(cursor + 0x108) as u32]) as i32;
+                let price = h.unlock_price(st, id) as i32;
                 thousands(st.g.language, &mut s, price);
                 let s = h.text_arg(s);
                 text(h, 0xE, s, w.wrapping_add(0x1D), 0x85, 0, 8);
@@ -568,10 +568,16 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
             None
         } else {
             left = 0x1F2;
-            Some(h.call(UNLOCK_STATE, &[(cursor + 0x108) as u32]))
+            Some({
+                let id = (cursor + 0x108) as u32;
+                h.unlock_state(st, id)
+            })
         }
     } else if (0x2D..=0x2E).contains(&screen) {
-        Some(h.call(UNLOCK_STATE, &[(cursor + crew + 0x127) as u32]))
+        Some({
+            let id = (cursor + crew + 0x127) as u32;
+            h.unlock_state(st, id)
+        })
     } else {
         None
     };

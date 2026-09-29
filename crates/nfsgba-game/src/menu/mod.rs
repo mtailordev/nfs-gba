@@ -79,6 +79,11 @@ pub struct Gba {
     pub texts: Vec<Vec<u8>>,
     /// The `texts` a drawing primitive read: they are not arguments of a logged call.
     pub consumed: std::collections::HashSet<usize>,
+    /// The garage screens (Kind18) run typed when the flow reaches them (the garage oracle set); the top-level sets
+    /// keep them stubbed.
+    pub garage_typed: bool,
+    /// `map_draw` runs typed (the map oracle set).
+    pub map_typed: bool,
 }
 
 /// Where [`Gba::text_arg`] strings "live": pointer arguments from here up index `Gba::texts`.
@@ -100,6 +105,8 @@ impl Gba {
             returns: Default::default(),
             texts: Vec::new(),
             consumed: Default::default(),
+            garage_typed: false,
+            map_typed: false,
         })
     }
 
@@ -196,6 +203,7 @@ pub mod boot;
 pub mod draw;
 mod event;
 pub mod flow;
+mod garage;
 mod hints;
 mod intro;
 mod list;
@@ -288,6 +296,12 @@ pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
     if flow::is_typed(kind, phase) {
         return typed(g, |st, h| flow::run_typed(st, h, kind, phase, args));
     }
+    stubbed_handler(g, kind, phase, args)
+}
+
+/// A handler that is not ported, or that the top-level oracle sets keep stubbed (Kind18: `tools/oracle/garage.py`
+/// checks it on its own): one logged call.
+pub fn stubbed_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
     match (kind, phase) {
         // Every kind's exit handler (`0x08132780`, `0x0812E850`, …) is only this call: the menu scene's teardown.
         (_, 3) => g.unported(SCENE_EXIT, &[WORLD]),
@@ -411,6 +425,7 @@ const FILL_RECT: u32 = 0x0816_4BEC; // (rect on the stack: x0, y0, x1, y1; page,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::menu::flow::Host;
     use nfsgba_testkit::{dump, rom};
 
     /// Oracle cases saved by `tools/ui_menu_oracle.py <name>`.
@@ -505,6 +520,19 @@ mod tests {
         replay("lists");
     }
 
+    /// The garage screens (Kind18), the unlock rules, the new marks and the stat bars, on generated menu states:
+    /// `tools/oracle/cases.py garage`.
+    #[test]
+    fn garage_screens_match_the_game() {
+        replay("garage");
+    }
+
+    /// `map_draw` and the map screens' draw handler: `tools/oracle/cases.py garage` (the `mapdraw` set).
+    #[test]
+    fn map_drawing_matches_the_game() {
+        replay("mapdraw");
+    }
+
     const KINDS: [Kind; 8] = [
         Kind::List,
         Kind::Kind7,
@@ -527,6 +555,8 @@ mod tests {
                 Gba::from_dump(rom.clone(), &prefix).unwrap()
             });
             let mut g = base.clone();
+            g.garage_typed = name == "garage";
+            g.map_typed = name == "mapdraw";
             for m in c["mem"].as_array().unwrap() {
                 for (i, &b) in bytes(&m[1]).iter().enumerate() {
                     g.set_u8(m[0].as_u64().unwrap() as u32 + i as u32, b);
@@ -576,6 +606,38 @@ mod tests {
                     adapt::typed(&mut g, |st, h| flow::Host::message_box_draw(h, st));
                     None
                 }
+                "0x812c81c" | "0x812c5c4" | "0x812d960" | "0x812c8a8" | "0x812c984" | "0x81300e0" | "0x8133d30"
+                | "0x812d564" | "0x81435c4" => {
+                    let a: Vec<u32> = c["args"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_u64().unwrap() as u32)
+                        .collect();
+                    adapt::typed(&mut g, |st, h| match f {
+                        "0x812c81c" => Some(garage::state(st, h.rom(), a[0])),
+                        "0x812c5c4" => Some(garage::owned(st, h.rom(), a[0])),
+                        "0x812d960" => Some(garage::price(st, h.rom(), a[0])),
+                        "0x812c8a8" => {
+                            garage::buy(st, h.rom(), a[0]);
+                            None
+                        }
+                        "0x812c984" => Some(garage::new_part(st, h, a[0] as i32)),
+                        "0x81300e0" => Some(garage::list_item_new(st, h, a[0], a[1])),
+                        "0x8133d30" => {
+                            garage::car_stats_draw(st, h, a[0] as i32, a[1] as i32, a[2] as i32, a[3]);
+                            None
+                        }
+                        "0x812d564" => {
+                            garage::copy_car_record(st);
+                            None
+                        }
+                        _ => {
+                            map::draw_map(st, h);
+                            None
+                        }
+                    })
+                }
                 _ => {
                     // A kind's handler called directly: enter and update return 1 or 0; draw and exit nothing.
                     let a = u32::from_str_radix(&f[2..], 16).unwrap();
@@ -624,7 +686,16 @@ mod tests {
                 .collect();
             // NOT 1:1 (N1): a blit above the top row lands in the invisible gap below the previous page, which the
             // port drops; both sides are compared without the gaps between the mode 4 pages.
-            let visible = |a: &u32| !(0x0600_9600..0x0600_A000).contains(a) && !(0x0601_3600..0x0601_4000).contains(a);
+            let visible = |a: &u32| {
+                ![
+                    0x0600_9600..0x0600_A000,
+                    0x0601_3600..0x0601_4000,
+                    0x0201_F600..0x0202_0000,
+                    0x0202_9600..0x0202_A000,
+                ]
+                .iter()
+                .any(|r| r.contains(a))
+            };
             let want: std::collections::BTreeMap<u32, u8> = want.into_iter().filter(|(a, _)| visible(a)).collect();
             let got: std::collections::BTreeMap<u32, u8> =
                 changed(&pre, &g).into_iter().filter(|(a, _)| visible(a)).collect();

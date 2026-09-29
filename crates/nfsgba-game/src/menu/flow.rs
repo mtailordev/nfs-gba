@@ -6,7 +6,7 @@
 use nfsgba_sim::state::MenuState;
 
 use super::{
-    Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, hints, intro, list, map, results, setup,
+    Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, garage, hints, intro, list, map, results, setup,
     update_kind,
 };
 
@@ -62,6 +62,37 @@ pub trait Host {
     fn zone_palettes(&mut self, _st: &mut MenuState) {
         self.call(0x0814_3284, &[]);
     }
+    /// The garage rules (`unlock_state` `0x0812C81C`, `unlock_owned` `0x0812C5C4`, `unlock_price` `0x0812D960`,
+    /// `buy_unlock` `0x0812C8A8`, the list items' new-mark `0x081300E0`) and the stat bars (`0x08133D30`): the
+    /// defaults log the call (the older oracle sets stub them); [`super::typed::TypedHost`] runs [`super::garage`].
+    fn unlock_state(&mut self, _st: &mut MenuState, id: u32) -> u32 {
+        self.call(0x0812_C81C, &[id])
+    }
+    fn unlock_owned(&mut self, _st: &mut MenuState, id: u32) -> u32 {
+        self.call(0x0812_C5C4, &[id])
+    }
+    fn unlock_price(&mut self, _st: &mut MenuState, id: u32) -> u32 {
+        self.call(0x0812_D960, &[id])
+    }
+    fn buy_unlock(&mut self, _st: &mut MenuState, id: u32) {
+        self.call(0x0812_C8A8, &[id]);
+    }
+    fn new_mark(&mut self, _st: &mut MenuState, screen: u32, item: u32) -> u32 {
+        self.call(0x0813_00E0, &[screen, item])
+    }
+    fn car_stats(&mut self, _st: &mut MenuState, car: u32, x: u32, y: u32, rows: u32) {
+        self.call(0x0813_3D30, &[car, x, y, rows]);
+    }
+    /// `garage_load_car_palette` (`0x0812BF48`): the garage car's paint ramps into the base palettes.
+    fn car_palette(&mut self, _st: &mut MenuState) {
+        self.call(0x0812_BF48, &[]);
+    }
+    /// `map_draw` (`0x081435C4`): the map screens' background, markers and labels.
+    fn map_draw(&mut self, _st: &mut MenuState) {
+        self.call(0x0814_35C4, &[]);
+    }
+    /// The map background: 240x160 bytes from the ROM at `src` (rows 0x200 apart) into the drawing page.
+    fn map_background(&mut self, _src: u32) {}
     /// `save_load_profile` (`0x08149D84`) of the slot in `g.save_buffer`.
     fn save_load(&mut self, st: &mut MenuState) -> u32 {
         self.call(0x0814_9D84, &[st.g.save_buffer])
@@ -501,7 +532,14 @@ pub fn is_typed(kind: Kind, phase: usize) -> bool {
     matches!(
         (kind, phase),
         (
-            Kind::Kind7 | Kind::Event | Kind::Career | Kind::List | Kind::Setup | Kind::Kind38 | Kind::Intro,
+            Kind::Kind7
+                | Kind::Event
+                | Kind::Career
+                | Kind::List
+                | Kind::Setup
+                | Kind::Kind38
+                | Kind::Intro
+                | Kind::Kind18,
             0..=2
         )
     )
@@ -525,6 +563,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Kind38, 0) => hints::enter(st, h),
         (Kind::Kind38, 1) => hints::update(st, h),
         (Kind::Kind38, 2) => hints::draw(st, h),
+        (Kind::Kind18, 0) => garage::enter(st, h),
+        (Kind::Kind18, 1) => garage::update(st, h),
+        (Kind::Kind18, 2) => garage::draw(st, h),
         (Kind::Setup, 0) => setup::enter(st, h),
         (Kind::Setup, 1) => setup::update(st, h),
         (Kind::Setup, 2) => setup::draw(st, h),

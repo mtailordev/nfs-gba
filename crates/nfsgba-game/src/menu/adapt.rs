@@ -73,13 +73,14 @@ impl flow::Host for GbaHost<'_> {
         self.0.log_unpacks(unpacked);
     }
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32 {
-        if flow::is_typed(kind, phase) {
+        // NOT 1:1 (U3): the top-level oracle sets keep the garage screens stubbed; `tools/oracle/garage.py` checks them.
+        if flow::is_typed(kind, phase) && (kind != Kind::Kind18 || self.0.garage_typed) {
             // The drawing primitives read the language and the text pointers they are given (the name buffer) from
             // the RAM image; an earlier typed handler may have changed them.
             store_state(self.0, st);
             return flow::run_typed(st, self, kind, phase, args);
         }
-        self.on_ram(st, |g| run_handler(g, kind, phase, args))
+        self.on_ram(st, |g| stubbed_handler(g, kind, phase, args))
     }
     fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32) {
         self.on_ram(st, |g| menu_scene_setup(g, material, palette, sprite));
@@ -120,6 +121,61 @@ impl flow::Host for GbaHost<'_> {
     }
     fn fade_step(&mut self, st: &mut MenuState) {
         self.on_ram(st, fade_step);
+    }
+    // The garage oracle set runs the rules and the map for real; the older sets stub them (default: logged calls).
+    fn unlock_state(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        if self.0.garage_typed {
+            return garage::state(st, &self.0.rom, id);
+        }
+        self.call(0x0812_C81C, &[id])
+    }
+    fn unlock_owned(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        if self.0.garage_typed {
+            return garage::owned(st, &self.0.rom, id);
+        }
+        self.call(0x0812_C5C4, &[id])
+    }
+    fn unlock_price(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        if self.0.garage_typed {
+            return garage::price(st, &self.0.rom, id);
+        }
+        self.call(0x0812_D960, &[id])
+    }
+    fn buy_unlock(&mut self, st: &mut MenuState, id: u32) {
+        if self.0.garage_typed {
+            garage::buy(st, &self.0.rom, id);
+        } else {
+            self.call(0x0812_C8A8, &[id]);
+        }
+    }
+    fn new_mark(&mut self, st: &mut MenuState, screen: u32, item: u32) -> u32 {
+        if self.0.garage_typed {
+            return garage::list_item_new(st, self, screen, item);
+        }
+        self.call(0x0813_00E0, &[screen, item])
+    }
+    fn car_stats(&mut self, st: &mut MenuState, car: u32, x: u32, y: u32, rows: u32) {
+        if self.0.garage_typed {
+            garage::car_stats_draw(st, self, car as i32, x as i32, y as i32, rows);
+        } else {
+            self.call(0x0813_3D30, &[car, x, y, rows]);
+        }
+    }
+    fn map_draw(&mut self, st: &mut MenuState) {
+        if self.0.map_typed {
+            map::draw_map(st, self);
+        } else {
+            self.call(0x0814_35C4, &[]);
+        }
+    }
+    fn map_background(&mut self, src: u32) {
+        let page = self.page_buffer();
+        for y in 0..160u32 {
+            for x in 0..240u32 {
+                let v = self.0.u8(src + y * 0x200 + x);
+                self.0.set_u8(page + y * 240 + x, v);
+            }
+        }
     }
 }
 

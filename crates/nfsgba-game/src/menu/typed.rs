@@ -261,6 +261,43 @@ impl Host for TypedHost<'_> {
         }
     }
 
+    fn unlock_state(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        super::garage::state(st, self.rom, id)
+    }
+    fn unlock_owned(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        super::garage::owned(st, self.rom, id)
+    }
+    fn unlock_price(&mut self, st: &mut MenuState, id: u32) -> u32 {
+        super::garage::price(st, self.rom, id)
+    }
+    fn buy_unlock(&mut self, st: &mut MenuState, id: u32) {
+        super::garage::buy(st, self.rom, id);
+    }
+    fn new_mark(&mut self, st: &mut MenuState, screen: u32, item: u32) -> u32 {
+        super::garage::list_item_new(st, self, screen, item)
+    }
+    fn car_stats(&mut self, st: &mut MenuState, car: u32, x: u32, y: u32, rows: u32) {
+        super::garage::car_stats_draw(st, self, car as i32, x as i32, y as i32, rows);
+    }
+    fn car_palette(&mut self, st: &mut MenuState) {
+        for buffer in &mut self.scene.palettes {
+            if buffer.len() >= 256 {
+                super::garage::load_car_palette(st, self.rom, buffer);
+            }
+        }
+    }
+    fn map_draw(&mut self, st: &mut MenuState) {
+        super::map::draw_map(st, self);
+    }
+    fn map_background(&mut self, src: u32) {
+        for y in 0..160usize {
+            for x in 0..240usize {
+                let at = (src as usize & 0x1FF_FFFF) + y * 0x200 + x;
+                self.screen.page()[y * 240 + x] = self.rom[at];
+            }
+        }
+    }
+
     fn button_prompts(&mut self, st: &MenuState, a: &[u32; 3]) {
         let ctx = self.ctx();
         self.screen.draw(&ctx, |c, p| c.button_prompts(p, st, a[0], a[1], a[2]));
