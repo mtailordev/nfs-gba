@@ -866,6 +866,18 @@ mod tests {
         let differ = fb.iter().zip(&want).filter(|(a, b)| a != b).count();
         assert_eq!(differ, 0, "bytes differing from the PSA frame buffer");
         assert_eq!(pal, palette_at(&rom, MENU_PALETTES + 0x200));
+
+        // Title: material 5 (palette 5) with the logo (202), PRESS START (191, English; 191..195 by
+        // language), LICENSED BY NINTENDO (203) and the copyright line (196, English) blitted over it. The
+        // logo at x 96 is 146 wide: the blitter does not clip, so its last two columns wrap to the next row.
+        let Some((want, pal)) = screen("ui-2d/n7") else { return };
+        let mut fb = pixels_8bpp(&rom, MENU_TEXELS, &menu[5]);
+        for (m, x, y) in [(202, 96, 4), (191, 170, 80), (203, 48, 138), (196, 0, 150)] {
+            let (w, h) = (menu[m].width, menu[m].height);
+            blit(&mut fb, 240, x, y, &pixels_8bpp(&rom, MENU_TEXELS, &menu[m]), w, h, 0);
+        }
+        assert!(fb == want, "title screen");
+        assert_eq!(pal, palette_at(&rom, MENU_PALETTES + 5 * 0x200));
     }
 
     #[test]

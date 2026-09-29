@@ -109,10 +109,14 @@ def menu_palette_of(m):
     if 7 <= m <= 11:
         return 1, "health and safety (FUN_081315a0 replaces colours 0..4; 7 checked against a dump)"
     if m == 218:
-        return 7, "call site FUN_0812e7xx: menu_scene_setup(0xDA, 7)"
+        return 7, "call sites in FUN_0812e5ac/FUN_0812e7xx: menu_scene_setup(0xDA, 7)"
     if 226 <= m <= 266:
         return m - 218, "story table 0x7E78B8 (material - 218)"
-    return 0, "unknown: palette 0 assumed"
+    if m in (156, 181) or 182 <= m <= 185:
+        return 4, "drawn on the language screen (156 and 181 checked against a dump)"
+    if 191 <= m <= 203:
+        return 5, "title screen overlays (191, 196, 202, 203 checked against a dump)"
+    return 1, "overlay: palette 1 assumed (the palette of most menu pages)"
 
 
 def save(img, path):
@@ -187,6 +191,11 @@ def export(rom, out):
         save(rgba(sheet, lang_pal), out / f"fonts/font{f}.png")
         index["fonts"].append({k: v for k, v in font.items()} | {"file": f"fonts/font{f}.png", "first_char": 0x20})
     write_if_changed(out / "index.json", json.dumps(index, indent=1) + "\n")
+    # Drop PNGs of earlier runs whose names changed (e.g. a palette assignment).
+    wanted = {e["file"] for key in ("menu", "hud", "fonts") for e in index[key]}
+    for old in [p for d in ("menu", "hud", "fonts") for p in (out / d).glob("*.png")]:
+        if old.relative_to(out).as_posix() not in wanted:
+            old.unlink()
 
 
 def check(rom):
