@@ -403,6 +403,10 @@ pub struct Wall {
     pub light: [u8; 3],
     /// `+0x2A`: the moving piece (world `+0x18` record) whose offsets and flags apply to this wall; `0xFFFF` none.
     pub piece: u16,
+    /// `+0x32`: the neighbour for the sector search (usually `link`); `0xFFFF` none.
+    pub search_link: u16,
+    /// `+0x34`/`+0x36`: the wall's normal (x, z; 4.12), for the wall pushes.
+    pub normal: [i16; 2],
 }
 
 impl Wall {
@@ -433,6 +437,17 @@ pub struct Sector {
     /// Floor and ceiling materials (indices into `city_textures`); 0 = not drawn (`FUN_0300224c` skips the pass).
     pub floor: u16,
     pub ceiling: u16,
+    /// `+0x0A`: index into the world's sector offsets (world `+0x1C`: heights and a sloped floor); `0xFFFF` none.
+    pub offset: u16,
+    /// `+0x12`: flags (bit 3 container; bit 5 keeps its own floor).
+    pub flags: u8,
+    /// `+0x14/+0x16/+0x18`: the floor plane (a, b, c) when `offset` is none.
+    pub plane: [i16; 3],
+    /// `+0x20`: the sector a floorless sector defers to; `+0x22`: the start-sector alias; `0xFFFF` none.
+    pub alias: u16,
+    pub start_alias: u16,
+    /// `+0x26`: floor height offset.
+    pub height: i16,
     pub walls: Vec<Wall>,
 }
 
@@ -664,6 +679,8 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                         flags: u16_at(rom, w + 0x2E),
                         light: [rom[w + 0x3C], rom[w + 0x3D], rom[w + 0x3E]],
                         piece: u16_at(rom, w + 0x2A),
+                        search_link: u16_at(rom, w + 0x32),
+                        normal: [i16_at(rom, w + 0x34), i16_at(rom, w + 0x36)],
                     }
                 })
                 .collect();
@@ -671,6 +688,12 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                 first,
                 floor: u16_at(rom, o + 8),
                 ceiling: u16_at(rom, o + 4),
+                offset: u16_at(rom, o + 0xA),
+                flags: rom[o + 0x12],
+                plane: [0x14, 0x16, 0x18].map(|k| i16_at(rom, o + k)),
+                alias: u16_at(rom, o + 0x20),
+                start_alias: u16_at(rom, o + 0x22),
+                height: i16_at(rom, o + 0x26),
                 walls,
             }
         })

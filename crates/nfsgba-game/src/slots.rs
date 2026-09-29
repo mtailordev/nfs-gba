@@ -5,12 +5,13 @@
 use nfsgba_formats::atlas;
 use nfsgba_sim::{
     Mem, Result, Unported,
+    layout::Field,
     math::{angle_diff, cos, div, sin},
+    state::Camera,
     traffic::rand,
     world::{self, NONE, W_ENTITIES, W_QUERY, W_QUERY_SECTOR},
 };
 
-use crate::camera::{MATRIX_YAW, VIEW_MODE};
 use crate::view::WORLD;
 
 /// A 3×4 matrix, 2.14 rotation (row-major) then translation.
@@ -35,9 +36,17 @@ pub fn store(m: &mut Mem, at: u32, v: &M) {
     }
 }
 
+fn view_mode(m: &Mem) -> u32 {
+    Camera::load(m, 0).view
+}
+
+fn matrix_yaw(m: &Mem) -> i32 {
+    Camera::load(m, 0).matrix_yaw
+}
+
 /// `rotation_y` (`0x08160624`).
-pub fn rotation_y(m: &Mem, a: i32) -> M {
-    let (c, s) = (cos(m, a), sin(m, a));
+pub fn rotation_y(rom: &[u8], a: i32) -> M {
+    let (c, s) = (nfsgba_fixed::cos_q14(rom, a), nfsgba_fixed::sin_q14(rom, a));
     [c, 0, s.wrapping_neg(), 0, 0x4000, 0, s, 0, c, 0, 0, 0]
 }
 
@@ -117,7 +126,7 @@ fn build_entity_matrix(m: &mut Mem, e: u32, out: u32) {
     if flags & 0x20 == 0 || m.i32(PHYSICS_ORIENTATION) == 0 {
         let (a, b) = (
             rotation_x(m, m.i16(e + 0x30) as i32),
-            rotation_y(m, m.i16(e + 0x32) as i32),
+            rotation_y(&m.rom, m.i16(e + 0x32) as i32),
         );
         let mut tmp = [0; 12];
         mul(&a, &cam, &mut tmp, false);
@@ -353,7 +362,7 @@ fn exhaust(m: &mut Mem, e: u32, heading: i32, view: i32) {
     let table = |m: &Mem, i: u32| m.i16(0x087F_3E00 + 2 * i) as i32;
     let frames = (m.u16(0x0836_D304 + 0x10) & 0xFF) as i32;
     let at = slot_addr(m, slot);
-    let chase = m.u32(VIEW_MODE) == 2;
+    let chase = view_mode(m) == 2;
     'nitro: {
         if m.u8(d + 0x4D1) == 0 {
             m.set_i16(d + 0x436, -1);
@@ -482,7 +491,7 @@ pub fn effect_handler(m: &mut Mem, e: u32) {
 /// `FUN_0814fa6c`: the four wheel points around the car (heading only), each on the floor of the sector found
 /// for it; leaves the last query in world `+0xC0..+0xEA`.
 fn wheel_points(m: &mut Mem, e: u32, points: &mut [[i32; 3]; 4]) {
-    let r = rotation_y(m, m.i32(e + 0x2C) >> 8);
+    let r = rotation_y(&m.rom, m.i32(e + 0x2C) >> 8);
     for p in points.iter_mut() {
         let x = r[0]
             .wrapping_mul(p[0])
@@ -589,13 +598,13 @@ fn build_player_matrices(m: &mut Mem, e: u32) -> Result<()> {
         wheel_points(m, e, &mut points);
         let at = slot_addr(m, s);
         player_matrix(m, e, at)?;
-        if m.u32(VIEW_MODE) != 0 {
-            let view = 0x4000 - m.i32(MATRIX_YAW);
+        if view_mode(m) != 0 {
+            let view = 0x4000 - matrix_yaw(m);
             opponent_effects(m, e, heading as i32, view, 0x20);
             exhaust(m, e, heading as i32, view);
         }
     }
-    if m.u32(VIEW_MODE) < 2 && m.u16(e) as u32 == m.u32(PLAYER) && m.u8(e + 0x88) != 0xFF {
+    if view_mode(m) < 2 && m.u16(e) as u32 == m.u32(PLAYER) && m.u8(e + 0x88) != 0xFF {
         let at = slot_addr(m, m.u8(e + 0x88));
         m.set_i32(0x0300_56B8, m.i32(at + 0x1C).wrapping_mul(-0x80) >> 14);
     }
@@ -614,7 +623,7 @@ fn traffic_slots(m: &mut Mem) {
         }
         assign_entity_slot(m, t);
         let slot = m.u8(t + 0x88);
-        if slot != 0xFF && 0x13FF < angle_diff(m.i16(t + 0x32) as i32, 0x4000 - m.i32(MATRIX_YAW)).abs() {
+        if slot != 0xFF && 0x13FF < angle_diff(m.i16(t + 0x32) as i32, 0x4000 - matrix_yaw(m)).abs() {
             let at = slot_addr(m, slot);
             light(m, at, [-0x19, -0x20, 100], 0x40, 0x1BC, 2, true);
             light(m, at, [0x19, -0x20, 100], 0x40, 0x1BC, 2, true);
@@ -640,7 +649,7 @@ pub fn race_slots(m: &mut Mem) -> Result<()> {
         assign_entity_slot(m, e);
         let size = if m.i32(e + 0x24) < 0x80 { 0x40 } else { 0x20 };
         let heading = (m.i32(e + 0x2C) >> 8) & 0x3FFF;
-        opponent_effects(m, e, heading, 0x3FFF - m.i32(MATRIX_YAW), size);
+        opponent_effects(m, e, heading, 0x3FFF - matrix_yaw(m), size);
     }
     traffic_slots(m);
     Ok(())
@@ -653,10 +662,10 @@ pub fn race_slots(m: &mut Mem) -> Result<()> {
 /// it writes, which this refuses.
 pub fn rim_redraw(m: &mut Mem, e: u32) -> Result<()> {
     let phase = m.u32(PHASE);
-    if phase == 0 || phase == 1 || phase == 4 || m.u16(e) as u32 != m.u32(PLAYER) || m.u32(VIEW_MODE) == 0 {
+    if phase == 0 || phase == 1 || phase == 4 || m.u16(e) as u32 != m.u32(PLAYER) || view_mode(m) == 0 {
         return Ok(());
     }
-    let d = angle_diff(((m.u32(e + 0x2C) & 0x3F_FFFF) >> 8) as i32, 0x4000 - m.i32(MATRIX_YAW)).abs();
+    let d = angle_diff(((m.u32(e + 0x2C) & 0x3F_FFFF) >> 8) as i32, 0x4000 - matrix_yaw(m)).abs();
     if d < 0x400 || (0x1C00 < d && d < 0x2400) {
         return Ok(());
     }

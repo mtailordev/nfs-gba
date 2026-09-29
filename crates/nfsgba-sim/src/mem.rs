@@ -4,6 +4,10 @@
 //! that every step can be compared byte for byte with the reference build. Accesses are little-endian and
 //! aligned the way the game does them; ROM is read-only.
 
+use std::sync::{Arc, OnceLock};
+
+use crate::data::GameData;
+
 pub const ROM: u32 = 0x0800_0000;
 pub const EWRAM: u32 = 0x0200_0000;
 pub const IWRAM: u32 = 0x0300_0000;
@@ -13,13 +17,25 @@ pub struct Mem {
     pub rom: Vec<u8>,
     pub ewram: Vec<u8>,
     pub iwram: Vec<u8>,
+    /// The ROM's tables, parsed on first use (the Mem-based code reaches the typed code through it).
+    data: OnceLock<Arc<GameData>>,
 }
 
 impl Mem {
     /// ROM plus RAM snapshots (256 KiB EWRAM, 32 KiB IWRAM), e.g. from `mgba_remote.lua`'s `dump`.
     pub fn new(rom: Vec<u8>, ewram: Vec<u8>, iwram: Vec<u8>) -> Self {
         assert_eq!((ewram.len(), iwram.len()), (0x4_0000, 0x8000), "EWRAM and IWRAM sizes");
-        Mem { rom, ewram, iwram }
+        Mem {
+            rom,
+            ewram,
+            iwram,
+            data: OnceLock::new(),
+        }
+    }
+
+    /// The ROM's tables ([`GameData`]), parsed from `rom` the first time.
+    pub fn data(&self) -> &Arc<GameData> {
+        self.data.get_or_init(|| Arc::new(GameData::parse(&self.rom)))
     }
 
     fn slot(&self, addr: u32) -> (&[u8], usize) {

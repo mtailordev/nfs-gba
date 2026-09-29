@@ -7,9 +7,15 @@ use nfsgba_formats::{
     sky::SkyCamera,
     ui,
 };
-use nfsgba_sim::Mem;
+use nfsgba_sim::{
+    Mem,
+    layout::{Field, Ptr},
+    state::{self, CAMERA_MATRIX, Camera, Input, Race, Screen, WorldHeader},
+};
 
-pub const WORLD: u32 = 0x0300_00C0;
+use crate::camera::{CameraFrame, Racer};
+
+pub use nfsgba_sim::state::WORLD;
 /// Sprite screen of the race HUD (world `+0xA4`).
 pub const HUD_SCREEN: u32 = WORLD + 0xA4;
 pub const HUD_OBJECTS: usize = 55;
@@ -113,12 +119,58 @@ pub fn root(m: &Mem) -> Portal {
 }
 
 pub fn sky_camera(m: &Mem) -> SkyCamera {
+    let (c, s) = (Camera::load(m, 0), Screen::load(m, 0));
     SkyCamera {
-        yaw: m.i32(0x0300_0214),
-        shake: [m.i16(0x0300_5390), m.i16(0x0300_5392)],
-        horizon: m.i32(0x0300_56B8),
-        view: m.u32(0x0300_55F8),
+        yaw: c.look,
+        shake: s.shake,
+        horizon: c.horizon,
+        view: c.view,
     }
+}
+
+/// What `camera_update` reads and writes.
+pub fn camera_frame(m: &Mem) -> CameraFrame {
+    let (w, race) = (WorldHeader::load(m, WORLD), Race::load(m, 0));
+    let racer = |e: Ptr<state::Entity>| {
+        let entity = e.read(m);
+        let car = entity.driver.read(m);
+        Racer { entity, car }
+    };
+    CameraFrame {
+        camera: Camera::load(m, 0),
+        screen: Screen::load(m, 0),
+        view: w.view.read(m),
+        input: Input::load(m, 0),
+        phase: race.phase,
+        player: racer(w.entities.at(race.player)),
+        target: racer(race.player_entity),
+        focus: w.entities.at(race.focus).read(m),
+        pieces: w.pieces.read_n(m, w.piece_count as u32),
+        offsets: w.sector_offsets.read_n(m, w.sector_offset_count as u32),
+        query: (w.query_sector, w.query[0], w.query[2]),
+        root: w.visible.read(m),
+        rect: w.rect,
+        ceiling: race.profile.read(m).ceiling,
+    }
+}
+
+pub fn store_camera_frame(m: &mut Mem, f: &CameraFrame) {
+    f.camera.store(m, 0);
+    f.screen.store(m, 0);
+    f.input.store(m, 0);
+    let mut w = WorldHeader::load(m, WORLD);
+    w.view.write(m, &f.view);
+    w.visible.write(m, &f.root);
+    // The camera points the world at its matrix and clears `+0xF0`.
+    w.camera_matrix = Ptr::new(CAMERA_MATRIX);
+    w.u_f0 = 0;
+    (w.query_sector, w.query[0], w.query[2]) = f.query;
+    w.rect = f.rect;
+    w.store(m, WORLD);
+    let profile = Race::load(m, 0).profile;
+    let mut p = profile.read(m);
+    p.ceiling = f.ceiling;
+    profile.write(m, &p);
 }
 
 pub fn hud_globals(m: &Mem) -> hud::Globals {

@@ -366,40 +366,11 @@ fn start_turn(m: &mut Mem, e: u32, blk: u32, nx: i32, nz: i32, steps: i32) {
     m.set_i32(blk + 0x1C, steps);
 }
 
-/// `FUN_08144b7c`: the sector of the query point (world `+0xC0/+0xC8`): the query sector, else one through a
-/// portal (solid walls only count with material 0, and walls with a dynamic state never count as solid).
+/// `FUN_08144b7c` ([`world::Geometry::traffic_find_sector`]) on the query point (world `+0xC0/+0xC8`) from the
+/// query sector.
 fn traffic_find_sector(m: &Mem) -> u32 {
-    let (x, z) = (m.i32(W_QUERY), m.i32(W_QUERY + 8));
-    let start = m.u16(W_QUERY_SECTOR) as u32;
-    let sector = |id: u32| m.u32(W_SECTORS) + id * 0x30;
-    let walls = |s: u32| m.u32(W_WALLS) + m.u16(s) as u32 * 0x44;
-    let s = sector(start);
-    if world::inside(m, x, z, walls(s), m.u16(s + 2) as u32, start) != NONE {
-        return start;
-    }
-    let mut w = walls(s);
-    for _ in 0..m.u16(s + 2) {
-        let solid = if m.u16(w + 0x2A) as u32 == NONE {
-            m.u16(w + 0x2E) & 0x1000
-        } else {
-            0
-        };
-        let link = m.u16(w + 0x32) as u32;
-        if link != NONE && (solid == 0 || m.i16(w + 0x2C) == 0) {
-            let t = sector(link);
-            let found = world::inside(m, x, z, walls(t), m.u16(t + 2) as u32, link);
-            if found != NONE {
-                let f = sector(found);
-                return if m.i16(f + 8) == 0 && m.u16(f + 0x20) as u32 != NONE {
-                    m.u16(f + 0x20) as u32
-                } else {
-                    found
-                };
-            }
-        }
-        w += 0x44;
-    }
-    NONE
+    let (x, z, start) = (m.i32(W_QUERY), m.i32(W_QUERY + 8), m.u16(W_QUERY_SECTOR) as u32);
+    world::geometry(m, |g| g.traffic_find_sector(start, x, z))
 }
 
 /// `FUN_08146094`: test the traffic car against the racers; bit 0 = a racer is near, bit 2 = it was hit (the

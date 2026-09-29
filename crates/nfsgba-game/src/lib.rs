@@ -17,14 +17,16 @@ pub mod slots;
 pub mod trace;
 pub mod view;
 
-use std::{io, path::Path};
+use std::{io, path::Path, sync::Arc};
 
 use nfsgba_audio::{Engine, Rom, ram};
 use nfsgba_formats::{
     city, hud, paint, render, sector_light, sky, tint_palette,
     ui::{self, SpriteBank},
 };
-use nfsgba_sim::{Mem, Sim, Unported, ai, car, sound::Command, traffic_ai};
+use nfsgba_sim::{
+    Mem, Sim, Unported, ai, car, data::GameData, layout::Field, sound::Command, state::Camera, traffic_ai,
+};
 
 use view::WORLD;
 
@@ -129,6 +131,8 @@ pub enum Checkpoint {
 
 pub struct Game {
     pub rom: Vec<u8>,
+    /// The ROM's tables, parsed once (shared with the RAM image's `Mem::data`).
+    pub data: Arc<GameData>,
     pub sim: Sim,
     pub palette: Vec<u8>,
     pub vram: Vec<u8>,
@@ -177,6 +181,7 @@ impl Game {
         let descriptor = m.mem.u32(0x0300_5620) as usize - 0x0800_0000;
         Game {
             bank: ui::sprite_bank(&rom, descriptor),
+            data: m.mem.data().clone(),
             rom,
             sim: Sim::new(m.mem),
             palette: m.palette,
@@ -422,10 +427,13 @@ impl Game {
         self.update_entities(t)?;
         assist(Checkpoint::Entities, self);
         if !assist(Checkpoint::Camera, self) {
-            camera::dispatch(&mut self.sim.mem)?;
+            // During the migration the camera's typed state is loaded from and stored to the RAM image here.
+            let mut f = view::camera_frame(&self.sim.mem);
+            camera::dispatch(&self.rom, &self.data, &mut f)?;
+            view::store_camera_frame(&mut self.sim.mem, &f);
         }
         is(
-            !matches!(self.sim.mem.u32(camera::VIEW_MODE), 0 | 2),
+            !matches!(Camera::load(&self.sim.mem, 0).view, 0 | 2),
             "camera views other than the bumper and chase views",
         )?;
         let mut vis = view::visible(&self.rom, &self.sim.mem);
