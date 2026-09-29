@@ -16,6 +16,7 @@ use crate::sound::Command;
 use crate::walls;
 use crate::world::{self, AUTOMATIC, DT, INPUT, NONE, PLAYER, PROFILE, RACE_PHASE, W_SEGMENTS, WORLD, control, entity};
 use crate::{Result, Sim, Unported};
+use nfsgba_formats::career::{self, Race, Racer};
 
 /// Handling records (0x158 bytes), one per car: `+0x54` top gear, `+0x68` idle rpm, `+0x11C` drag,
 /// `+0x148` yaw damping (`docs/engine/physics.md`).
@@ -651,32 +652,44 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let lane = nearest_lane_of(m, e);
     m.set_u16(p + 0xC0, lane as u16);
     if m.i32(0x0300_56E0) == 2 {
-        hunter_life_tick(m, e);
+        // `FUN_08140f78` (`hunter_life_tick`).
+        let mut r = racer(m, e);
+        career::hunter_life_tick(&race(m), &mut r);
+        store_racer(m, e, &r);
     }
     Ok(())
 }
 
-/// `FUN_08140f78` (`hunter_life_tick`): one step of hunter life (`+0x4E8`, 0..0x80000), with the tuning globals
-/// of `hunter_tuning_init` (`FUN_081412ec`). Driving the wrong way (`+0x4EC` above `0x030061D0`) drains
-/// `0x030061F4`; standing still (`+0x4EE` above `0x030061E0`) drains `0x030061A8`; otherwise, until someone has
-/// finished (`0x030061A4`), life grows by the rate for the race position (`0x030061B0[+0xA8]`).
-fn hunter_life_tick(m: &mut Mem, e: u32) {
-    let p = m.u32(e + 0x8C);
-    let life = p + 0x4E8;
-    let drain = if m.i32(0x0300_61D0) < m.i16(p + 0x4EC) as i32 {
-        Some(0x0300_61F4)
-    } else if m.i32(0x0300_61E0) < m.i16(p + 0x4EE) as i32 {
-        Some(0x0300_61A8)
-    } else {
-        None
-    };
-    if let Some(rate) = drain {
-        let v = m.i32(life) - m.i32(rate);
-        m.set_i32(life, v.max(0));
-    } else if m.i32(0x0300_61A4) == 0 {
-        let v = m.i32(life) + m.i32((0x0300_61B0 + m.i32(p + 0xA8) * 4) as u32);
-        m.set_i32(life, v.min(0x8_0000));
+/// The race globals the hunter rules read (`nfsgba_formats::career::Race`).
+pub fn race(m: &Mem) -> Race {
+    Race {
+        opponents: m.u32(route::OPPONENTS),
+        finished: m.i32(0x0300_61A4) != 0,
+        ..Race::default()
     }
+}
+
+/// Car `e`'s fields that the hunter rules use (`nfsgba_formats::career::Racer`): entity `+0x00`/`+0x4A`, driver
+/// `+0xA8` place, `+0x4E8` life, `+0x4EC`/`+0x4EE` wrong-way and wall counters, `+0x4F0` hit counter.
+pub fn racer(m: &Mem, e: u32) -> Racer {
+    let p = m.u32(e + 0x8C);
+    Racer {
+        id: m.u16(e),
+        state: m.u16(e + 0x4A),
+        place: m.i32(p + 0xA8),
+        life: m.i32(p + 0x4E8),
+        wrong_way: m.i16(p + 0x4EC),
+        wall: m.i16(p + 0x4EE),
+        hit: m.i16(p + 0x4F0),
+        ..Racer::default()
+    }
+}
+
+/// Writes back what the hunter rules change: life and the hit counter.
+pub fn store_racer(m: &mut Mem, e: u32, r: &Racer) {
+    let p = m.u32(e + 0x8C);
+    m.set_i32(p + 0x4E8, r.life);
+    m.set_i16(p + 0x4F0, r.hit);
 }
 
 fn release_accelerator(m: &mut Mem, player: bool, stats: u32) {

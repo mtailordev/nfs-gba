@@ -6,12 +6,14 @@
 //! portal or 0xFFFF, `+0x34/+0x36` inward normal x/z (1.0 = 0x1000), `+0x38` floor height.
 
 use crate::body;
+use crate::car;
 use crate::math::{cross, div, udiv};
 use crate::mem::Mem;
 use crate::route::{is_player, lateral, nearest_lane};
 use crate::sound::Command;
 use crate::world::{NONE, PROFILE, W_WALL_STATES, sector_addr, wall_addr, wall_flags};
 use crate::{Result, Sim, Unported};
+use nfsgba_formats::career;
 
 /// Walls in the neighbouring sector are only tested this far (city units squared) past a wall's ends.
 const END_RADIUS2: i32 = 0x270F;
@@ -160,12 +162,10 @@ fn respond(sim: &mut Sim, e: u32, point: [i32; 3], n: [i32; 3], w: u32) -> Resul
     }
     m.set_u32(p + 0x448, m.u32(p + 0x448) | 0x10);
     if m.i32(0x0300_56E0) == 2 && !broke {
-        // `FUN_0814136c` (`hunter_hit`): hunter races lose hunter life on wall hits.
-        if m.u16(e + 0x4A) != 2 {
-            let v = m.i32(p + 0x4E8) - (m.i32(0x0300_6184).wrapping_mul(j) >> 8);
-            m.set_i32(p + 0x4E8, v.max(0));
-            m.set_u16(p + 0x4F0, 0);
-        }
+        // `FUN_0814136c` (`hunter_wall_hit`): hunter races lose hunter life on wall hits.
+        let mut r = car::racer(m, e);
+        career::hunter_drain(&mut r, 0, j);
+        car::store_racer(m, e, &r);
     }
     if n[2].abs() <= 0x7FF {
         m.set_u32(p + 0x448, m.u32(p + 0x448) | if n[0] < 1 { 4 } else { 2 });
