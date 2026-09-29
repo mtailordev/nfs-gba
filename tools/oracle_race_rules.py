@@ -469,13 +469,51 @@ def gen_save_encode(gba, rng, n):
     return out
 
 
+def gen_race_lines(gba, rng, n):
+    """The racing line of every route as race_load_level leaves it: the ROM copy into the world buffers,
+    FUN_081390B0 (sprint), FUN_081391F4 (links), FUN_08138F30 (planes, with the lapped flag left from before), and
+    then FUN_0813F744 (distances, lapped = not a sprint, as the player's setup sets it). One build_planes and one
+    planes_now line per route, sprint or not, and build flag."""
+    rom = gba.rom.tobytes()
+    u32 = lambda a: struct.unpack_from("<I", rom, a)[0]  # noqa: E731
+    out = []
+    for route in range(44):
+        rec = 0x7F2798 + 0x14 * route
+        if u32(rec + 8) == 0:
+            continue
+        p = u32(0x7F37D8 + 4 * route)
+        branches = u32(p - 0x08000000) if p else 0
+        for sprint in (0, 1):
+            for lapped in (0, 1):
+                g = Gba(gba.snapshot)
+                secs, line = gba_u32(g, WORLD + 0x40), gba_u32(g, WORLD + 0x44)
+                g.poke(secs, rom[u32(rec + 4) - 0x08000000:][:0x50])
+                g.poke(line, rom[u32(rec + 8) - 0x08000000:][:0x1800])
+                for a, v in [(0x03006108, branches), (0x030056E0, 3 if sprint else 0), (0x03005720, route),
+                             (0x0300608C, lapped)]:
+                    g.poke(a, pack("I", v))
+                old = view(g, []).hex(gba_u32(g, 0x03005FB4), 0x2000)  # rows the build skips keep these
+                for fn in (0x081390B0, 0x081391F4, 0x08138F30):
+                    assert g.call(fn, r0=WORLD, keep=True).stop == "return"
+                m = view(g, [])
+                built = m.get(0x0300608C, "I")
+                tables = {"planes": m.hex(gba_u32(g, 0x03005FB4), 0x2000), "back": m.hex(gba_u32(g, 0x03005FB8), 0x400)}
+                row = {"sprint": sprint, "g": m.globals(), "sections": m.hex(secs, 0x50)}
+                out.append({"fn": "build_planes", "lapped": built, **row, "points": m.hex(line, 0x1800), "old": old,
+                            **tables})
+                g.poke(0x0300608C, pack("I", 0 if sprint else 1))
+                assert g.call(0x0813F744, r0=WORLD, keep=True).stop == "return"
+                out.append({"fn": "planes_now", **row, "points": view(g, []).hex(line, 0x1800), **tables})
+    return out
+
+
 GENERATORS = {
     "style_rating": gen_style_rating, "rebuild_unlocks": gen_rebuild_unlocks, "race_progress": gen_race_progress,
     "lap_crossing": gen_lap_crossing, "update_places": gen_update_places, "track_player": gen_track_player,
     "hunter_life_tick": gen_hunter_life_tick, "hunter_hit": gen_hunter_hit,
     "hunter_drain_a": gen_drain("hunter_drain_a"), "hunter_drain_b": gen_drain("hunter_drain_b"),
     "finish_estimate": gen_finish_estimate, "rank_results": gen_rank_results,
-    "career_race_payout": gen_career_race_payout, "save_encode": gen_save_encode,
+    "career_race_payout": gen_career_race_payout, "save_encode": gen_save_encode, "race_lines": gen_race_lines,
 }
 
 

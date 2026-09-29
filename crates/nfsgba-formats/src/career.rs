@@ -389,9 +389,10 @@ impl RacingLine {
     }
 
     /// The plane table and back table that `FUN_08138f30` builds at race start (lap, then each branch where it
-    /// leaves the lap, recursively; `FUN_08138dc4`).
-    pub fn planes(&self, lapped: bool) -> (Vec<Plane>, BackTable) {
-        let mut planes = vec![[0; 8]; self.points.len()];
+    /// leaves the lap, recursively; `FUN_08138dc4`), with the lapped flag left from the previous scene. The game
+    /// writes into a `malloc(0x2000)` (256 rows) and only the rows it builds: pass the old contents in `planes`
+    /// (a branch entered only at its end is never built, and keeps them). The back table is fully reset.
+    pub fn planes(&self, lapped: bool, planes: &mut [Plane]) -> BackTable {
         let mut back = [-1; 256];
         let count = i32::from(self.sections[0].count);
         let row = |this: &Self, back: &BackTable, s: usize, k: i32| {
@@ -406,11 +407,11 @@ impl RacingLine {
             planes[k as usize] = row(self, &back, 0, k);
             let p = self.point(0, k);
             if p.link_index != 0xFFFF && p.link_section != 0 {
-                self.branch_planes(lapped, &mut planes, &mut back, p, k);
+                self.branch_planes(lapped, planes, &mut back, p, k);
             }
         }
         planes[0] = row(self, &back, 0, 0);
-        (planes, back)
+        back
     }
 
     /// `FUN_08138dc4`: the planes of the branch that `fork` links to, when the branch starts there.
@@ -1459,7 +1460,8 @@ mod tests {
             assert_eq!((p.x, p.z, p.link_section, p.link_index, p.distance), ram, "point {k}");
         }
         let (table, back_table) = (at(u32_at(&iw, 0x5FB4)), at(u32_at(&iw, 0x5FB8)));
-        let (planes, back) = line.planes(false);
+        let mut planes = vec![[0; 8]; 256];
+        let back = line.planes(false, &mut planes);
         for (k, row) in planes[..total].iter().enumerate() {
             let ram: Plane = std::array::from_fn(|i| u32_at(&ew, table + 0x20 * k + 4 * i) as i32);
             assert_eq!(*row, ram, "plane row {k}");
@@ -1802,6 +1804,7 @@ mod tests {
         // Per file: the lapped flag the plane table was built with (0 when a file has no build line).
         let mut built: std::collections::HashMap<String, bool> = Default::default();
         let mut last_sav = std::collections::HashMap::new();
+        let mut tables: std::collections::HashMap<String, Vec<Plane>> = Default::default();
         for t in traces() {
             let at = || format!("{} frame {} {}", t.file, t.frame, t.func);
             // Oracle cases name the snapshot's line (`sprint`) and plane build (`built`); traces follow the race.
@@ -1846,23 +1849,43 @@ mod tests {
                         let want = ((p.x, p.z), (p.link_section, p.link_index), p.distance);
                         assert_eq!(want, (got, links, dist), "{} point {k}", at());
                     }
-                    let (table, back_table) = (t.bytes("planes"), t.bytes("back"));
-                    let matches =
-                        |lapped: bool| {
-                            let (planes, back) = line.planes(lapped);
-                            planes[..total].iter().enumerate().all(|(k, row)| {
-                                *row == std::array::from_fn(|i| u32_at(&table, 0x20 * k + 4 * i) as i32)
-                            }) && (0..256).all(|s| back[s] == u32_at(&back_table, 4 * s) as i32)
-                        };
+                    let rows = |b: &[u8]| -> Vec<Plane> {
+                        (0..256)
+                            .map(|k| std::array::from_fn(|i| u32_at(b, 0x20 * k + 4 * i) as i32))
+                            .collect()
+                    };
+                    let (table, back_table) = (rows(&t.bytes("planes")), t.bytes("back"));
+                    // Rows the build skips keep the buffer's old contents: oracle cases record them (`old`), traces
+                    // do not, so there those rows are left out.
+                    const UNSET: Plane = [i32::MIN; 8];
+                    let old = t.kv.get("old").map_or(vec![UNSET; 256], |_| rows(&t.bytes("old")));
+                    let build = |lapped: bool| {
+                        let mut planes = old.clone();
+                        let back = line.planes(lapped, &mut planes);
+                        (planes, back)
+                    };
+                    let matches = |lapped: bool| {
+                        let (planes, back) = build(lapped);
+                        (0..total).all(|k| planes[k] == UNSET || planes[k] == table[k])
+                            && (0..256).all(|s| back[s] == u32_at(&back_table, 4 * s) as i32)
+                    };
                     let lapped = if now {
                         [false, true].into_iter().find(|&l| matches(l))
                     } else {
                         Some(t.get("lapped") != "0").filter(|&l| matches(l))
                     };
-                    built.insert(
-                        t.file.clone(),
-                        lapped.unwrap_or_else(|| panic!("{}: plane table", at())),
-                    );
+                    let Some(lapped) = lapped else {
+                        let (planes, _) = build(t.get("lapped") != "0");
+                        let row = (0..total).find(|&k| planes[k] != UNSET && planes[k] != table[k]);
+                        panic!(
+                            "{}: plane row {row:?}: {:?} vs {:?}",
+                            at(),
+                            row.map(|k| planes[k]),
+                            row.map(|k| table[k])
+                        );
+                    };
+                    built.insert(t.file.clone(), lapped);
+                    tables.insert(t.file.clone(), table);
                 }
                 "lap_crossing" => {
                     let (mut race, route) = t.race("pre.g", "pre.res");
@@ -1879,7 +1902,9 @@ mod tests {
                 "track_player" | "ai_advance" => {
                     let (mut race, route) = t.race("g", "");
                     let line = line_for(&race, route);
-                    let (planes, back) = line.planes(lapped_at_build);
+                    // The table as the race had it: the build over the captured table keeps its unbuilt rows.
+                    let mut planes = tables.get(&t.file).cloned().unwrap_or_else(|| vec![[0; 8]; 256]);
+                    let back = line.planes(lapped_at_build, &mut planes);
                     let mut r = t.racer("pre");
                     let crossed = if t.func == "track_player" {
                         let v = t.ints("vec");
