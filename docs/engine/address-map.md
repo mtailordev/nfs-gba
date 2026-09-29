@@ -172,7 +172,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03004B98` | IWRAM minimap window copy |
 | `0x03000220` | IWRAM image start; `iwram_divmod` (signed divide storing a remainder in `0x03006480`) |
 | `0x03005384` | the player has gone the wrong way for over 27 frames |
-| `0x03005628` | counter that picks the traffic type (hypothesis: a frame counter) |
+| `0x03005628` | frame counter (`main_frame` adds 1; race start sets 0); picks the traffic type |
 | `0x03005640` | frame time (25,500 / timer-3 ticks, 10..100; 15 if `0x03005624` is 2), written by `main_frame` |
 | `0x030057D8` | u16 control word per entity (`0xFC00 \| keys` for the player) |
 | `0x03005FB4` | pointer to the plane table (malloc 0x2000; 0x20 per waypoint: direction, widening, crossing plane, length); built with the lapped flag the previous scene left, so skipped rows keep old contents |
@@ -198,7 +198,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03006480` / `0x03006494` | IWRAM divider remainder / pointer to the divide routine (`0x03000220`) |
 | `0x030061D4` / `0x030061DC` | wingman portrait blink / frame (inside the loose "hunter tuning" range below) |
 | `0x030061E4` / `0x03006188` | wingman bar value / full scale |
-| `0x03000044` | rand seed applied by `setup_race_cars` |
+| `0x03000044` | running tick counter (intro deadlines); `setup_race_cars` uses its value as the race's rand seed |
 | `0x03005A00` | IWRAM block (0x54C): mode-1 mixer code, then mix buffers `0x03005DEC` / `0x03005E9C` (176 samples each) |
 | `0x03005F4C` / `0x03005F50` | sound work-area pointer (0x26AC allocated) / 28-byte engine config |
 | `0x03006370` | LS_Play engine pointer (`0x0200EE28` in the reference runs; layout in formats/audio) |
@@ -290,7 +290,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030057F8` | entity index whose heading `shade_car_paint` uses (0) |
 | `0x03006164` | per racer: pointer to the unpacked atlas (player `0x0201FB9C`) |
 | `0x03006094` | per entity: pointer to the unpacked decal |
-| `0x03005780` | race-over flag (`shade_car_paint` skips while set) |
+| `0x03005780` | race-over flag (`shade_car_paint` skips while set); in the menus the exit request (7 = leave the menus for the race once the fade is done) |
 | `0x030064C8` | `rand_table` index |
 | `0x0201431C` | entity array in the reference race (world `+0x3C`) |
 | `0x0201F828` | HUD objects in the reference race |

@@ -4,8 +4,8 @@ address,name,kind,comment
 0x0812b21c,set_base_palette,function,copies a 0x200-byte palette into both base palette buffers (*0x030055F0 and *0x0300577C)
 0x08137424,race_spawn_template_entities,function,copies the route's template entities into the entity array and clears extra slots
 0x081372e4,race_menu_palette_setup,function,sets world palettes from level record +0x00 + (+0x5A)*2 (menu/event screen)
-0x081370d4,menu_scene_setup_a,function,menu palette setup (0x33EF14 palettes)
-0x081371a4,menu_scene_setup_b,function,menu palette setup (0x33EF14 palettes)
+0x081370d4,menu_scene_setup_a,function,(world; background menu material; menu palette; sprite screen or 0xFFFF): unpacks the material; world +0x30 = menu palette 0x33EF14 + palette*0x200; +0x34 = palette 1; base palette
+0x081371a4,menu_scene_setup_b,function,(world; background menu material; menu palette; sprite screen or 0xFFFF): unpacks the material; world +0x30 = menu palette 0x33EF14 + palette*0x200; +0x34 = palette 1; base palette; after a screen change
 0x08138a9c,race_load_palettes,function,loads city palette rec+0x00 + (rec+0x5A)*2 and second palette rec+0x04 + (rec+0x58)*2; also initialises the view struct (near 64, focal 150)
 0x08139454,race_load_level,function,copies level descriptor pointers into the world struct and allocates buffers
 0x081397d8,race_init,function,race start: load level/route, spawn entities, palettes
@@ -97,11 +97,11 @@ address,name,kind,comment
 0x0812efe8,career_race_payout,function,event status update and cash payout
 0x0812c30c,style_rating,function,career car rating -> reward percent tiers
 0x0812ffb0,quick_race_random,function,randomised Quick Play settings
-0x0812b5f0,race_setup_route,function,route number -> track slot, direction fix-up, environment and route index from 0x7F2588
+0x0812b5f0,menu_frame,function,one menu frame: menu exit; Quick Play race setup (screen 0x81: route number -> environment and route index via 0x7F2588); message box; key repeat; update handler; B = back
 0x08132790,setting_variable,function,setup setting id -> variable address
 0x081328f4,setup_screen_enter,function,copies globals into profile+0x3BC.. for the setup screen
 0x08132ab8,setup_screen_update,function,edits settings and writes them back to the globals
-0x08130d8c,wingman_screen,function,wingman list with lock state, role and level
+0x08130d8c,list_draw,function,draw handler of the List screens (0-6; 9; 27-30; 35; 36; 45; 46); e.g. the wingman list with lock state; role and level
 0x081400ec,race_progress,function,lap length*(laps-laps left)+distance
 0x0813e860,racing_line_step,function,walks an index across racing-line sections
 0x0813f098,lap_crossing,function,lap/finish detection, lap times, elimination knock-out
@@ -181,7 +181,7 @@ address,name,kind,comment
 0x08164d90,blit_keyed,function,copies w x h bytes skipping a key byte through 16-bit read-modify-write; no clipping
 0x08136d74,menu_blit_material,function,blits menu material (unpacked if kind bit 6) at x y into the current frame buffer
 0x0812bd60,menu_button_prompts,function,button prompt bar: icons 156..161 and prompt texts in font 0xE
-0x081315a0,menu_screen_setup,function,menu state setup; state 0x2F loads the health screen colours from 0x7E5E48
+0x081315a0,intro_enter,function,enter handler of the intro screens (background; deadline; per-screen state); state 0x2F loads the health screen colours from 0x7E5E48
 0x08162860,text_draw,function,draws a string: char map 0x7F5BC8; align 1 centre / -1 right; colour offset
 0x08162720,text_draw_glyph,function,draws one glyph (width table; key skip; 16-bit read-modify-write)
 0x08163080,text_measure,function,string width with a font
@@ -363,3 +363,55 @@ address,name,kind,comment
 0x0812e860,swap_result_rows,function,swaps two slots of every array of the ranked results 0x03005730
 0x0812eaac,fill_results,function,(tentative) copies hunter life, times (finish estimate if 0) and best laps into the results 0x03005650
 0x081413b0,hunter_drain_b,function,hunter life -= *0x030061A0 * amount >> 8 unless finished; clears physics +0x4F0 (called from FUN_08145dac)
+0x0812acec,game_state_step,function,game state 0x03005808: 0 boot (enter_screen) / 1 menus (menu_frame then draw_screen) / 4 race start (race_start_from_table_a; fade 0x10) / 5 race (race_frame_update; then back to the menus)
+0x0812b430,enter_screen,function,mark_screen_changed; enter handler of screen 0x03005944 (table 0x0812B454; 7/8/15/28/40 extra code); clears profile +0x2F6/+0x2F8; exit screen = -1; draw_screen(1)
+0x0812d334,draw_screen,function,draw handler of the screen (table 0x0812D370; List/Setup/Intro/Kind38 draw a rand_table number first); full = 1 after a screen change; then message_box_draw
+0x0812d49c,menu_back,function,pops the back stack (top i8 0x0300593C; screens at profile +0x344) into the screen and enter_screen
+0x0812d4d8,mark_screen_changed,function,0x03005948 = 1
+0x08135690,message_box_input,function,0x030059F4 = 1 on A (sound 2) / -1 on B when box 0x030059F0 is 2 (sound 3); returns it
+0x08135678,message_box_close,function,box 0x030059F0 = -1; keys 0x030064C0 = 0
+0x0813550c,message_box_draw,function,(tentative) draws the open message box (0x030059F0 >= 0); arg full
+0x0815e290,bg_palette_fade_out_step,function,palette RAM 0x05000000: non-zero channels -= step (first, n, step)
+0x0815e2f0,bg_palette_fade_in_step,function,palette RAM 0x05000000 towards target[0..] (target, first, n, step)
+0x081617d4,obj_palette_fade_out_step,function,palette RAM 0x05000200: non-zero channels -= step (first, n, step)
+0x08161838,obj_palette_fade_in_step,function,palette RAM 0x05000200 towards target[first..] (target, first, n, step)
+0x0812fe38,list_enter,function,enter handler of the List screens (0-6 9 27-30 35 36 45 46)
+0x081303e8,list_update,function,update handler of the List screens
+0x081314a4,list_exit,function,exit handler of the List screens
+0x0812e80c,kind7_enter,function,enter handler of screens 7 8 14 17
+0x0812e3d4,kind7_update,function,update handler of screens 7 8 14 17
+0x0812e5ac,kind7_draw,function,draw handler of screens 7 8 14 17
+0x0812e850,kind7_exit,function,exit handler of screens 7 8 14 17
+0x0812f204,career_zone_enter,function,enter handler of the career zone screens 11 12
+0x0812f364,career_zone_update,function,update handler of screens 11 12
+0x0812f450,career_zone_draw,function,draw handler of screens 11 12
+0x0812fc6c,career_zone_exit,function,exit handler of screens 11 12
+0x0812e308,career_event_enter,function,enter handler of screen 13 (career event)
+0x0812dafc,career_event_update,function,update handler of screen 13
+0x0812e380,career_event_exit,function,exit handler of screen 13
+0x08133074,setup_screen_draw,function,draw handler of the setup screens 10 15 16
+0x081336bc,setup_screen_exit,function,exit handler of the setup screens 10 15 16
+0x08133708,kind18_enter,function,enter handler of screens 18 19 20
+0x081338e0,kind18_update,function,update handler of screens 18 19 20
+0x08133f2c,kind18_draw,function,draw handler of screens 18 19 20
+0x081348d8,kind18_exit,function,exit handler of screens 18 19 20
+0x081318e4,intro_update,function,update handler of the boot/intro screens 21-26 37 47 48 (pages 0x087E5DA8)
+0x08131fe0,intro_draw,function,draw handler of the intro screens
+0x08132780,intro_exit,function,exit handler of the intro screens
+0x08134df0,kind38_enter,function,enter handler of screens 38 39 43
+0x08134eb8,kind38_update,function,update handler of screens 38-43
+0x08135340,kind38_draw,function,draw handler of screens 38 39 41 43
+0x081354fc,kind38_exit,function,exit handler of screens 38 39 43
+0x0812b320,setup_screen_15_prepare,function,(tentative) called before setup_screen_enter on screen 15
+0x0816223c,timer_read,function,(tentative) reads timer n's count (main_frame: timer 3 = the last frame's length)
+0x08162228,timer_stop,function,(tentative) main_frame: before timer_read(3)
+0x081621f0,timer_start,function,(tentative) main_frame: timer_start(3; 3; 0; 0; 0) after reading it
+0x0812bb5c,goto_screen,function,screens <= 0x7F: push the old screen (back stack) and set the new one; List screens clear their cursor slot (profile +0x350); enter_screen. 0x81: exit screen = screen. 0x82: resume the race from pause (15 VBlanks; state 5; palettes; music)
+0x0812fd04,list_slot,function,cursor slot of a List screen (0..16; screen 3 uses 0xF when profile +0x12 is 0); -1 otherwise
+0x081318b0,name_is_valid,function,the typed name's 9 bytes OR to neither 0 nor 0x20; plays sound 2 either way
+0x0813644c,health_screen_image,function,(tentative) intro enter on screen 0x2F: (world; 7/8/0xA/9/0xB by language) the language's health and safety image
+0x081364c4,intro_page_setup,function,(tentative) first call of intro_draw; argument *0x030057F0 (the unpack buffer)
+0x08136e60,menu_blit_material_alt,function,(tentative) (world; material; x; y) like menu_blit_material; the name screen's letter image (0xDE-0xE1 by language)
+0x08139c8c,load_menu_descriptor,function,(tentative) menu_scene_setup_a: (world; 0x087F2FE8) loads the menu level descriptor into the world
+0x08141b40,text_menu_wrapped_colour,function,(tentative) (font; key; x; y; width 0xE0/0xEE; lines 0xF; colour): the PSA text and the credits lines
+0x081419c0,text_menu_7,function,(tentative) (font 0xC; key 0x159; x 0x78; y 0x32; 0xDC; 2; 0): the title's text before loading the save
