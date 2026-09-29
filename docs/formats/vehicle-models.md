@@ -51,9 +51,20 @@ Checked by rendering all 102 models as wireframes:
 - **83–88:** traffic vehicles (a box truck/bus, a van, sedans).
 - **89–101:** small pieces: markers, arrows, flat quads (shadows or effects, unverified).
 
+## Textures (partly known)
+
+- **Vehicle materials:** level record `+0x20` → world `+0x24` → `0x45F5C0`. Records are 0x24 bytes, self-indexed, in the same layout as the city materials.
+- **Texel pointer:** world `+0x04` (record `+0x0C` = `0x370550`) + material `+0x08`. It points at **BIOS-LZ77 blobs**, which the game unpacks to RAM (entity `+0x84`).
+- **Materials 1–45:** the 45 car atlases, 256×200. They use palette indices 0–31 only, so each car has a 32-colour palette (the source isn't found yet).
+- **Materials 46 onwards:** 40×40 textures (small parts, maybe spoilers).
+- **Material `+0x04`** holds an RGB888-like grey (`0xB0B4B0`, `0x686C68`, …). **Hypothesis:** the default paint shade.
+- **Paint variants:** atlases with near-identical LZ77 headers come in runs of 2–4, i.e. about 15 car types × paint variants.
+- **Choosing a material:** `FUN_03001cf0` computes it per entity as `material = world[9] + (entity[+0x48] + optional LOD step + entity[+0x46] + entity[+0x44] >> 8) × 0x24`. The model does not store it.
+- **UVs:** `u16 u, u16 v`. **Hypothesis:** 8.8 fixed-point texels into the 256×200 atlas (e.g. `0x5780, 0x41FF` gives 87.5, 66.0).
+
 ## Open
 
-- Which texture atlas goes with which car (the 45 × 256×200 LZ77 atlases), and the palettes.
+- **Which model and atlas make up each car:** needs the car-definition table that fills entity `+0x44…+0x48`. Also where the 32-colour car palettes live (maybe the 128-byte palette table at `0x7E6EEC`).
 - The exact UV scale and what model `+0x98` does.
 - The flag bits other than bit 0.
 - **The city geometry is not in this bank.** It is drawn by other IWRAM routines (`FUN_030013ac` and `FUN_03000b44` are the candidates, both called from the scene routine `FUN_0300224c`).
