@@ -12,6 +12,7 @@
 use crate::math::{cos, div, isqrt, sin};
 use crate::mem::Mem;
 use crate::route::CIRCUIT;
+use crate::sound::Command;
 use crate::traffic::atan2_fast;
 use crate::world::{self, NONE, W_ENTITIES, W_QUERY, W_QUERY_SECTOR, W_SECTORS, W_SEGMENTS, W_WALLS, W_WAYPOINTS};
 use crate::{Result, Sim, Unported};
@@ -417,8 +418,11 @@ fn contact(sim: &mut Sim, e: u32) -> Result<u32> {
     };
     let (vx, vz) = (vx >> 4, vz >> 4);
     let mut result = 0;
-    let mut o = m.u32(W_ENTITIES);
+    // Once set, the hit flag stays set for the rest of the loop (the game's `local_90`).
+    let mut hit = false;
+    let mut o = sim.mem.u32(W_ENTITIES);
     for _ in 0..racers.wrapping_add(1) {
+        let m = &sim.mem;
         let dx = m.i32(e + 0xC).wrapping_sub(m.i32(o + 0xC)) >> 12;
         let dz = m.i32(e + 0x14).wrapping_sub(m.i32(o + 0x14)) >> 12;
         let d2 = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz));
@@ -430,13 +434,114 @@ fn contact(sim: &mut Sim, e: u32) -> Result<u32> {
             } else {
                 dy <= 0xFFFF
             };
-            if close_y && d2 < 0x801 && hits(m, e, o, [vx, vz], dt) {
-                return Err(Unported("FUN_08145dac (a racer hits a traffic car)"));
+            if close_y && d2 < 0x801 {
+                hit |= hits(m, e, o, [vx, vz], dt);
+                if hit && respond(sim, o, e)? {
+                    let m = &mut sim.mem;
+                    let q = m.u32(o + 0x8C);
+                    m.set_u32(q + 0x448, m.u32(q + 0x448) | 1);
+                    m.set_u16(e + 0x4A, 3);
+                    result |= 2;
+                    m.set_u16(e + 0x56, 0);
+                    if m.i16(0x087F_5924 + m.u16(e + 0x7C) as u32 * 2) != 0 && m.u16(o) as u32 == m.u32(world::PLAYER) {
+                        m.set_u32(world::RACE_PHASE, 7);
+                    }
+                }
             }
         }
         o += 0xA4;
     }
     Ok(result)
+}
+
+/// `FUN_08145dac`: racer `o` hits traffic car `t` at the midpoint of their centres: an impulse along the line
+/// between them (restitution clamped to −0x16..−0x11), split by the traffic type's shifts (`0x087F5604`,
+/// `0x087F5684`) between the traffic car (velocity, wobble `+0x38`) and the racer's body (momentum, spin);
+/// the racer's lane, hunter life and the crash sound for the player. Returns whether they were closing.
+fn respond(sim: &mut Sim, o: u32, t: u32) -> Result<bool> {
+    let m = &mut sim.mem;
+    let q = m.u32(o + 0x8C);
+    let b = q + 0xC8;
+    let dt = crate::math::recip(m, m.i32(world::DT) << 8).min(0xC00);
+    let mut n = [
+        (m.i32(o + 0xC) - m.i32(t + 0xC)) >> 2,
+        0,
+        (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 2,
+    ];
+    crate::math::normalize14(&mut n);
+    let n = [n[0] >> 8, 0, n[2] >> 8];
+    let point = [
+        (m.i32(t + 0xC) + m.i32(o + 0xC)) >> 1,
+        (m.i32(t + 0x14) + m.i32(o + 0x14)) >> 1,
+    ];
+    let r_o = [point[0] - m.i32(o + 0xC), 0, point[1] - m.i32(o + 0x14)];
+    let r_t = [point[0] - m.i32(t + 0xC), 0, point[1] - m.i32(t + 0x14)];
+    let knocked = m.u16(t + 0x4A) == 3;
+    let speed = m.i32(t + 0x24);
+    let (tx, tz) = if knocked {
+        (m.i32(t + 0x18), m.i32(t + 0x20))
+    } else {
+        (speed.wrapping_mul(m.i32(t + 0x18)), speed.wrapping_mul(m.i32(t + 0x20)))
+    };
+    let rel = [
+        (dt.wrapping_mul(m.i32(b + crate::body::VEL)) >> 11) - tx,
+        (dt.wrapping_mul(m.i32(b + crate::body::VEL + 8)) >> 11) - tz,
+    ];
+    let vn = (rel[0].wrapping_mul(n[0]) >> 6) + (rel[1].wrapping_mul(n[2]) >> 6);
+    if vn >= 0 {
+        return Ok(false);
+    }
+    let k = (-0x11 - ((vn + 0x3000) >> 11)).clamp(-0x16, -0x11);
+    if !knocked {
+        m.set_i32(t + 0x18, speed.wrapping_mul(m.i32(t + 0x18)));
+        m.set_i32(t + 0x20, speed.wrapping_mul(m.i32(t + 0x20)));
+    }
+    let j = vn.wrapping_mul(k) >> 4;
+    let imp = [n[0].wrapping_mul(j) >> 6, 0, n[2].wrapping_mul(j) >> 6];
+    let kind = m.u16(t + 0x7C) as u32;
+    let shift = m.u32(0x087F_5604 + kind * 4) & 0xFF;
+    let asr = |v: i32, s: u32| crate::math::asr(v, s);
+    if knocked {
+        m.set_i32(t + 0x18, m.i32(t + 0x18) - asr(imp[0], shift));
+        m.set_i32(t + 0x20, m.i32(t + 0x20) - asr(imp[2], shift));
+    } else {
+        m.set_i32(t + 0x18, m.i32(t + 0x18) - div(asr(imp[0], shift), speed));
+        m.set_i32(t + 0x20, m.i32(t + 0x20) - div(asr(imp[2], shift), speed));
+    }
+    let spin = crate::math::cross(r_t, imp);
+    let wobble_shift = m.u32(0x087F_5604 + kind * 4).wrapping_add(0xD) & 0xFF;
+    m.set_i32(t + 0x38, m.i32(t + 0x38).wrapping_add(asr(spin[1], wobble_shift)));
+    if j > 0x4000 {
+        m.set_u32(q + 0x4B4, m.u32(q + 0x4B4) | 4);
+    }
+    if m.u16(o) as u32 > m.u32(crate::route::OPPONENTS) && m.i32(0x0300_61F0) != 0 {
+        m.set_u32(0x0300_61F0, 0);
+    }
+    if m.i32(0x0300_56E0) == 2 && m.u16(o + 0x4A) != 2 {
+        // `FUN_081413b0`: hunter races: the hit costs the racer hunter life.
+        let v = m.i32(q + 0x4E8) - (m.i32(0x0300_61A0).wrapping_mul(j) >> 8);
+        m.set_i32(q + 0x4E8, v.max(0));
+        m.set_u16(q + 0x4F0, 0);
+    }
+    let shift = m.u32(0x087F_5684 + kind * 4) & 0xFF;
+    let imp = [asr(imp[0], shift), 0, asr(imp[2], shift)];
+    let mom = crate::body::MOMENTUM;
+    m.set_i32(b + mom, m.i32(b + mom).wrapping_add(imp[0]));
+    m.set_i32(b + mom + 8, m.i32(b + mom + 8).wrapping_add(imp[2]));
+    let turn = crate::math::cross(r_o, [imp[0] >> 8, 0, imp[2] >> 8]);
+    let ang = b + crate::body::ANG_MOMENTUM;
+    m.set_vec3(ang, crate::math::sub(m.vec3(ang), turn));
+    crate::body::update_velocities(m, b);
+    let lane = crate::route::nearest_lane(m, crate::route::lateral(m, o), -1);
+    m.set_u16(q + 0xC0, lane as u16);
+    if m.u16(o) as u32 == m.u32(world::PLAYER) {
+        sim.sounds.push(Command::Stop(0x15));
+        sim.sounds.push(Command::Stop(0x16));
+        if j > 0x800 {
+            sim.sounds.push(Command::Play(if j < 0x5001 { 0x16 } else { 0x15 }));
+        }
+    }
+    Ok(true)
 }
 
 fn sub2(a: [i32; 2], b: [i32; 2]) -> [i32; 2] {

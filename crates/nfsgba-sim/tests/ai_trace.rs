@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 11] = [
+const SCENARIOS: [&str; 12] = [
     "start",
     "accel",
     "brake",
@@ -25,6 +25,7 @@ const SCENARIOS: [&str; 11] = [
     "long",
     "sprint",
     "circuit",
+    "wingman",
 ];
 const EWRAM: usize = 0x4_0000;
 /// The IWRAM stack, which the oracle ignores.
@@ -205,8 +206,8 @@ fn each_call_matches_the_game() {
                     Ok(got_calls) => {
                         let got = writes(&mem, &sim.mem);
                         let want: BTreeSet<(u32, u8)> = c.writes.iter().copied().collect();
-                        let extra: Vec<_> = got.difference(&want).take(6).collect();
-                        let missing: Vec<_> = want.difference(&got).take(6).collect();
+                        let extra: Vec<_> = got.difference(&want).take(80).collect();
+                        let missing: Vec<_> = want.difference(&got).take(80).collect();
                         if !extra.is_empty() || !missing.is_empty() || got_calls != c.calls {
                             failures.push(format!(
                                 "{name} step {} entity {} (handler {:#x}): extra {extra:x?} missing {missing:x?} \

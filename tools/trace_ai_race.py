@@ -8,6 +8,9 @@ start of every game frame's entity loop); tools/trace_ai_oracle.py then replays 
 start from race-info savestates in the session directory, made through Quick Play > CUSTOM:
   sprintinfo.ss   JUNKPOINT sprint, 1 lap, normal, 3 opponents, heavy traffic, catch-up on, no wingman
   circuitinfo.ss  LONGPOINT circuit forward, 2 laps, hard, 3 opponents, heavy traffic, catch-up on, no wingman
+  wingmaninfo.ss  JUNKTOWN BLITZ circuit forward, 2 laps, normal, 2 opponents plus the wingman KITA (made
+                  selectable with `poke 0x02000C5A 0xFF` on mainmenu.ss: unlock ids 0x128..0x12F, profile +0x42D),
+                  heavy traffic, catch-up on
 The player holds A with a few swerves and a brake, so the opponents pass it and traffic appears around it.
 Reruns give identical files (the emulator is deterministic from the savestate).
 """
@@ -22,6 +25,8 @@ DRIVE = ["hold A 400", "hold A,LEFT 30", "hold A 300", "hold A,RIGHT 30", "hold 
 SCENARIOS = {
     "sprint": ["load sprintinfo", "trace", "hold A 10", "wait 100", *DRIVE],
     "circuit": ["load circuitinfo", "trace", "hold A 10", "wait 100", *DRIVE, *DRIVE],
+    # R+L is the wingman command (control action 8).
+    "wingman": ["load wingmaninfo", "trace", "hold A 10", "wait 100", *DRIVE, "hold A,R,L 10", *DRIVE],
 }
 
 if __name__ == "__main__":

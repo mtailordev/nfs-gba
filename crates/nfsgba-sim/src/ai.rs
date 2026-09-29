@@ -39,7 +39,7 @@ const WAYPOINT_LINES: u32 = 0x0300_5FB4;
 const BOOST: u32 = 0x0300_6158;
 /// Wheel-spin scale added to the grid/skill value (`+0x188`).
 const SPIN_BIAS: u32 = 0x0300_6110;
-/// Upgrade levels of computer cars by wingman (10 words at `+ u·4`).
+/// Upgrade level of a computer car that is not a racer (the wingman), by wingman (`+ u·4`).
 const AI_UPGRADES: u32 = 0x087F_42B4;
 /// Look-ahead distances by lane when the steering term is large.
 const LANE_LOOKAHEAD: u32 = 0x087F_5A50;
@@ -211,7 +211,8 @@ fn init(sim: &mut Sim, e: u32) -> Result<()> {
         if m.i32(CAREER) != 0 {
             u = (u & 1) + 6;
         }
-        std::array::from_fn(|k| m.i32(AI_UPGRADES.wrapping_add(u.wrapping_mul(4)) + 4 * k as u32))
+        // The game's copy loop never advances its source: all ten levels are the wingman's one entry.
+        [m.i32(AI_UPGRADES.wrapping_add(u.wrapping_mul(4))); 10]
     };
     for (k, v) in upgrades.into_iter().enumerate() {
         m.set_i32(p + 0x3E0 + 4 * k as u32, v);
@@ -813,10 +814,12 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     let lead = race_progress(m, player).wrapping_sub(race_progress(m, e));
     let mut throttle = if m.i16(p + 0x4F0) != 0 {
         m.i32(p + 0x24)
+    } else if is_non_racer(m, e) {
+        // The wingman's throttle, kept to 24 bits (`<< 8 >> 8`).
+        let t = wingman_throttle(m, e, m.i32(p + 0x24), lead) << 8 >> 8;
+        mark_blocked_lanes(m, e);
+        t
     } else {
-        if is_non_racer(m, e) {
-            return Err(Unported("FUN_08140cf4 (throttle of computer cars that are not racers)"));
-        }
         let mut t = m.i32(p + 0x24);
         if m.i32(CATCH_UP) != 0 {
             t = if lead < 1 {
@@ -914,6 +917,206 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.set_i32(p + 0xAC, v);
     }
     Ok(())
+}
+
+// The wingman's globals (`FUN_081410c0` sets them up; `docs/engine/ai.md`).
+/// The entity the wingman works with (the player's, world `+0x3C`).
+const WING_TARGET: u32 = 0x0300_619C;
+/// A per-frame amount the wingman's timers count down by (unit not decoded; also the traffic knock-away timer's).
+const FRAME_TICKS: u32 = 0x0300_5934;
+
+/// `|lateral(e) - lateral(target)|` the way `FUN_08140ba8`/`FUN_08140a10` compute it (larger minus smaller).
+fn lateral_gap(m: &Mem, e: u32, target: u32) -> i32 {
+    let (a, b) = (route::lateral(m, e), route::lateral(m, target));
+    if a.wrapping_sub(b) < 0 {
+        b.wrapping_sub(a)
+    } else {
+        a.wrapping_sub(b)
+    }
+}
+
+/// A PD-like response to a following error: `(now·0x2B + bias − previous·0x2A)` clamped, as a scale of 0x100.
+fn follow_gain(now: i32, prev: i32, bias: i32, neg: (i32, i32, i32), pos: (i32, i32, i32, i32)) -> i32 {
+    let v = now
+        .wrapping_mul(0x2B)
+        .wrapping_add(bias)
+        .wrapping_add(prev.wrapping_mul(-0x2A));
+    if v < 1 {
+        let (off, max, den) = neg;
+        -div((off - v).clamp(0, max) << 8, den)
+    } else {
+        let (off, max, mul, den) = pos;
+        div((v - off).clamp(0, max).wrapping_mul(mul), den)
+    }
+}
+
+/// `FUN_08140cf4`: the throttle of a computer car that is not a racer (the wingman), from the player's `lead`.
+/// Attacker (0x030061F8 = 0) and drafter (1) differ once a command (0x030061E8) is running.
+fn wingman_throttle(m: &mut Mem, e: u32, throttle: i32, lead: i32) -> i32 {
+    let p = m.u32(e + 0x8C);
+    let tp = m.u32(m.u32(WING_TARGET) + 0x8C);
+    m.set_u32(0x0300_6048, m.u32(0x0300_61D8));
+    let mut t = if m.i32(0x0300_61E8) == 0 {
+        follow_into_branch(m, e);
+        let left = m.i32(0x0300_61D8).wrapping_sub(m.i32(FRAME_TICKS));
+        m.set_i32(0x0300_61D8, left);
+        if left < 0 {
+            m.set_u32(0x0300_61D8, 0);
+            if m.i32(0x0300_61DC) != 0 {
+                m.set_u32(0x0300_61E4, m.u32(0x0300_6188));
+            }
+        }
+        let t = if m.i32(0x0300_6200) == 0 {
+            let prev = m.i32(0x0300_61EC);
+            m.set_i32(0x0300_61EC, lead);
+            let g = follow_gain(
+                lead,
+                prev,
+                0xFFFF_F600u32 as i32,
+                (-0x10, 0x800, 0x7F0),
+                (0x10, 0x400, 0x140, 0x3F0),
+            );
+            throttle.wrapping_mul(g + 0x100) >> 8
+        } else {
+            // `FUN_08140ba8`: keep the gap to the player.
+            let gap = lateral_gap(m, e, m.u32(WING_TARGET));
+            let prev = m.i32(0x0300_61FC);
+            m.set_i32(0x0300_61FC, lead + 500);
+            if gap > 0x200 {
+                m.set_u32(0x0300_6200, 0);
+            }
+            let g = follow_gain(lead + 500, prev, 0x100, (-5, 0x10, 0xB), (1, 0x200, 0xC0, 0x1FF));
+            (g + 0x100).wrapping_mul(throttle) >> 8
+        };
+        if m.i32(RACE_FRAMES) > 0xB4 && ((lead + 0x5FF) as u32) <= 0x9FE {
+            // Keep out of the player's lane and its neighbours.
+            let lane = m.i16(m.u32(m.u32(W_ENTITIES) + 0x8C) + 0xC0) as i32;
+            let lanes = p + 0x4DA;
+            m.set_u16(lanes.wrapping_add((lane * 2) as u32), 1);
+            if lane > 0 {
+                m.set_u16(lanes.wrapping_add(((lane - 1) * 2) as u32), 1);
+            }
+            if lane < 4 {
+                m.set_u16(lanes.wrapping_add(((lane + 1) * 2) as u32), 1);
+            }
+        }
+        if t < 1 {
+            m.set_u32(p + 0x4B0, 0);
+        }
+        let near = m.i32(0x0300_61F8) != 1 || (m.i32(tp + 0x4C8) == 0 && ((lead + 0x1FFF) as u32) <= 0x1FFF + 199);
+        m.set_u32(0x0300_61D4, near as u32);
+        t
+    } else if m.i32(0x0300_61F8) == 0 {
+        attacker_command(m, e, throttle)
+    } else {
+        drafter_command(m, e, throttle, lead)
+    };
+    let c = m.i32(0x0300_6174) - 1;
+    m.set_i32(0x0300_6174, c.max(0));
+    if (m.i32(0x0300_61E8) == 0 && m.i32(0x0300_61D8) != 0) || m.i32(0x0300_61DC) == 0 {
+        m.set_u32(0x0300_61D4, 0);
+    }
+    let count = m.u16(m.u32(W_SEGMENTS)) as i32;
+    if m.u8(p + 0xC5) == 1 && count - 3 <= m.i16(e + 0x90) as i32 {
+        t = if m.i16(e + 0x90) as i32 == count - 2 { -1 } else { 0 };
+        m.set_u16(p + 0x4D6, 0);
+        m.set_u32(0x0300_61D4, 0);
+    }
+    t
+}
+
+/// `FUN_08140c8c`: follow the player into a side segment it has taken, from the fork.
+fn follow_into_branch(m: &mut Mem, e: u32) {
+    let target = m.u32(WING_TARGET);
+    if m.i16(target + 0x72) == 0 || m.i16(e + 0x72) != 0 {
+        return;
+    }
+    let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32 + 1);
+    if m.i16(w + 0xE) == 0 && m.i16(w + 0xC) == m.i16(target + 0x72) {
+        m.set_u16(e + 0x72, m.u16(w + 0xC));
+        m.set_u16(m.u32(e + 0x8C) + 0x4D6, 2);
+        m.set_i16(e + 0x90, m.i16(w + 0xE) - 1);
+    }
+}
+
+/// `FUN_081408c4`: the attacker's command: catch the car at `*0x03006178` (full throttle while engaged).
+fn attacker_command(m: &mut Mem, e: u32, throttle: i32) -> i32 {
+    let mut t = 0x9999;
+    if m.i32(0x0300_61F0) == 0 {
+        let other = m.u32(0x0300_6178);
+        let d = gap_to(m, e, other);
+        if ((d + 0xB3) as u32) < 0x9F && m.i16(e + 0x72) == m.i16(other + 0x72) {
+            m.set_u32(0x0300_61F0, 1);
+            m.set_u32(0x0300_6180, 6);
+            m.set_u32(0x0300_6174, 0x12);
+        }
+        let prev = m.i32(0x0300_61FC);
+        m.set_i32(0x0300_61FC, d + 100);
+        let v = (d + 100)
+            .wrapping_mul(0x2B)
+            .wrapping_add(0x100)
+            .wrapping_add(prev.wrapping_mul(-0x2A));
+        let g = if v < 1 {
+            0x40 - div((-5 - v).clamp(0, 0x10) << 8, 0xB)
+        } else {
+            div((v - 1).clamp(0, 0x100) << 6, 0xFF) + 0x100
+        };
+        t = throttle.wrapping_mul(g) >> 8;
+        let left = m.i32(0x0300_61E4).wrapping_sub(m.i32(FRAME_TICKS));
+        m.set_i32(0x0300_61E4, left);
+        if left < 0 {
+            m.set_u32(0x0300_61E4, 0);
+            m.set_u32(0x0300_61E8, 0);
+        }
+    } else {
+        let c = m.i32(0x0300_6180) - 1;
+        m.set_i32(0x0300_6180, c);
+        if c == 0 {
+            m.set_u32(0x0300_61F0, 0);
+        }
+    }
+    m.set_u32(0x0300_61D4, 0);
+    t
+}
+
+/// `FUN_08140a10`: the drafter's command: run just ahead of the player in its lane, filling the player's nitro
+/// tank (`+0x4C8`, by 0x2AAA per step up to 0x50000).
+fn drafter_command(m: &mut Mem, e: u32, throttle: i32, lead: i32) -> i32 {
+    let target = m.u32(WING_TARGET);
+    let tp = m.u32(target + 0x8C);
+    if lead < -0x200 {
+        m.set_u16(m.u32(e + 0x8C) + 0x4D6, 2);
+    }
+    let gap = lateral_gap(m, e, target);
+    if lead < -0x40 && -0x380 < lead && gap < 0x100 {
+        let tank = m.i32(tp + 0x4C8).wrapping_add(0x2AAA);
+        m.set_i32(tp + 0x4C8, tank);
+        if tank > 0x5_0000 {
+            m.set_i32(tp + 0x4C8, 0x5_0000);
+            for a in [0x0300_61E4, 0x0300_61E8, 0x0300_618C] {
+                m.set_u32(a, 0);
+            }
+            m.set_u32(0x0300_6200, 1);
+        }
+    }
+    let prev = m.i32(0x0300_61FC);
+    m.set_i32(0x0300_61FC, lead + 500);
+    let v = (lead + 0x2F4).wrapping_add((lead + 500).wrapping_sub(prev).wrapping_mul(0x2A));
+    let g = if v < 1 {
+        -div((-5 - v).clamp(0, 0x10) << 8, 0xB)
+    } else {
+        div((v - 1).clamp(0, 0x200).wrapping_mul(0xC0), 0x1FF)
+    };
+    let left = m.i32(0x0300_61E4).wrapping_sub(m.i32(FRAME_TICKS));
+    m.set_i32(0x0300_61E4, left);
+    if left < 0 {
+        for a in [0x0300_61E4, 0x0300_61E8, 0x0300_618C] {
+            m.set_u32(a, 0);
+        }
+        m.set_u32(0x0300_6200, 1);
+    }
+    m.set_u32(0x0300_61D4, 0);
+    (g + 0x100).wrapping_mul(throttle) >> 8
 }
 
 /// `FUN_081412ac`: steering of computer cars that are not racers (the wingman).
