@@ -193,7 +193,7 @@ The mode updates call, in this order, with the driver `*(entity[*0x030057F8] + 0
 
 All 7,096 frames and 2,395 calls replay exactly. Changing the needle offset, dropping the minimap's word merge or the dots' frame rule each makes the replay fail.
 
-## Menus (top level exact: `menu.rs`)
+## Menus (top level and intro screens exact: `menu.rs`)
 
 The game's frame (`main_frame` `0x0812AE64`) runs a small state machine, and in state 1 a menu system of 49
 screens that share eight kinds of handler. Everything below is ported from the disassembly (Ghidra lost the jump
@@ -266,6 +266,47 @@ depend on how long the player stayed in the menus.
 `enter_screen` marks the screen changed, runs the enter handler, sets `0x03005938` (except screen 5), clears profile
 `+0x2F6`/`+0x2F8`, the exit screen, and draws in full. `menu_back` pops profile `+0x344 + top`.
 
+### Intro screens (the whole kind exact: `intro_enter`, `intro_update`, `intro_draw`, exit)
+
+Boot flow: **0x19 language** (A picks; the cursor moves over 5 languages, `0x7E5D10` maps it) → **0x2F health and
+safety** (0x5A ticks) → **0x30** the same, colour 4 blinking (any key or 0xDB6 ticks) → **0x1A EA logo** (0xF0 ticks)
+→ **0x18 public service announcement** (0x1E0 ticks) → **0x17 title** (START after 0xF0 ticks: with a saved profile
+(`+0x490`) load it and go to screen 0, else **0x16 name entry**). 0x15 is the credits. Deadlines are profile `+0x3B0`
+against the tick counter `0x03000044`. The next screen of a timed page is its item list `+8`.
+
+Page records at `0x7E5DA8` (0x14 bytes: `+0` heading text, `+2`/`+4` button prompt texts, `+6` background menu
+material, `+8` menu palette, `+0xA` item count, `+0x10` item list). The enter handler hands `+6`/`+8` to
+`menu_scene_setup_a`/`_b` (`0x081370D4`/`0x081371A4`), which unpacks the material and sets world `+0x30` to menu palette
+`0x33EF14 + palette·0x200` (and `+0x34` to menu palette 1): **this is each intro screen's palette** (FIDELITY U4).
+
+| Screen | Heading | Prompts | Material | Palette | Items |
+|---|---|---|---|---|---|
+| 0x15 credits | 269 | −1, 146 | 227 | 9 | list `0x08799882` set by enter |
+| 0x16 name entry | 268 (0x122/0x10C drawn) | 498, 147 | 3 | 3 | — |
+| 0x17 title | — | — | 5 | 5 | — |
+| 0x18 PSA | — | — | 1 | 1 | next 0x17 |
+| 0x19 language | — | 498 | 4 | 4 | 5 cursor positions (material, x, y) at `0x087E5D30` |
+| 0x1A EA logo | — | — | 2 | 2 | next 0x18 |
+| 0x25 | 960 | 498, 146 | 1 | 1 | — |
+| 0x2F/0x30 health | — | — | 1 (per language 7, 8, 0xA, 9, 0xB via `FUN_0813644C`) | 1 | — |
+
+- **Name entry (0x16):** 4 rows of 10 characters (`1`–`9`, `0`, `A`–`Z`, `.`, `,`, `!`, `:`, then a space) and a row
+  of DEL (columns 0–2), SPACE (3–6), OK (7–9); cursor `0x0300597C` row, `0x03005990` column, name `0x03005970` (9
+  bytes), length `0x0300598C`. B deletes, START is OK. OK needs a name whose bytes OR to neither 0 nor 0x20, copies it
+  to the profile, and calls `save_write_profile`; a failure goes to screen 0, else back (profile `+0x494` = 2). Entering
+  the screen resets the cursor, copies the profile's name in and, unless `+0x494` is 2, clears `+0x478…+0x48C`.
+- **Title (0x17):** logo line `0xC4 + language`, `0xC9` (Spanish) or `0xCA`, and PRESS START `0xBF + language` blinking on
+  bit 4 of `0x030053B4` once the deadline has passed. START plays sound 2, sets profile `+0x494` = 0, and with a
+  profile draws text 0x159, loads the save, sets units from the language when it differs from the save's (`+0x4E8`).
+- **Health (0x30):** colour 4 of the second base palette steps by ±0x421 between 0 and 0x7FFF each frame (direction
+  `0x03000000`), the palette is marked dirty, and the frame waits one extra VBlank.
+- **Credits (0x15):** a list of pages (u16 line count, then (flags, text key) per line); each 0xB4 ticks the next
+  page; a count of 0 presses B. Lines are centred in 0x90 rows (12 per line plus 4/6/12 for flags 0x2000/0x1000/
+  0x800); flag bits 0–1 give the colour, 0x2000 the smaller font, 0x8000/0x4000 on the first line start at row 0x28/0;
+  some keys sit lower in French (0x1B, 0x1D), Italian (0x19A) and Spanish (0x1F).
+- **Language (0x19):** left/right step through 0–4 with wrap; up/down move between the rows of 3 and 2 (0→3, 1→4,
+  2→4, 3→0, 4→1 down; 3→0, 4→1, 0→3, 1/2→4 up); the language follows the cursor every frame.
+
 ### Verification
 
 - `menu::tests::top_level_matches_the_game`: 2,400 oracle cases (`tools/ui_menu_oracle.py toplevel`) of
@@ -274,6 +315,12 @@ depend on how long the player stayed in the menus.
   palettes and handler results. The unported callees (the kind handlers, sound, timers, race functions) are stubbed on
   both sides and must be called in the same order with the same arguments; every changed RAM byte and the result
   must match. 0 mismatches; breaking the rand-before-draw rule or one key-repeat slot fails it.
+- `menu::tests::intro_screens_match_the_game`: 2,400 oracle cases (`tools/ui_menu_oracle.py intro`) of `menu_frame`,
+  `goto_screen` (entering each intro screen and 0x80/0x81/0x82) and `draw_screen` on the intro screens with random
+  keys, deadlines, keyboard and name states, languages, credits lists, blink colours, profile flags and save results.
+  The drawing primitives are stubbed on both sides, so every blit and text call must have the same arguments. Six
+  mutations (keyboard remap, blink step, language image, a cleared profile field, the row-4 cursor, the credits
+  height) each fail it.
 - `menu::tests::fades_match_the_game`: 600 cases of the six fade routines (buffer, BG and OBJ, in and out).
 - `menu::tests::screen_tables_match_the_rom_jump_tables`: the four tables for all 49 screens.
 
@@ -510,3 +557,62 @@ Correction for the existing HUD rows: the HUD reads revs, gear, speed, `+0x454` 
 
 - What the HUD arrow (`0x0300601C`, set by the car update `FUN_0813d1f0`) signals.
 - Who calls `FUN_0814279c` (countdown timer), `FUN_08142aac` (best lap) and `FUN_08143094`.
+
+## Integration notes (menus)
+
+Symbols and addresses are in `docs/engine/notes/symbols.menus.csv` (52 rows, `tools/notes_merge.py`: no duplicates, no
+conflicts) and `docs/engine/notes/addresses.menus.csv`.
+
+### Renames of existing `symbols.csv` rows (the merge tool only appends)
+
+- `0x0812b5f0` `race_setup_route` → **`menu_frame`**: "one menu frame: menu exit, Quick Play race setup (0x81), message
+  box, key repeat, update handler, B = back". The route/environment lookup is only its screen-0x81 branch.
+- `0x08130d8c` `wingman_screen` → **`list_draw`**: "draw handler of the List screens (0–6, 9, 27–30, 35, 36, 45, 46),
+  e.g. the wingman list".
+- `0x081315a0` `menu_screen_setup` → **`intro_enter`**: "enter handler of the intro screens (background, deadline,
+  per-screen state)".
+- `0x081370d4` / `0x081371a4` `menu_scene_setup_a` / `_b`: comment "(world, background menu material, menu palette,
+  sprite screen or 0xFFFF): unpacks the material, sets world +0x30 to menu palette 0x33EF14 + palette·0x200 and +0x34
+  to palette 1, base palette; `_b` after a screen change".
+
+### Address map corrections
+
+- `0x03005780`: besides the race-over gate of `shade_car_paint`, the **menu exit request** (7 = leave the menus for the
+  race once the fade is done).
+- `0x03005628`: confirmed a frame counter (main_frame adds 1; race start sets 0).
+- `0x03000044`: a running tick counter (intro deadlines); its value is also the race's rand seed.
+
+### FIDELITY.md
+
+- **U3 (menu screens): narrow it.** Now exact and oracle-verified (`menu.rs`, 5,400 cases): `main_frame` (frame time,
+  palette fades, dirty palette copy), `game_state_step`, `menu_frame`, `enter_screen`, `draw_screen`, `goto_screen`,
+  `menu_back`, the message box input, `list_slot`, and the **whole intro kind** (enter, update, draw, exit: language,
+  health and safety, EA logo, PSA, title, name entry, credits). Open: the other seven kinds' handlers (List, Kind7,
+  career zone, career event, setup, Kind18, Kind38: 25 screens with handlers), the message box draw, and the menu
+  scene setup.
+- **New U7 (drawing primitives on the game's memory):** the draw handlers are verified down to the primitive calls
+  (`menu_blit_material`, `text_menu`, `text_menu_wrapped_colour`, `menu_blit_material_alt`, `menu_button_prompts`,
+  `intro_page_setup`) with the same arguments; their pixel output is exact in `ui.rs` (`unpack`, `blit`, `Font::draw`,
+  `draw_wrapped`), but they are not yet wired onto `menu::Gba`'s VRAM, so no whole-frame-buffer check of a menu screen
+  through the state machine exists yet.
+- **U4 (menu palettes): answered for the intro screens.** Each intro page's `+8` is its menu palette (table above);
+  the other kinds still need their scene setups decoded.
+- **New U8 (hardware inputs):** `main_frame` takes timer 3's count (`timer_read`) and the key state (`FUN_0812B084`) as
+  inputs; VBlank waits (`vblank_intr_wait`: the health screen's extra frame, the 15 frames of resuming a race) are
+  calls the runtime must honour. BIOS-region reads (a null credits pointer) are not modelled: the game never makes them.
+- **Note for D-entries (race exactness):** four kinds draw a `rand_table` number every menu frame, so the opponents a
+  race gets depend on the number of menu frames before it (`atlas::pick_opponent_cars`).
+
+### OPEN-QUESTIONS.md
+
+- What `FUN_0812B084` does with the keys (hardware read, repeat handling?) and how `0x030064C0` is filled.
+- What the seven non-intro kinds' screens are (screen names: list which screen id is which menu).
+- Screen 0x25 (37): an intro-kind page with heading 960 and prompts 498/146 but no update or draw content; where is it
+  reached?
+
+### TOOLS.md
+
+- `tools/ui_menu_oracle.py [fades|toplevel|intro]`: oracle cases for `menu.rs` into `$NFSGBA_DATA/work/<sha8>/menus/`.
+  Its stub table (`STUBS`, `PORTED`) lists every game function the port does not implement yet, with argument counts.
+- Oracle gotcha: `Result.read` rebuilds memory from the snapshot plus the call's writes, without the call's `mem`
+  inputs (see "Menus", Verification).

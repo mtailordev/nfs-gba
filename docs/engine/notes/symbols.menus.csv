@@ -42,3 +42,12 @@ address,name,kind,comment
 0x0816223c,timer_read,function,(tentative) reads timer n's count (main_frame: timer 3 = the last frame's length)
 0x08162228,timer_stop,function,(tentative) main_frame: before timer_read(3)
 0x081621f0,timer_start,function,(tentative) main_frame: timer_start(3; 3; 0; 0; 0) after reading it
+0x0812bb5c,goto_screen,function,screens <= 0x7F: push the old screen (back stack) and set the new one; List screens clear their cursor slot (profile +0x350); enter_screen. 0x81: exit screen = screen. 0x82: resume the race from pause (15 VBlanks; state 5; palettes; music)
+0x0812fd04,list_slot,function,cursor slot of a List screen (0..16; screen 3 uses 0xF when profile +0x12 is 0); -1 otherwise
+0x081318b0,name_is_valid,function,the typed name's 9 bytes OR to neither 0 nor 0x20; plays sound 2 either way
+0x0813644c,health_screen_image,function,(tentative) intro enter on screen 0x2F: (world; 7/8/0xA/9/0xB by language) the language's health and safety image
+0x081364c4,intro_page_setup,function,(tentative) first call of intro_draw; argument *0x030057F0 (the unpack buffer)
+0x08136e60,menu_blit_material_alt,function,(tentative) (world; material; x; y) like menu_blit_material; the name screen's letter image (0xDE-0xE1 by language)
+0x08139c8c,load_menu_descriptor,function,(tentative) menu_scene_setup_a: (world; 0x087F2FE8) loads the menu level descriptor into the world
+0x08141b40,text_menu_wrapped_colour,function,(tentative) (font; key; x; y; width 0xE0/0xEE; lines 0xF; colour): the PSA text and the credits lines
+0x081419c0,text_menu_7,function,(tentative) (font 0xC; key 0x159; x 0x78; y 0x32; 0xDC; 2; 0): the title's text before loading the save
