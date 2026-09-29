@@ -483,6 +483,108 @@ pub fn setup_wall_spans(
     out
 }
 
+/// `FUN_03004c40`: `recip[n]`, or `recip[n >> 1] >> 1` above `0x7FFE`.
+fn recip_wide(rom: &[u8], n: i32) -> i32 {
+    if n > 0x7FFE {
+        recip(rom, n >> 1) >> 1
+    } else {
+        recip(rom, n)
+    }
+}
+
+/// `draw_sector_pass_b` (`FUN_03000b44`): clips the flat outline to the columns `left..=right` (world
+/// `+0xE2`/`+0xE4`, the portal's span). The game appends the result to the outline's buffer and stores its
+/// length at world `+0xF4`; the floor and ceiling rasterisers read it.
+pub fn clip_flat(rom: &[u8], outline: &[FlatVertex], left: i16, right: i16) -> Vec<FlatVertex> {
+    let (l, r) = (left as u16 as i32, right as u16 as i32);
+    // Moves every field but x from `a` towards `b` by the 2.24 fraction `t`.
+    let lerp = |a: FlatVertex, b: &FlatVertex, t: i32| {
+        let f = |p: i32, q: i32| p.wrapping_add(((q.wrapping_sub(p) as i64 * t as i64) >> 24) as i32);
+        FlatVertex {
+            floor_y: f(a.floor_y, b.floor_y),
+            ceiling_y: f(a.ceiling_y, b.ceiling_y),
+            recip: f(a.recip, b.recip),
+            u: f(a.u, b.u),
+            v: f(a.v, b.v),
+            ..a
+        }
+    };
+    let mut out = Vec::new();
+    for (i, &b) in outline.iter().enumerate() {
+        let (mut a, mut b) = (outline[(i + outline.len() - 1) % outline.len()], b);
+        if a.x < l {
+            if b.x < l {
+                continue;
+            }
+            a = lerp(a, &b, (l - a.x).wrapping_mul(recip_wide(rom, b.x - a.x)));
+            a.x = l;
+        } else if a.x > r {
+            if b.x > r {
+                continue;
+            }
+            a = lerp(a, &b, (a.x - r).wrapping_mul(recip_wide(rom, a.x - b.x)));
+            a.x = r;
+        }
+        out.push(a);
+        if b.x < l {
+            b = lerp(b, &a, (l - b.x).wrapping_mul(recip_wide(rom, a.x - b.x)));
+            b.x = l;
+            out.push(b);
+        } else if b.x > r {
+            b = lerp(b, &a, (b.x - r).wrapping_mul(recip_wide(rom, b.x - a.x)));
+            b.x = r;
+            out.push(b);
+        }
+    }
+    out
+}
+
+/// `FUN_030047a8`: whether (x, z) lies inside the sector: on the inner side of, or on, every wall edge.
+pub fn point_in_sector(rom: &[u8], sector: u16, x: i32, z: i32) -> bool {
+    let (walls, count) = sector_walls(rom, sector);
+    let corner = |k: usize| {
+        (
+            u32_at(rom, walls + 0x44 * k) as i32,
+            u32_at(rom, walls + 0x44 * k + 4) as i32,
+        )
+    };
+    (0..count).all(|k| {
+        let ((px, pz), (cx, cz)) = (corner((k + count - 1) % count), corner(k));
+        let cross = (cz.wrapping_sub(pz))
+            .wrapping_mul(x.wrapping_sub(px))
+            .wrapping_sub(z.wrapping_sub(pz).wrapping_mul(cx.wrapping_sub(px)));
+        cross >= 0
+    })
+}
+
+/// `FUN_03000800`: the sector holding (x, z) (world `+0xC0`/`+0xC8`), searched from `sector` (world `+0xEA`)
+/// and then its neighbours across walls without flag `0x1000` (the moving piece's flags replace the wall's).
+/// Neighbours come from wall `+0x32`, not the render link `+0x30`. A found neighbour with no floor is replaced
+/// by its `+0x20` alias unless that is `0xFFFF`. `None` is the game's `0xFFFF`.
+pub fn camera_sector(rom: &[u8], rt: &Runtime, sector: u16, x: i32, z: i32) -> Option<u16> {
+    if point_in_sector(rom, sector, x, z) {
+        return Some(sector);
+    }
+    let (walls, count) = sector_walls(rom, sector);
+    (0..count).find_map(|k| {
+        let w = walls + 0x44 * k;
+        let flags = rt
+            .piece(u16_at(rom, w + 0x2A))
+            .map_or(u16_at(rom, w + 0x2E), |p| p.flags);
+        let next = u16_at(rom, w + 0x32);
+        if flags & 0x1000 != 0 || next == 0xFFFF || !point_in_sector(rom, next, x, z) {
+            return None;
+        }
+        let s = sector_at(rom, next);
+        let alias = u16_at(rom, s + 0x20);
+        Some(if u16_at(rom, s + 8) == 0 && alias != 0xFFFF {
+            alias
+        } else {
+            next
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +758,32 @@ mod tests {
                 v(3803, 434, -5474, 258111, 0, -37775957),
             ]
         );
+        // The clipped outline follows in the buffer (count world +0xF4 = 6).
+        assert_eq!(
+            clip_flat(&rom, &flat, portal.left, portal.right),
+            [
+                v(240, 429, -5478, 258111, 53113911, -37773526),
+                v(0, 429, -5478, 258111, 56708974, -37773362),
+                v(0, 128, -824, 41604, 10650740, -4903019),
+                v(106, 77, -31, 4714, 1206784, 697672),
+                v(187, 77, -31, 4716, 0, 697968),
+                v(240, 82, -113, 8522, 0, 120024),
+            ]
+        );
+    }
+
+    /// World `+0xC0`/`+0xC8` in the dump (the last point searched this frame) lies in sector 760 (world `+0xEA`).
+    #[test]
+    fn camera_sector_search() {
+        let Some(rom) = rom() else { return };
+        let rt = Runtime::default();
+        assert!(point_in_sector(&rom, 760, 118341, -64353));
+        assert!(!point_in_sector(&rom, 759, 118341, -64353));
+        assert_eq!(camera_sector(&rom, &rt, 760, 118341, -64353), Some(760));
+        // Across the portal wall 3047 (+0x32 = 759, no flag 0x1000) into the next sector...
+        assert_eq!(camera_sector(&rom, &rt, 760, 124000, -65000), Some(759));
+        // ...but not through the solid wall 3046 (flag 0x1000), nor two sectors away.
+        assert_eq!(camera_sector(&rom, &rt, 760, 118341, -63000), None);
+        assert_eq!(camera_sector(&rom, &rt, 760, 130000, -65000), None);
     }
 }
