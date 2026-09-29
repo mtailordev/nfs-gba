@@ -1,5 +1,0 @@
-region,address,size,what,doc
-profile,0x14,225,car_extra: 15 cars x 15 bytes (save 0x11C..; MenuProfile::car_extra),docs/formats/career.md
-profile,0xF5,4,field_f5 (save 0x104),docs/formats/career.md
-profile,0x328,1,loaded: the profile was decoded from a save (save_load_profile),menu/save.rs
-profile,0x496,18,slot_names: saved names of save slots 0 and 1 (9 bytes each),menu/save.rs
