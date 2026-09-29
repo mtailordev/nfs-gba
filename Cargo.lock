@@ -3539,6 +3539,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nfsgba-sim"
+version = "0.1.0"
+dependencies = [
+ "nfsgba-formats",
+ "serde_json",
+]
+
+[[package]]
 name = "nfsgba-viewer"
 version = "0.1.0"
 dependencies = [

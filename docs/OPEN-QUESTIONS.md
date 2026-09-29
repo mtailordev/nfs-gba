@@ -4,7 +4,6 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Data
 
-4. **How does the raw 8bpp region `0x404000–0x794000` split into images?** Most city textures sit at `0x47BC6C` + material offsets; is the rest the same, or HUD, menus and sprites?
 5. **What are the small odd-sized vehicle materials** (46–146)? The 36 128×100 ones are answered: raw 8bpp opponent atlases already in final palette slots ([formats/car-paint.md](formats/car-paint.md)).
 6. **How does code locate the LZ77 image blobs** (bank bases such as `0x16C244`), and why do the size fields claim 8 bytes too many?
 8. **What are the 24-byte width/height records near the car atlases** (`0x36D010`, `0x345114`)? (The eight "41-byte LZ77 blobs" at `0x23C–0x53C` were false hits inside the sound-effect table at `0x210`.)
@@ -12,8 +11,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Code
 
-10. **What does the 96 KiB of ARM code at `0x350000–0x368000` do?** It is *not* what runs in IWRAM during a race: that code comes from `0x14FC38`, `0x165154` and `0x168264`.
-11. **What does the 65-entry Thumb function table at `0x7F38B8` dispatch?** Hypothesis: game states or menus.
+10. **What are the tables at `0x794000–0x799B88`** (referenced 49 times from game code) **and the ~41 KiB at `0x7F5CC8–0x800000`?**
 
 18. **Menu materials 6, 16–152 and most overlays:** what are they, and which palette does each screen use (FIDELITY U4)?
 19. **HUD details:** material kind bit 4 (materials 5–33), element bytes `+0x0F`/`+0x10`, and which race mode HUD screen 3 serves.
@@ -34,6 +32,8 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Answered
 
+- ~~The 65-entry function table at `0x7F38B8`~~ **Answered:** the entity handler table (`update_entities`; world `+0x78` by entity `+0x4E`) ([engine/physics.md](engine/physics.md)).
+- ~~96 KiB of ARM code at `0x350000–0x368000`~~ **Not code:** 4bpp HUD sprite texels inside `0x347B74–0x36C55C` (runs of `0xEEEEEEEE`).
 - ~~Runtime palette~~ **Answered:** the city palette is picked by the environment (`race_load_palettes`) and tinted every frame by the wall light at the player (`apply_sector_light_to_palette`); car colours are ramps from `0x36C95C` (`load_car_palettes`, `shade_car_paint`). See [FIDELITY.md](FIDELITY.md), [formats/car-paint.md](formats/car-paint.md). The event's environment comes from `0x7F2588` ([formats/career.md](formats/career.md)).
 - ~~Route table fields~~ **Answered:** `+0x04` is the racing-line section table (lap plus branches). See [formats/race-routes.md](formats/race-routes.md), [formats/career.md](formats/career.md). Descriptor `+0x62`/`+0x64` are sky offsets ([engine/sky.md](engine/sky.md)).
 - ~~Portal walls between sectors of different heights~~ **Answered:** portal walls with flag bit 0 clear and a non-zero material are drawn like solid walls over their own top and bottom; there are no separate upper and lower parts ([engine/renderer.md](engine/renderer.md)).
