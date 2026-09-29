@@ -1,6 +1,6 @@
 # 2D layer: menus, HUD, fonts, text (Carbon `BN7E`)
 
-**Status: formats and drawing primitives are exact and verified**; per-screen menu logic and most HUD element logic are located but not ported (see *Not 1:1*). Code: `crates/nfsgba-formats/src/ui.rs` (6 tests). Export: `python tools/ui_export.py` → `$NFSGBA_DATA/out/ui/<sha1-8>/` (`--check` runs a self-check).
+**Status: formats, drawing primitives and the race HUD logic are exact and verified**; per-screen menu logic is located but not ported (see *Not 1:1*). Code: `crates/nfsgba-formats/src/ui.rs` (6 tests) and `hud.rs` (HUD logic, 13 tests replaying 11 mGBA traces). Export: `python tools/ui_export.py` → `$NFSGBA_DATA/out/ui/<sha1-8>/` (`--check` runs a self-check).
 
 The whole 2D layer is software-composited into the mode-4 frame buffer (240×160, 8bpp, two pages), plus OBJ sprites for the race HUD. No BG tile layers are used. ROM offsets are file offsets; functions are Ghidra `FUN_` addresses.
 
@@ -88,7 +88,7 @@ Glyph material: ids 0xC..0xE → materials 12..14; id 0xF → material 14 (offse
 
 ## HUD (race)
 
-**Graphics.** 280 materials at `0x36CF5C`, 4bpp texels at `0x347B74`. OBJ palette 0 at `0x36C75C` (16 banks); at race start `FUN_081430c4` replaces bank 13 (OBJ colours 0xD0–0xDF) with minimap palette `0x7F44F8 + 0x20 × byte[0x7F4598 + route − 1]` (5 palettes). Material `+0x20` is the bank.
+**Graphics.** 280 materials at `0x36CF5C`, 4bpp texels at `0x347B74`. OBJ palette 0 at `0x36C75C` (16 banks); every HUD frame `hud_minimap_palette` (`FUN_081430c4`) writes bank 13 (OBJ colours 0xD0–0xDF) straight to OBJ palette RAM with minimap palette `0x7F44F8 + 0x20 × byte[0x7F4598 + route − 1]` (5 palettes). Material `+0x20` is the bank.
 
 **Sprite screens.** `0x36F6BC`: 4 × {s16 x, s16 y, u16 first element, u16 count} = elements 0–46, 47–93, 94–148, 149–184. Race init selects screen 0 for race modes 0/1, 2 for mode 2, 1 for mode 3 (`*0x030056E0`); screen 3's use is unknown. **Elements** (0x14): `+0x00/+0x02` s16 x, y; `+0x04` first material; `+0x06` OBJ tile slot; `+0x0C` index in screen; `+0x0D` shape/size code 0–11 (`FUN_08160f10`); `+0x11` s8 palette (−1 = 256 colours); other bytes unknown (`+0x0F`, `+0x10` vary).
 
@@ -102,21 +102,96 @@ Glyph material: ids 0xC..0xE → materials 12..14; id 0xF → material 14 (offse
 |---|---|---|---|---|
 | 0–2 | 55–53 | 120+lang, 125, 126 | timer panel | `FUN_081431f0` (frame = language) |
 | 3, 4 | 52, 51 | 104, 105 | separators (4: frame 3 for Italian) | `FUN_081431f0` |
-| 5–10 | 50–45 | 109+digit | race time mm:ss.cc = frames·100/60, capped at 59:59.98, blinks near the cap | `FUN_081428c0` (`*0x03005800` frames) |
+| 5–10 | 50–45 | 109+digit | race time mm:ss.cc = frames·100/60; blinks from 59:49.98; past 59:59.98 it sets race state 8 (time limit) | `FUN_081428c0` (`*0x03005800` frames) |
 | 11–13 | 44–42 | 109+, 119 | lap n / total (`*0x030056E4`), shifted by `0x7F4378[lang]` | `FUN_08142c4c` |
 | 14–16 | 41–39 | 127+lang, 132, 133 | split panel | `FUN_08143210` |
 | 19, 20 | 36, 35 | 43+n | position / racers (`*0x03005784` + 1) | `FUN_0814306c` |
 | 21–27 | 34–28 | 102+sign, 109+digit | split time and sign | `FUN_081429c4` (`*0x0300615C`) |
-| 28–32 | 27–23 | 71, 72, 75, 79, 85 | dial; 29–31 take frames 0–5 from entity `+0x4C8`·9/0x50000 | `FUN_08142ca8` |
-| 33 | 22 | 34+gear | gear (entity `+0x40`) | `FUN_0814308c` |
-| 34–36 | 21–19 | 92+digit | speed: entity `+0x44`/0x163C, × 256/411 (mph) when `*0x03000040` = 0 | `FUN_08142724` |
-| 37 | 18 | 91 (rotated) | needle: angle = \|entity `+0x3C`\|·0x1C00 (or 0x2000 per profile `+0x402`)/entity `+0x454` − 0x1770 | `FUN_08142bd8` |
-| 38–42 | 17–13 | 134, 66–63 | minimap (512×384 map material 135 windowed and rotated into 134's tiles) and three opponent dots | `FUN_08142440` |
+| 28–32 | 27–23 | 71, 72, 75, 79, 85 | dial; 29–31 take frames from driver `+0x4C8`·9/0x50000 | `FUN_08142ca8` |
+| 33 | 22 | 34+gear | gear (driver `+0x40`) | `FUN_0814308c` |
+| 34–36 | 21–19 | 92+digit | speed: driver `+0x44`/0x163C, × 256/411 (mph) when `*0x03000040` = 0 | `FUN_08142724` |
+| 37 | 18 | 91 (rotated) | needle: angle = \|driver `+0x3C`\|·0x1C00 (or 0x2000 per profile `+0x402`)/driver `+0x454` − 0x1770 | `FUN_08142bd8` |
+| 38–42 | 17–13 | 134, 66–63 | minimap (a 64×64 window of the 512×384 map material 135 copied into 134's tiles and rotated by the OBJ affine matrix) and the dots of racers 0–3 (objects 42–39) | `FUN_08142440` |
 | 43, 44 | 12, 11 | 136+, 265+ | portrait (frame `*0x030061DC`) and 8-step bar | `FUN_08142b44` |
 | 45 | 10 | 273+ | animated arrows, frames 0–2 or 3–5 by sign | `FUN_081431a8` |
 | 46 | 9 | 33 | message (big icon) | message table below |
 
-**Messages.** `FUN_08142ec0(msg, time, …)` looks up a 16 × 4-byte table per race mode (`0x7F437D` modes 0/1, `0x7F43FD` mode 2, `0x7F43BD` mode 3: slot, element, frame), stores it in 6 slots at `0x03006210`; `FUN_08142dec` counts down and blinks them; only message 2 is defined (element 46, or 54 in mode 2).
+**Messages.** `FUN_08142ec0(msg, time, …)` looks up a 16 × 4-byte table per race mode (`0x7F437D` modes 0/1, `0x7F43FD` mode 2, `0x7F43BD` mode 3: slot, element, frame), stores it in 6 slots at `0x03006210`; `FUN_08142dec` counts down and blinks them; only message 2 is defined (element 46, or 54 in mode 2). Details in *HUD logic* below.
+
+## HUD logic (exact: `hud.rs`)
+
+Every race frame, `race_frame_update` calls `hud_update(S)` (`0x08142f84`; S = the race sprite screen struct `0x03000164`) and then `sprite_screen_update(S, 0)`. `hud::update` ports the first, `ui::update_sprites` the second.
+
+**`hud_update`:**
+1. `hud_minimap_palette`: OBJ palette 0xD0–0xDF = the minimap palette of route `*0x03005388`, every frame.
+2. HUD on (`*0x03005698` ≠ 0): mode 0 or 1 → `hud_update_mode0`, 2 → `hud_update_mode2`, 3 → `hud_update_mode3` (identical to mode 0). HUD off: only `hud_timer` (modes 0–3), for its time-limit side effect.
+3. `hud_message_tick`.
+
+The mode updates call, in this order, with the driver `*(entity[*0x030057F8] + 0x8C)`: language panel (objects 0, 4), split panel (14, 17, 18), timer (5–10), split (21–27), position (19, 20), lap (11–13), needle (37), speed (34–36), gear (33), minimap (38–42), portrait (43, 44; mode 2: 51, 52), dial (29–31), mode 2 only the hunter bars (`FUN_08142674`, 43–50), arrow (45; mode 2: 53).
+
+**Inputs** (`hud::Globals`, `Racer`, `Driver`):
+
+| Input | Where |
+|---|---|
+| HUD setting, race mode, language, units | `0x03005698`, `0x030056E0`, `0x03005600`, `0x03000040` (0 = mph) |
+| race time (frames), split (frames) | `0x03005800` (counted by the VBlank IRQ), `0x0300615C` (`route_gap` `0x0813ebac`, `race_start_setup` `0x0813e430`) |
+| opponents, AI cars, laps | `0x03005784`, `0x030057EC`, `0x030056E4` |
+| wingman; portrait frame, blink; bar value, full scale | `0x03006104`; `0x030061DC`, `0x030061D4`; `0x030061E4`, `0x03006188` (written by `FUN_0814078c`…`FUN_081413b0`) |
+| arrow direction | `0x0300601C` (written by the car update `FUN_0813d1f0`) |
+| route (minimap palette), shown entity | `0x03005388`, `0x030057F8` |
+| needle scale | profile `+0x402` (`*0x030056EC`) |
+| racers 0–3 | entity `+0x0C` x, `+0x14` z, `+0x2C` heading, `+0x8C` driver |
+| driver | `+0x3C` revs, `+0x40` gear, `+0x44` speed, `+0xA8` position, `+0xC5` laps left (s8), `+0x454` rev scale, `+0x4C8` dial, `+0x4D8` flags (bit 3 eliminated), `+0x4E8` hunter life |
+| written | race state `0x03000048` := 8 and `0x030000AC` := 1 past 59:59.98; split clamped to 0 |
+
+**Divide.** The digits go through the IWRAM routine `0x03000220` (ROM copy `0x08165134`), called through `*0x03006494` with the remainder stored at `0x03006480`: shift-and-subtract on the magnitudes, the quotient signed by `n ^ d`, the remainder `n − |q|·d` (off for negative `n`; a negative `d` is mishandled but never passed). Port: `hud::divmod`. Elsewhere `__divsi3` (truncating).
+
+**Elements:**
+- *Language panels:* object 0 = language; object 4 = 3 in Italian, else 0. Object 14 = language; objects 17 and 18 dx = `0x7F4378[language]`; object 18 = 3 in Italian, else 0.
+- *Timer:* cs = frames·100/60. Past 0x57E3E (59:59.98) the race state becomes 8 (once). With the HUD on: divmod(cs, 100) → divmod(seconds, 60) → tens and ones of minutes, seconds and hundredths into 5–10; past 0x57A56 (59:49.98) objects 5–10 are visible only while `(frames >> 3) & 1`.
+- *Split:* converted to cs **before** the split is clamped to 0; object 21 = 0 when in first place, else 1 (sign); digits in 22–27; all 7 objects dx = `0x7F4378[language]`.
+- *Position:* objects 19 and 20 first copy their frame into `loaded`, then take the position and opponents + 1.
+- *Lap:* laps − laps left + 1, capped at laps with an **unsigned** compare; sprints show 1 / 1; objects 11–13 dx = the digit shift.
+- *Needle:* dx = dy = 0; angle = divmod(|revs|·(0x2000 when profile `+0x402`, else 0x1C00), rev scale).q − 0x1770, and 0 becomes 1.
+- *Speed:* speed / 0x163C; in mph divmod(v·256, 411).q; three digits; angles 0.
+- *Dial:* v = clamp(dial·9 / 0x50000, 0, 8); object 29 = 2 at 8, 1 at 7, else 0; object 30 = min(v, 3); object 31 = clamp(v − 2, 0, 5).
+- *Portrait* (wingman ≠ 0): frame `0x030061DC`, hidden while `0x030061D4` ≠ 0 and `(frames & 63) > 44`; next object = clamp(bar·8 / full scale, 0, 7). No wingman: frame 0, both hidden.
+- *Hunter bars* (mode 2): racer i (entities 0–3) → objects 43 + 2i and 44 + 2i, hidden when i > AI cars (with a wingman: i ≥ AI cars); v = clamp(life·28 / 2^19, 0, 28) → (v, 0) up to 12, else (12, v − 12).
+- *Arrow:* 0 → hidden, frame 0; else visible with frame `(frames >> 4) % 3`, plus 3 when negative.
+
+**Minimap** (`hud_minimap`; always centred on entity 0, not on `*0x030057F8`):
+- Object 38: frame 0, angle = (−heading) >> 8, dx = dy = −2. The rotation is the OBJ affine matrix; only the tiles are written.
+- Window origin (cx + 0x86, cz + 0x79) with cx = (x >> 8) / 499, cz = ((−z) >> 8) / 499, clamped to 0..0x1C0. The clamped-off amount offsets the dots: x < 0 → off_x = x, x > 448 → off_x = 448 − x, **y < 0 → off_x = y** (a game bug), y > 448 → off_y = 448 − y.
+- Copy: `iwram_call_4` index (0x08169AAC − 0x08165218) / 4 → IWRAM `0x03004B98` (ARM, ROM copy `0x08169AAC`). Destination: the element's OBJ tiles (`FUN_08161a34`: `0x06010000 + 32·(slot + *0x030064E0)` when DISPCNT bit 6, else 0). Source: HUD texels + material 135's offset + y·256 + (x & ~7) / 2, byte shift s = (x >> 1) & 3. For 64 rows it reads 9 words and writes `(w[k] >> 8s) | (w[k+1] << (32 − 8s)) & mask[s]` (masks `0x7F5CE8`: 0, 0xFF000000, 0xFFFF0000, 0xFFFFFF00; a shift by 32 gives 0) into 8 × 8 tiles in 1-D order. Horizontal steps are 2 pixels. Nothing is clamped: rows past the map's 384 read the ROM that follows. Port: `hud::minimap_window`.
+- Dots: racer i → object 42 − i; hidden (dx −16) when i > AI cars, or in elimination when its driver is null or flagged (bit 3). With a = −angle and (dx, dy) = the racer's (x / 499, −z / 499) − (cx, cz) + offsets: px = (dx·cos a >> 14) + (dy·sin a >> 14) + 28, py = (−dx·sin a >> 14) + (dy·cos a >> 14) + 28; shown at (px, py) when px ≤ 55 and 0 < py ≤ 55 (no lower bound on px), else at (−100, 100); frame 4 when i > opponents.
+
+**Messages** (slots `0x03006210`: element, frame, timer, unused):
+- `hud_message_show(msg, time, force)`: msg ≤ 15 and a table entry with slot ≠ 0xFF; timer = min(time, 0xF4) | 6; a running slot is only replaced with `force`. Wrappers: `FUN_0814305c` (no force), `FUN_081430f0` / `FUN_0814310c` (only for the player entity `*0x03000060`; force 0 / 1), `FUN_08143128` (message 2 for the player). After the HUD, every race frame calls `FUN_08143128(…, 0x3C, …)` or `FUN_08142e44(2)`.
+- `FUN_08142e44(msg)` (cancel): timer 0, and the element hidden when the slot holds one.
+- `hud_message_tick`: a running slot shows its element with its frame while timer bit 2 is set, hides it otherwise, and counts down.
+- `hud_message_hide`: all timers 0; each element of the mode's table hidden with position, angle, scale and frame cleared.
+
+**Reset and toggle.** `hud_reset(S)` (race init, and after the race on the results screen's menu sprite screen `0x08347778`): every object of the current screen gets flags |= 3 (visible, semi-transparent) and angle, frame and scale 0; then, in modes 0–3 (`FUN_08142094`, `FUN_081420d0`, `FUN_0814210c`): objects 0 and 14 frame = language, object 32 = language + 1 when `*0x03000040` ≠ 0, the message element (46; 54 in mode 2) hidden; then `hud_message_hide`. `FUN_08143010(on)` (pause: 0, continue: 1): 1 → `hud_reset`, else every object of the screen hidden; then `hud_message_hide`. Ports: `hud::reset`, `hud::toggle`, `hud::message_*`.
+
+**Located, not called by the HUD, not ported:** `FUN_0814279c` (a countdown timer: `*0x03006154` − race time, race state 7 at zero, blinking under 10 s), `FUN_08142aac` (best lap driver `+0xB4`, else the profile's record time `+0x218` of track slot `0x7E49C4[route]`), `FUN_08143094` (a units panel frame).
+
+**Verification.** `python tools/ui_hud_trace.py STATE FRAMES NAME KEYS POKES` (mGBA with `tools/ui_hud_trace.lua`; traces in `$NFSGBA_DATA/work/e5298b24/hud-logic/`, about 30 KB per frame, not in git). Tag 0 at the `bl hud_update` in `race_frame_update` (`0x0813aa9c`) and tag 1 after `sprite_screen_update` (`0x0813aaa8`) each hold the IWRAM windows `0x03000000–0x03000200` and `0x03005300–0x03006900`, the 0x37 objects, entities 0–3 and their driver structs, profile `+0x402`, OBJ VRAM tiles 0x200–0x3FF, the OBJ palette and DISPCNT. Tags 2 and 3 hold the entry and exit of `hud_message_show`, `FUN_08142e44`, `hud_reset` and `FUN_08143010` (they nest). Pokes set inputs just before `hud_update`; temporary ones are restored after tag 1, so the game only sees them in the HUD. The tests in `hud.rs` run `hud::update` + `ui::update_sprites` from every tag-0 state and require tag 1's objects, globals, message slots, whole shadow OAM, OBJ palette and OBJ VRAM; call records must give the exit's objects and slots. Since the IRQ can tick the race time mid-update, each object, OAM entry and tile may match the run with either value (see *Not 1:1*).
+
+| Trace | From | Frames / calls | Covers |
+|---|---|---|---|
+| circuit | `race.ss` (the reference race, mode 0) | 600 / 0 | mph, gears |
+| hunter | Quick Play custom hunter (mode 2) | 900 / 0 | hunter bars, messages |
+| elimination | custom elimination (mode 1) | 900 / 0 | positions 1–4; opponents 1 and 2 flagged eliminated (temporary pokes) |
+| sprint | custom sprint (mode 3) | 900 / 0 | lap 1 / 1 |
+| inputs | `race.ss` + pokes | 900 / 0 | km/h, languages 1–4, wingman portrait, blink and bar, arrow both ways, first place, needle scale, HUD off |
+| hunter-wingman | hunter + pokes | 600 / 599 | the bars' wingman rule, bar over and under range; message show and cancel |
+| edges | `race.ss` + temporary teleports | 600 / 599 | minimap x > 448, x < 0 at a real city position; a split past an hour |
+| edges-y | `race.ss` + temporary teleports | 300 / 299 | minimap y < 0 (the offset bug), y > 448, both negative |
+| racestart | race-info screen → race | 400 / 400 | the race init's `hud_reset`, countdown, positions 0–4, arrow |
+| timeout | race time set to 59:48.33 | 196 / 196 | blinking, race state 8, the results screen's `hud_reset` |
+| pause | pause and continue | 300 / 302 | the toggle both ways (nested `hud_reset`) |
+
+All 7,096 frames and 2,395 calls replay exactly. Changing the needle offset, dropping the minimap's word merge or the dots' frame rule each makes the replay fail.
 
 ## The "raw 8bpp region" `0x4018C0–0x794000`
 
@@ -139,6 +214,7 @@ Vehicle materials 61–66 (`0x3E519C–0x3F7D9C`) are the same raw 128×100 form
 - **Language screen, byte for byte**: material 4 + material 181 at (9, 19) + TEXT_SELECT in font 0xE right-aligned at (238, 147) + icon 156 at (221 − width, 143) = the dumped frame buffer; palette RAM = menu palette 4 (`language_screen_is_recomposed_exactly`).
 - **Health and safety, EA logo, public-service screen, title screen, byte for byte**, including the word-wrapped paragraph (font 0xE from (8, 30), width 224, colour 8), the centred title (font 0xD at x 120, rows 6 and 16) and the unclipped logo blit; palettes checked (`intro_screens_are_recomposed_exactly`).
 - **Race HUD**: OAM entries 9–55 (all attribute bits the routine owns, starting from inverted bits), both affine matrices, the OBJ palette (level palette + minimap bank for route 23), and every uploaded tile except the redrawn needle and minimap, all equal to the reference race dump (`hud_matches_the_race_dump`).
+- **HUD logic** (`hud.rs`): 11 mGBA traces, 7,096 race frames and 2,395 calls around the HUD, replay exactly in objects, globals, message slots, the whole shadow OAM, the OBJ palette and OBJ VRAM, minimap tiles included (*HUD logic* above).
 - **Unpacker**: all 299 packed menu and vehicle streams decode; the 284 self-contained ones equal the BIOS decoder; none reads uninitialised ring bytes.
 - Table sizes and tiling, character map, font geometry, Windows-1252 decoding of the German text.
 
@@ -146,7 +222,9 @@ Dumps used: `work/e5298b24/mgba/race.*` (reference race) and `work/e5298b24/ui-2
 
 ## Not 1:1 (yet)
 
-- **HUD element logic** (the table above) is located and described but not ported; the rewrite needs the game state it reads. Minimap drawing (`FUN_08142440` + the IWRAM rotator called through `FUN_0815e6c8`) is not decoded.
+- **HUD timing:** the race time `0x03005800` is counted by the VBlank IRQ, which can land in the middle of `hud_update`; then the timer, the portrait and the arrow of one frame read different values (seen in the traces). `hud::update` reads one value per frame. Exact reproduction needs the frame's CPU timing (like FIDELITY R17/R18).
+- **HUD paths the game never reaches**, ported as written but only exercised through forced inputs: the minimap's y clamps (the city spans map rows 1–316 and columns −40–445, so only x < 0 happens; y < 0 stores its offset into the x slot, a game bug) and its window rows past the map's 384 (it copies whatever ROM follows). A **negative split** is never produced (`route_gap` `0x0813ebac` computes `T − x·T/y` only when `x < y`); forced, `hud_split` converts it before clamping, the divide quirk gives digit frames like −100 and −2000, and the game uploads garbage material data until it hangs (the port would index outside the material table and panic).
+- **`map_world_to_screen`** (`FUN_08143144`, map screens, not the HUD): `((x >> 8) << 6) / scale[i] + x0[i]` and the same for −z, scales `0x7F4480` (u32), origins `0x7F44A8` (2 × u32 per map). Documented, not ported (part of U3).
 - **Menu screens**: the primitives are exact, but each screen's positions and state machine (`FUN_081315a0` and the page tables at `0x7E4A00–0x7E6EEC`) are not ported. Menu sprite screens (`0x347778`) only hold material-0 placeholders; their use (hit boxes or cursor positions, hypothesis) is unknown.
 - Palettes of the unidentified menu overlays are **assumed** in `ui_export.py` (recorded per image in `index.json`).
 - Blits and glyphs outside the frame buffer are dropped (the game writes outside its buffer).
@@ -269,3 +347,78 @@ Level descriptor rows to update: `+0x04` = OBJ palettes (menus: menu palettes); 
 - Menu sprite screens (`0x347778`): all elements use material 0 — hit boxes or cursor anchors?
 - The rest of the menu data `0x7E4A00–0x7E6EEC` (page records found only in three tables).
 - `docs/formats/lz77-images.md` answers: blobs are addressed through material tables (menu `0x345114` from `0x16C244`, vehicle `0x45F5C0` from `0x370550`); the "size + 8" is the game's decoder writing the header size; the "24-byte records near the atlases" at `0x36D010` are 0x24-byte HUD material records; palettes are `0x33EF14` (menus) and `0x36C75C` (OBJ).
+
+## Integration notes (hud-logic)
+
+### FIDELITY.md
+
+- **Close U1:** "HUD element logic: exact in `nfsgba_formats::hud` (`update` = `hud_update` and every element function, `reset`, `toggle`, the message system) on top of `ui::update_sprites`. Checked: 11 mGBA traces (all four race modes, forced inputs, race start, pause, time limit), 7,096 HUD frames and 2,395 calls replay exactly in objects, globals, message slots, shadow OAM, OBJ palette and OBJ VRAM (`hud::tests`, `docs/formats/ui.md` *HUD logic*)."
+- **Close U2:** "Minimap: exact (`hud_minimap`, the IWRAM window copy `0x03004B98`, the dots); every traced frame's minimap tiles match OBJ VRAM, clamp paths included (forced)."
+- **New U5 (timing):** Now: `hud::update` reads the race time `0x03005800` once per frame. Game: the VBlank IRQ counts it and can land inside `hud_update`, so the timer, portrait and arrow of one frame may read different values (seen in the traces). Exact source: the frame's CPU timing (like R17/R18).
+- **New U6 (unreachable):** Now: a negative split makes `hud::update` + `ui::update_sprites` index outside the material table (panic). Game: it uploads garbage material data until it hangs. Negative splits never happen (`route_gap` `0x0813ebac` only computes `T − x·T/y` for `x < y`).
+- Feeding the HUD: `hud::Globals`, `Racer` and `Driver` list every RAM input; the physics and race-rules work should produce these (driver `+0x3C`, `+0x40`, `+0x44`, `+0xA8`, `+0xC5`, `+0x454`, `+0x4C8`, `+0x4D8`, `+0x4E8`, the race time, the split and the wingman values).
+
+### address-map.md
+
+ROM:
+
+| Offset | Size | What | Doc |
+|---|---|---|---|
+| `0x165134` | | ARM divide with remainder (IWRAM `0x03000220`, called through `*0x03006494`) | formats/ui |
+| `0x1651AC` | | ARM 32-byte block copy (IWRAM `0x03000298`) | formats/ui |
+| `0x169AAC` | | ARM minimap window copy (IWRAM `0x03004B98`) | formats/ui |
+| `0x7F4480` / `0x7F44A8` | u32 / 2 × u32 per map | `map_world_to_screen` scales / origins | formats/ui |
+| `0x7F5CE8` | 4 × u32 | minimap copy masks per byte shift (0, 0xFF000000, 0xFFFF0000, 0xFFFFFF00) | formats/ui |
+
+RAM:
+
+| Address | What |
+|---|---|
+| `0x03000048` | race state: `hud_timer` sets 8 past 59:59.98 (time limit), the countdown timer 7 |
+| `0x030000AC` | race-state changed flag |
+| `0x03000220` | IWRAM divide routine (the image's first routine; `*0x03006494` points here) |
+| `0x03000298` | IWRAM 32-byte block copy, used by `obj_upload_tiles` |
+| `0x03004B98` | IWRAM minimap window copy |
+| `0x0300601C` | HUD arrow direction (written by the car update `FUN_0813d1f0`) |
+| `0x03006154` | countdown time (`FUN_0814279c`) |
+| `0x0300615C` | split time in frames (`route_gap`, `race_start_setup`; `hud_split` clamps it to 0) |
+| `0x030061D4` / `0x030061DC` | wingman portrait blink / frame |
+| `0x030061E4` / `0x03006188` | wingman bar value / full scale |
+| `0x03006480` / `0x03006494` | divide remainder / pointer to the divide routine |
+| profile `+0x402` | needle scale (0x2000 instead of 0x1C00) |
+| driver `+0x3C` / `+0x40` / `+0x44` | revs / gear / speed |
+| driver `+0x454` / `+0x4C8` | needle rev scale / dial value |
+
+Correction for the existing HUD rows: the HUD reads revs, gear, speed, `+0x454` and `+0x4C8` from the **driver** struct, not the entity; `hud_minimap_palette` runs every HUD frame, not once.
+
+### symbols.csv (new rows; none in `docs/engine/symbols.csv` at 508f507)
+
+```
+0x03000220,divmod,function,ARM divide: |n|/|d| shift-subtract; quotient signed by n^d; remainder n-|q|*d stored at *r2 (called via *0x03006494)
+0x08165134,divmod_rom,function,ROM copy of IWRAM 0x03000220 (divmod)
+0x03000298,copy32,function,ARM copy of n>>5 32-byte blocks (ldm/stm); used by obj_upload_tiles
+0x081651ac,copy32_rom,function,ROM copy of IWRAM 0x03000298 (copy32)
+0x03004b98,minimap_window_copy,function,ARM: 64x64 window of the 4bpp map into 64 OBJ tiles; byte shift with masks 0x087F5CE8
+0x08169aac,minimap_window_copy_rom,function,ROM copy of IWRAM 0x03004b98 (minimap_window_copy)
+0x08142094,hud_reset_mode0,function,objects 0/14 frame = language; 32 = language+1 in km/h; hides message element 46 (modes 0/1)
+0x081420d0,hud_reset_mode3,function,as hud_reset_mode0 (mode 3)
+0x0814210c,hud_reset_mode2,function,as hud_reset_mode0 but hides message element 54 (mode 2)
+0x08142674,hud_hunter_bars,function,hunter mode: two bar objects per racer from hunter life (driver +0x4E8)
+0x0814279c,hud_countdown_timer,function,(not called by the HUD modes) countdown *0x03006154 - race time; race state 7 at zero
+0x08142aac,hud_best_lap,function,(tentative; not called by the HUD modes) best lap driver +0xB4 or the profile record time as digits
+0x08142e44,hud_message_cancel,function,stops a message and hides its element
+0x08143010,hud_toggle,function,1: hud_reset; else hides every object; then hud_message_hide (pause 0 / continue 1)
+0x0814305c,hud_message_show_default,function,hud_message_show(msg, time, 0)
+0x081430f0,hud_message_show_player,function,hud_message_show(msg, time, 0) when the entity is the player (*0x03000060)
+0x0814310c,hud_message_force_player,function,hud_message_show(msg, time, 1) when the entity is the player
+0x08143128,hud_message2_player,function,hud_message_show(2, time, 0) when the entity is the player
+0x08143094,hud_units_frame,function,(tentative; not called by the HUD modes) a units panel frame by language
+0x08143248,hud_message_entry,function,message table entry: 0x087F437D (modes 0/1) / 0x087F43FD (2) / 0x087F43BD (3) + 4*msg
+0x08161a34,obj_tile_address,function,0x06010000 + 32*(tile + *0x030064E0) when DISPCNT OBJ 1-D mapping; else 0
+0x0816165c,obj_palette_write,function,copies n colours to OBJ palette RAM from index k (-1 when out of range)
+```
+
+### OPEN-QUESTIONS.md
+
+- What the HUD arrow (`0x0300601C`, set by the car update `FUN_0813d1f0`) signals.
+- Who calls `FUN_0814279c` (countdown timer), `FUN_08142aac` (best lap) and `FUN_08143094`.
