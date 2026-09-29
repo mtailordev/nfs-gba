@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "oracle"))
-from oracle import Gba, _r, _w  # noqa: E402
+from oracle import REGS, Gba, _r, _w  # noqa: E402
 
 from common import data_dir  # noqa: E402
 
@@ -81,13 +81,16 @@ KIND_HANDLERS = [
     (0x081328F4, 0x08132AB8, 0x08133074, 0x081336BC), (0x08133708, 0x081338E0, 0x08133F2C, 0x081348D8),
     (0x081315A0, 0x081318E4, 0x08131FE0, 0x08132780), (0x08134DF0, 0x08134EB8, 0x08135340, 0x081354FC),
 ]
-STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k)}
+PORTED = {0x081318E4}  # intro_update
+STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
     0x08135FDC: 2, 0x0813550C: 1, 0x081439C0: 1, 0x0812B320: 0,  # sound, message box draw, screen 0x11, screen 15
     0x08160E74: 0, 0x0815E9E8: 2, 0x08139E34: 1, 0x08160D18: 4, 0x0813A514: 1, 0x0813A954: 1,  # game state step
-    0x08135F38: 0, 0x0812EAAC: 1, 0x081396C4: 1, 0x0812BB5C: 1, 0x08136054: 1,
+    0x08135F38: 0, 0x0812EAAC: 1, 0x081396C4: 1, 0x08136054: 1,
     0x08162228: 1, 0x0816223C: 1, 0x081621F0: 4, 0x0812B084: 0, 0x08161F38: 1, 0x0816102C: 0,  # main_frame
     0x0815DFD8: 1, 0x0812B040: 0, 0x08142090: 0,
+    0x08151454: 0, 0x0815E04C: 3, 0x081372E4: 1, 0x08143010: 1, 0x08139E10: 1,  # vblank wait; goto_screen(0x82)
+    0x081419C0: 7, 0x08149FD8: 1, 0x08149D84: 1,  # intro: title text, save write, save load
 })
 MENU_FRAME, GAME_STATE_STEP, MAIN_FRAME = 0x0812B5F0, 0x0812ACEC, 0x0812AE64
 PROFILE_AT = 0x0200_0808
@@ -99,7 +102,9 @@ def run(gba, fn, mem, ret):
 
     def stub(addr, n):
         def f(uc):
-            calls.append([addr, [_r(uc, i) for i in range(n)]])
+            sp = uc.reg_read(REGS["sp"])
+            stack = [int.from_bytes(uc.mem_read(sp + 4 * i, 4), "little") for i in range(max(0, n - 4))]
+            calls.append([addr, [_r(uc, i) for i in range(min(n, 4))] + stack])
             _w(uc, 0, ret.get(addr, 0))
         return f
 
@@ -146,6 +151,8 @@ def toplevel(_gba, rng, n=2400):
             (PROFILE_AT + 0x10, bytes([rng.randrange(15), rng.randrange(15), pick([0, 1]), 0])),
             (PROFILE_AT + 0x42D + 0x21, bytes([rng.randrange(256), rng.randrange(256)])),
             (0x05000000, bytes(rng.randrange(256) for _ in range(0x400))),
+            # The credits screen (0x15) reads a list its enter handler sets up; give it one.
+            (0x03005964, word(0x0201_0000)), (0x0201_0000, bytes([1, 0, 0, 0, 0, 0, 0, 0])),
         ]
         if rng.random() < 0.3:
             mem.append((0x03005620, word(0)))  # no level descriptor: no gradient fade
@@ -155,6 +162,53 @@ def toplevel(_gba, rng, n=2400):
                     0x0816223C: pick([0, 1, 9, 0x100, 0x200, 0x639C, 0x1000, 3000, rng.randrange(0x10000)])})
         r0, writes, calls = run(gbas[snap], fn, mem, ret)
         cases.append(dict(snap=snap, fn=hex(fn), mem=[[a, b.hex()] for a, b in mem],
+                          ret={hex(a): v for a, v in ret.items()}, r0=r0,
+                          writes=[[a, b.hex()] for a, b in writes], calls=calls))
+    return cases
+
+
+def intro(_gba, rng, n=2400):
+    """menu_frame on the intro screens (intro_update ported): keys, deadlines, the name keyboard, languages, credits,
+    the health screen blink and the title's profile paths."""
+    snaps = ["ui-2d/lang", "ui-2d/n1", "ui-2d/n7", "ui-2d/n9", "race-rules/a4"]
+    gbas = {s: Gba(s) for s in snaps}
+    cases = []
+    credits = 0x0201_0000
+    for i in range(n):
+        snap = rng.choice(snaps)
+        pick = rng.choice
+        screen = pick([0x15, 0x16, 0x16, 0x16, 0x17, 0x18, 0x19, 0x19, 0x1A, 0x25, 0x2F, 0x30, 0x30])
+        ticks = rng.randrange(-5, 5000)
+        name = bytes(pick([0, 0x20, 0x41, 0x31, 0x2E]) for _ in range(9))
+        mem = [
+            (0x030056EC, word(PROFILE_AT)),
+            (0x03005944, word(screen)),
+            (0x03005780, word(0)), (0x03005630, word(0)), (0x030059F0, word(-1)),
+            (0x030064C0, struct.pack("<H", pick([0, 1, 2, 8, 8, 0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 3, 0xB, 0x50,
+                                                 0xA0, 0x30, 9, rng.randrange(0x400)]))),
+            (0x0300593C, bytes([pick([0xFF, 0, 1, 2])])),
+            (0x03000044, word(ticks)),
+            (PROFILE_AT + 0x3B0, word(ticks + pick([-1, 0, 1, -100, 100]))),
+            (0x0300597C, word(pick([0, 1, 2, 3, 4, 4]))),
+            (0x03005990, word(rng.randrange(10))),
+            (0x03005970, name),
+            (0x0300598C, word(pick([0, 1, 5, 7, 8, rng.randrange(9)]))),
+            (0x03005960, word(rng.randrange(5))),
+            (0x03005600, word(rng.randrange(5))),
+            (0x03005964, word(credits + 2 * rng.randrange(4))),
+            (credits, bytes(pick([0, 0, 1, 2]) if k % 2 == 0 else 0 for k in range(64))),
+            (PROFILE_AT + 0x490, struct.pack("<HH", pick([0, 1]), pick([0, 2, 2, 1]))),
+            (PROFILE_AT + 0x4E8, struct.pack("<H", rng.randrange(5))),
+            (0x03000000, word(pick([0, 1]))),
+            (PROFILE_AT + 0x344, bytes(rng.randrange(0x31) for _ in range(8))),
+        ]
+        second = struct.unpack("<I", gbas[snap].read_base(0x0300577C, 4))[0]
+        if 0x0200_0000 <= second < 0x0204_0000:
+            mem.append((second + 8, struct.pack("<H", pick([0, 0x421, 0x7FFF, 0x7BDE, rng.randrange(0x8000)]))))
+        ret = {h[1]: pick([0, 1]) for h in KIND_HANDLERS}
+        ret.update({0x08149FD8: pick([0, 0, 1])})
+        r0, writes, calls = run(gbas[snap], MENU_FRAME, mem, ret)
+        cases.append(dict(snap=snap, fn=hex(MENU_FRAME), mem=[[a, b.hex()] for a, b in mem],
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
                           writes=[[a, b.hex()] for a, b in writes], calls=calls))
     return cases

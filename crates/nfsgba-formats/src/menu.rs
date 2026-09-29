@@ -245,6 +245,384 @@ pub fn enter_kind(screen: u32) -> Option<Kind> {
     update_kind(screen).filter(|_| !matches!(screen, 40..=42 | 48))
 }
 
+/// Runs a screen handler (`phase`: 0 enter, 1 update, 2 draw, 3 exit): the ported ones in Rust, the others as
+/// `Gba::unported` calls.
+fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
+    match (kind, phase) {
+        (Kind::Intro, 1) => intro_update(g),
+        _ => g.unported(kind.handlers()[phase], args),
+    }
+}
+
+pub const TICKS: u32 = 0x0300_0044; // running tick counter: intro deadlines (profile + 0x3B0) compare with it
+pub const LANGUAGE: u32 = 0x0300_5600;
+pub const UNITS: u32 = 0x0300_0040;
+pub const SAVE_BUFFER: u32 = 0x0300_57F4; // pointer passed to the EEPROM save routines
+pub const VBLANK_INTR_WAIT: u32 = 0x0815_1454;
+const LANGUAGE_CURSOR: u32 = 0x0300_5960;
+const CREDITS: u32 = 0x0300_5964; // pointer into the credits list
+const NAME: u32 = 0x0300_5970; // 9 bytes: the profile name being typed
+const NAME_LEN: u32 = 0x0300_598C;
+const KEYBOARD_ROW: u32 = 0x0300_597C; // 0..=4; row 4 holds DEL (columns 0–2), SPACE (3–6), OK (7–9)
+const KEYBOARD_COLUMN: u32 = 0x0300_5990; // 0..=9
+
+/// `list_slot` (`0x0812FD04`): the List screen's cursor slot (profile `+0x350 + slot`), −1 for other screens.
+pub fn list_slot(g: &Gba) -> i32 {
+    match g.u32(SCREEN) {
+        s @ 0..=2 => s as i32,
+        3 if g.u16(g.u32(PROFILE) + 0x12) != 0 => 3,
+        3 => 0xF,
+        s @ 4..=6 => s as i32,
+        27 => 7,
+        29 => 8,
+        30 => 9,
+        35 => 0xA,
+        36 => 0xB,
+        9 => 0xC,
+        28 => 0xD,
+        45 => 0xE,
+        46 => 0x10,
+        _ => -1,
+    }
+}
+
+/// `goto_screen` (`0x0812BB5C`). Screens up to 0x7F are pushed: the old screen onto the back stack, and List
+/// screens (but 9 and 28) clear their cursor slot, then `enter_screen`. Above: the keys are swallowed; 0x81 (Quick
+/// Play) records the exit screen; 0x82 resumes a paused race.
+pub fn goto_screen(g: &mut Gba, s: i32) {
+    if s <= 0x7F {
+        let top = g.u8(BACK_TOP).wrapping_add(1);
+        g.set_u8(BACK_TOP, top);
+        let old = g.u32(SCREEN) as u8;
+        g.set_u8(
+            g.u32(PROFILE).wrapping_add(0x344).wrapping_add(top as i8 as i32 as u32),
+            old,
+        );
+        g.set_u32(SCREEN, s as u32);
+        if matches!(s, 0..=6 | 27 | 29 | 30 | 35 | 36 | 45 | 46) {
+            let slot = list_slot(g);
+            g.set_u8(g.u32(PROFILE).wrapping_add(0x350).wrapping_add(slot as u32), 0);
+        }
+        enter_screen(g);
+        return;
+    }
+    g.set_u16(KEYS, 0);
+    if s == 0x82 {
+        // Back to the race from the pause menu: 15 frames, then the race palettes and music.
+        for _ in 0..15 {
+            g.unported(VBLANK_INTR_WAIT, &[]);
+        }
+        g.unported(0x0815_E04C, &[0, 0, 0x100]);
+        g.set_u32(GAME_STATE, 5);
+        g.set_u32(0x0300_5398, 0);
+        g.set_u32(FADE, 0x10);
+        g.set_u8(BACK_TOP, g.u8(BACK_TOP).wrapping_sub(1));
+        g.unported(0x0813_72E4, &[WORLD]); // race_menu_palette_setup
+        if g.u32(0x0300_5698) != 0 {
+            g.unported(0x0814_3010, &[1]); // hud_toggle
+        }
+        g.unported(0x0813_9E10, &[WORLD]);
+        let music = (g.i8(g.u32(PROFILE) + 0x2EE) as i32 + 1) as u32;
+        g.unported(0x0813_6054, &[music]); // carbon_play_music
+        if g.u32(ROUTE) != 0 {
+            let (a, b) = (g.u32(0x0300_55F0), g.u32(SECOND_PALETTE));
+            g.unported(0x0816_0D18, &[a, b, 0x200, 0x20]);
+            g.unported(0x0813_A514, &[WORLD]);
+        }
+        return;
+    }
+    if s == 0x81 {
+        g.set_u32(EXIT_SCREEN, g.u32(SCREEN));
+    }
+    g.set_u32(SCREEN, s as u32);
+}
+
+/// `intro_update` (`0x081318E4`): the boot and intro screens. Timed screens move on once the tick counter passes
+/// profile `+0x3B0`.
+pub fn intro_update(g: &mut Gba) -> u32 {
+    let screen = g.u32(SCREEN);
+    let deadline = g.u32(PROFILE) + 0x3B0;
+    let expired = |g: &Gba| g.i32(TICKS) > g.i32(deadline);
+    match screen {
+        // Credits: each deadline advances to the next entry (u16 count, count words); the end presses B.
+        0x15 => {
+            if expired(g) {
+                let p = g.u32(CREDITS);
+                g.set_u32(CREDITS, p.wrapping_add(4 * g.u16(p) as u32 + 2));
+                g.set_u32(deadline, g.u32(TICKS).wrapping_add(0xB4));
+            }
+            if g.u16(g.u32(CREDITS)) == 0 {
+                g.set_u16(KEYS, 2);
+            }
+        }
+        0x16 => name_entry(g),
+        // Title: START once the deadline has passed loads the profile, or asks for a name.
+        0x17 => {
+            if g.u16(KEYS) & 8 != 0 && expired(g) {
+                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                g.set_u8(BACK_TOP, 0xFF);
+                let profile = g.u32(PROFILE);
+                g.set_u16(profile + 0x494, 0);
+                if g.u16(profile + 0x490) != 0 {
+                    g.unported(0x0814_19C0, &[0xC, 0x159, 0x78, 0x32, 0xDC, 2, 0]);
+                    let save = g.u32(SAVE_BUFFER);
+                    g.unported(0x0814_9D84, &[save]); // save_load_profile
+                    let lang = g.u32(LANGUAGE);
+                    if lang != g.u16(g.u32(PROFILE) + 0x4E8) as u32 {
+                        g.set_u32(UNITS, (lang != 0) as u32);
+                    }
+                    goto_screen(g, 0);
+                } else {
+                    goto_screen(g, 0x16);
+                    mark_screen_changed(g);
+                }
+            }
+        }
+        // Public service announcement, EA logo: the page's next screen (item list `+8`) at the deadline.
+        0x18 | 0x1A => {
+            if expired(g) {
+                g.set_u8(BACK_TOP, 0xFF);
+                let items = g.u32(0x087E_5DA8 + 0x14 * (screen - 0x15) + 0x10);
+                goto_screen(g, g.u16(items + 8) as i16 as i32);
+            }
+        }
+        0x19 => language_select(g),
+        // Health and safety, first part: after its deadline, the blinking part (0x30) for 0xDB6 ticks.
+        0x2F => {
+            if expired(g) {
+                g.set_u32(deadline, g.u32(TICKS).wrapping_add(0xDB6));
+                g.set_u32(SCREEN, 0x30);
+                let second = g.u32(SECOND_PALETTE);
+                g.set_u16(second + 8, 0);
+                g.set_u32(0x0300_0000, 0);
+            }
+        }
+        // Health and safety, blinking: any key or the deadline goes to the EA logo; else colour 4 steps by ±0x421
+        // between 0 and 0x7FFF (direction at 0x03000000) and the frame waits an extra VBlank.
+        0x30 => {
+            if g.u16(KEYS) & 0x3FF != 0 || expired(g) {
+                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                goto_screen(g, 0x1A);
+                mark_screen_changed(g);
+            } else {
+                let second = g.u32(SECOND_PALETTE);
+                let mut c = g.u16(second + 8) as u32;
+                if g.u32(0x0300_0000) != 0 {
+                    if c == 0 {
+                        c = 0x421;
+                        g.set_u32(0x0300_0000, 0);
+                    } else {
+                        c = c.wrapping_sub(0x421);
+                    }
+                } else if c == 0x7FFF {
+                    c -= 0x421;
+                    g.set_u32(0x0300_0000, 1);
+                } else {
+                    c = c.wrapping_add(0x421);
+                }
+                g.set_u16(g.u32(SECOND_PALETTE) + 8, c as u16);
+                g.set_u32(PALETTE_DIRTY, 1);
+                g.unported(VBLANK_INTR_WAIT, &[]);
+            }
+        }
+        _ => {}
+    }
+    1
+}
+
+/// `FUN_081318B0`: the typed name counts when its 9 bytes OR to neither 0 nor 0x20; plays sound 2 either way.
+fn name_is_valid(g: &mut Gba) -> bool {
+    let or = (0..9).fold(0, |a, i| a | g.u8(NAME + i));
+    g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+    or != 0 && or != 0x20
+}
+
+/// Screen 0x16: the profile name keyboard, 4 rows of 10 characters and a row of DEL / SPACE / OK. B deletes,
+/// START is OK; OK saves the profile.
+fn name_entry(g: &mut Gba) {
+    let keys = g.u16(KEYS);
+    let set = |g: &mut Gba, a: u32, v: i32| g.set_u32(a, v as u32);
+    if keys & 0x40 != 0 {
+        let r = g.i32(KEYBOARD_ROW) - 1;
+        set(g, KEYBOARD_ROW, if r < 0 { 4 } else { r });
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+    }
+    if g.u16(KEYS) & 0x80 != 0 {
+        let r = g.i32(KEYBOARD_ROW) + 1;
+        set(g, KEYBOARD_ROW, if r > 4 { 0 } else { r });
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+    }
+    if g.u16(KEYS) & 0x20 != 0 {
+        if g.i32(KEYBOARD_ROW) == 4 {
+            let c = g.i32(KEYBOARD_COLUMN);
+            set(
+                g,
+                KEYBOARD_COLUMN,
+                if c > 6 {
+                    4
+                } else if c <= 2 {
+                    8
+                } else {
+                    1
+                },
+            );
+        }
+        let c = g.i32(KEYBOARD_COLUMN) - 1;
+        set(g, KEYBOARD_COLUMN, if c < 0 { 9 } else { c });
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+    }
+    if g.u16(KEYS) & 0x10 != 0 {
+        if g.i32(KEYBOARD_ROW) == 4 {
+            let c = g.i32(KEYBOARD_COLUMN);
+            set(
+                g,
+                KEYBOARD_COLUMN,
+                if c > 6 {
+                    -1
+                } else if c > 2 {
+                    6
+                } else {
+                    2
+                },
+            );
+        }
+        let c = g.i32(KEYBOARD_COLUMN) + 1;
+        set(g, KEYBOARD_COLUMN, if c > 9 { 0 } else { c });
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+    }
+    if g.u16(KEYS) & 0xB == 0 {
+        return;
+    }
+    let (row, col) = (g.i32(KEYBOARD_ROW), g.i32(KEYBOARD_COLUMN));
+    let mut key = col + row * 10;
+    if row == 4 {
+        key = if col > 6 {
+            2
+        } else if col > 2 {
+            1
+        } else {
+            0
+        } + g.i32(KEYBOARD_ROW) * 10;
+    }
+    let keys = g.u16(KEYS);
+    if keys == 8 {
+        key = 0x2A;
+    }
+    if keys == 2 {
+        key = 0x28;
+    }
+    match key {
+        0x28 => {
+            let len = g.i32(NAME_LEN);
+            if len == 0 {
+                g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
+            } else {
+                set(g, NAME_LEN, len - 1);
+                g.set_u8(NAME + (len - 1) as u32, 0);
+                g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+            }
+        }
+        0x2A => {
+            if !name_is_valid(g) {
+                g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
+                return;
+            }
+            g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+            for i in 0..9 {
+                let b = g.u8(NAME + i);
+                g.set_u8(g.u32(PROFILE) + i, b);
+            }
+            let save = g.u32(SAVE_BUFFER);
+            if g.unported(0x0814_9FD8, &[save]) != 0 {
+                goto_screen(g, 0); // save_write_profile failed
+            } else if g.u16(g.u32(PROFILE) + 0x494) == 2 {
+                menu_back(g);
+            }
+            mark_screen_changed(g);
+        }
+        _ => {
+            let len = g.i32(NAME_LEN);
+            if len > 7 {
+                return;
+            }
+            let ch = match key {
+                0..=8 => key + 0x31, // 1..9
+                9 => 0x30,           // 0
+                10..=0x23 => key + 0x37,
+                0x24 => b'.' as i32,
+                0x25 => b',' as i32,
+                0x26 => b'!' as i32,
+                0x27 => b':' as i32,
+                _ => b' ' as i32,
+            };
+            g.set_u8(NAME + len as u32, ch as u8);
+            set(g, NAME_LEN, len + 1);
+            g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+            if len + 1 == 8 && name_is_valid(g) {
+                set(g, KEYBOARD_COLUMN, 8);
+                set(g, KEYBOARD_ROW, 4);
+            }
+        }
+    }
+}
+
+/// Screen 0x19: the five languages (`0x7E5D10`, cursor `0x03005960`); A picks one and goes on to the health
+/// and safety screen (0x2F).
+fn language_select(g: &mut Gba) {
+    let pick = |g: &mut Gba| {
+        let lang = g.u32(0x087E_5D10 + 4 * g.u32(LANGUAGE_CURSOR));
+        g.set_u32(LANGUAGE, lang);
+    };
+    if g.u16(KEYS) == 1 {
+        pick(g);
+        g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+        goto_screen(g, 0x2F);
+        g.set_u8(BACK_TOP, 0xFF);
+        mark_screen_changed(g);
+        return;
+    }
+    let set = |g: &mut Gba, v: i32| g.set_u32(LANGUAGE_CURSOR, v as u32);
+    if g.u16(KEYS) & 0x20 != 0 {
+        let c = g.i32(LANGUAGE_CURSOR);
+        set(g, if c == 0 { 4 } else { c - 1 });
+    }
+    if g.u16(KEYS) & 0x10 != 0 {
+        let c = g.i32(LANGUAGE_CURSOR);
+        set(g, if c == 4 { 0 } else { c + 1 });
+    }
+    if g.u16(KEYS) & 0x40 != 0 {
+        let c = g.i32(LANGUAGE_CURSOR);
+        set(
+            g,
+            if c > 2 {
+                c - 3
+            } else if c == 0 {
+                3
+            } else {
+                4
+            },
+        );
+    }
+    if g.u16(KEYS) & 0x80 != 0 {
+        let c = g.i32(LANGUAGE_CURSOR);
+        set(
+            g,
+            if c + 3 == 5 {
+                4
+            } else if c + 3 <= 4 {
+                c + 3
+            } else {
+                c - 3
+            },
+        );
+    }
+    if g.u16(KEYS) & 0xF0 != 0 {
+        g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+        mark_screen_changed(g);
+    }
+    pick(g);
+}
+
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
     let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
@@ -287,7 +665,7 @@ pub fn enter_screen(g: &mut Gba) {
         _ => {}
     }
     if let Some(k) = enter_kind(screen) {
-        g.unported(k.handlers()[0], &[]);
+        run_handler(g, k, 0, &[]);
     }
     if g.u32(SCREEN) != 5 {
         g.set_u32(SCREEN_ENTERED, 1);
@@ -316,7 +694,7 @@ pub fn draw_screen(g: &mut Gba, full: u32) {
         if matches!(k, Kind::List | Kind::Setup | Kind::Intro | Kind::Kind38) {
             rand_table(g);
         }
-        g.unported(k.handlers()[2], &[full]);
+        run_handler(g, k, 2, &[full]);
     }
     if g.i32(MESSAGE_BOX) >= 0 {
         g.unported(0x0813_550C, &[full]);
@@ -370,7 +748,7 @@ pub fn menu_frame(g: &mut Gba) -> u32 {
             return 0;
         }
         if let Some(k) = exit_kind(sub as u32) {
-            g.unported(k.handlers()[3], &[]);
+            run_handler(g, k, 3, &[]);
         }
         g.set_u32(SCREEN_ENTERED, 0);
         return 0;
@@ -407,7 +785,7 @@ pub fn menu_frame(g: &mut Gba) -> u32 {
     }
     let mut result = 1;
     if let Some(k) = update_kind(g.u32(SCREEN)) {
-        result = g.unported(k.handlers()[1], &[]);
+        result = run_handler(g, k, 1, &[]);
     }
     // B goes back, except on these screens (read again: the update may have changed it).
     let screen = g.u32(SCREEN);
@@ -535,7 +913,7 @@ pub fn game_state_step(g: &mut Gba) {
             if g.u32(0x0300_0048) == 5 {
                 menu_back(g);
             } else {
-                g.unported(0x0812_BB5C, &[0xB]);
+                goto_screen(g, 0xB);
             }
             g.set_u32(GAME_STATE, 1);
             g.unported(0x0813_6054, &[0]); // carbon_play_music
@@ -670,8 +1048,18 @@ mod tests {
     /// toplevel`): same RAM writes, same stub calls with the same arguments, same result.
     #[test]
     fn top_level_matches_the_game() {
+        replay("toplevel");
+    }
+
+    /// The same for the boot and intro screens (`intro_update` ported): `tools/ui_menu_oracle.py intro`.
+    #[test]
+    fn intro_screens_match_the_game() {
+        replay("intro");
+    }
+
+    fn replay(name: &str) {
         let Some(rom) = crate::paint::tests::rom() else { return };
-        let Some(cases) = cases("toplevel") else { return };
+        let Some(cases) = cases(name) else { return };
         let mut snaps = std::collections::HashMap::new();
         for (n, c) in cases.iter().enumerate() {
             let snap = c["snap"].as_str().unwrap();
@@ -735,7 +1123,7 @@ mod tests {
                 assert_eq!(r0 as u64, c["r0"].as_u64().unwrap(), "case {n} {f} {snap}: result");
             }
         }
-        eprintln!("top level: {} oracle cases match", cases.len());
+        eprintln!("{name}: {} oracle cases match", cases.len());
     }
 
     /// The four screen tables are the ROM's jump tables: each entry's stub calls (Thumb `bl`) its kind's handler
