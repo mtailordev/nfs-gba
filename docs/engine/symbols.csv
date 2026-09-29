@@ -469,3 +469,30 @@ address,name,kind,comment
 0x0813b62c,race_frame_nop_a,function,empty (called by race_frame_update)
 0x0813b4cc,race_frame_nop_b,function,empty (called by race_frame_update)
 0x08142090,frame_nop,function,returns 0 (end of main_frame)
+0x08139eac,racer_slots_init,function,racer slot bytes 0x0300565C[0..4] = i while i < AI cars + 1; else 0xFF
+0x0815e5b8,overlay_load,function,race ARM overlay: first 0xE4 bytes from ROM 0x08165134 to the IWRAM base; overlay pointers 0x03006490..0x030064A0
+0x08160d18,copy_units,function,copies n bytes as words / halfwords / bytes (unit 0x20 / 0x10 / 8); -1 for a null pointer or too few bytes
+0x08160c64,copy_words,function,copies n words
+0x08160c40,copy_halfwords,function,copies n halfwords
+0x08160c1c,copy_bytes,function,copies n bytes
+0x0815e62c,overlay_copy,function,more of the race ARM overlay: words to the IWRAM base + 0xE4 + 4*slot
+0x08160cd0,fill_units,function,fills n bytes as words / halfwords / bytes (unit 0x20 / 0x10 / 8)
+0x08160ca0,fill_halfwords,function,fills n halfwords
+0x0812b10c,oam_reset,function,all 128 OAM entries hidden and copied to OAM; then the shadow reset to 64x64 at (0x3C; 0xA0) with tile 0; OBJ tile base 0x200
+0x08161090,oam_init,function,OBJ tile base; shadow OAM cleared; OBJ on; every entry hidden; shadow copied to OAM
+0x08161050,shadow_oam_clear,function,clears the shadow OAM 0x030064F0 (0x400 bytes)
+0x0816106c,obj_enable,function,DISPCNT bit 12 (OBJ on/off)
+0x081610f8,obj_1d_mapping,function,DISPCNT bit 6 (OBJ 1-D mapping)
+0x08161234,oam_set_mosaic,function,attr0 bit 12 (mosaic)
+0x08161294,oam_set_shape,function,attr0 bits 14..15 (shape)
+0x08138b20,count_runtime_records,function,world +0xE0 = walls with a moving piece; +0xDE = sectors with an offsets record
+0x08138b80,init_runtime_tables,function,moving-piece records get their wall's flags; sector offsets records the sector's flags byte and halfwords +0x14..+0x18
+0x08137618,link_template_entities,function,pushes each template entity onto its sector's entity list (world +0x0C heads; entity +0x02)
+0x0813b0c8,spawn_wingman_marker,function,with a wingman: a marker entity (model 0x62; material 0x92) in the first free extra slot; 0x80 above the last AI car
+0x08138744,camera_place,function,all OAM hidden and copied to OAM; the chase orbit position for the view 0x030055F8 behind the followed entity
+0x0816200c,effect_list_init,function,effect-sprite list header (count; first OAM entry) and its 0x14-byte objects on the heap
+0x0813a4f4,sky_gradient_start,function,gradient read pointer = the gradient buffer; DISPSTAT VCount IRQ enable
+0x08144d94,traffic_init,function,traffic counters reset; 4 settings; traffic_setting(*0x03005604)
+0x08143a90,traffic_setting,function,traffic tuning of a setting from 0x087F53EC (0x20 per setting)
+0x0813b4d0,moving_pieces_init,function,moving pieces' start state; the route's list 0x087F3A24 (0x10 per route index) starts closed
+0x0813b628,empty_0813b628,function,empty; called after moving_pieces_init
