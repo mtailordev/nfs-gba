@@ -2,8 +2,9 @@
 
 `game_state_step` state 4 (`0x0812acec`) sets state 5, calls `race_start_from_table_a(world)` (`0x08139e34`), sets
 up the palette fade (0x10) and then runs the first `race_frame_update` in the same `main_frame`. The port is
-`nfsgba_game::race_init::race_start` (`crates/nfsgba-game/src/race_init.rs`): it turns the machine the menus left
-into the race's first state, byte for byte. It runs no game code.
+`nfsgba_game::race_init::race_start(rom, data, &Setup, seed_vblanks, &mut Display)`: it builds the race's typed
+`World` from the typed `Setup` (`race_setup.rs`) and writes the display memory (VRAM, OAM, I/O). It runs no game
+code and keeps no RAM image except the heap arena (R24).
 
 ## What it does, in the game's order
 
@@ -46,31 +47,29 @@ into the race's first state, byte for byte. It runs no game code.
 3. `0x03006098` = 0.
 
 **Every freed heap block keeps what was written into it** (the decoder rings, the decoded overlay and decal
-materials, the decoder's 8-byte overrun past each destination). The port writes them all: they are part of the
-race's RAM (R24: the rim draw later reads next to its buffer).
+materials, the decoder's 8-byte overrun past each destination). The port writes the ones around the atlases into
+the heap arena (R24: the rim draw later reads next to its buffer).
 
 ## Inputs
 
-What `race_start_from_table_a` reads before writing it (`tools/oracle/cases.py race-init-inputs`, read hook in the oracle; the
-career capture: 259 bytes):
+`Setup` (`race_setup.rs`) is what the start reads; the menus will build it (G1c), `Setup::load(&Machine)` reads it from a
+capture of the menus (the 14 pre-states) and `Setup::choose(env, route, mode, car)` makes the race choice.
 
-| Where | What |
+| Field | What |
 |---|---|
-| EWRAM `0x02000000…0x02000107` | the heap's node table: which blocks the boot and the menus left allocated (the new blocks go into its gaps) |
-| car record (`0x02000901 + 0x11·car`) `[0] [1] [3] [4] [6]` | spoiler index, overlay, material, decal set, paint |
-| profile `+0x200` | wingman |
-| IWRAM | current music id `0x0300003C`, units, tick counter `0x03000044`, player `0x03000060`, environment `0x0300006C`, career flag `0x030000A0`, route number `0x03005388`, car records `0x0300539C`, gradient buffer `0x030053B8`, base palette pointers `0x030055F0`/`0x0300577C`, language and traffic `0x03005600…07`, link flag `0x03005624`, HUD option `0x03005698`, mode `0x030056E0`, profile `0x030056EC`, route index `0x03005720`, opponents `0x03005784`, `paints[0]`, `cars[0]`, **lapped flag `0x0300608C` (the previous race's)**, old atlas `0x03006164`, sound engine `0x03006370`, frame buffer struct `0x03006410`, rand index and heap pointers `0x030064C8…0x030064D3` |
-| I/O | DISPCNT, DISPSTAT |
+| `g: CarGlobals` | the race choice: `level` (environment), `u_5388` (route number), `route_index`, `mode`, `laps`, `opponents`, `difficulty`, `u_5604` (traffic), `link`, `career`, `player`, `rand` (the RNG index), `circuit` (the previous race's lapped flag), the rest as the menus left it |
+| `wingman`, `cars`, `paints`, `records` | the profile's wingman, each racer's car and paint, the 15 car records (spoiler, overlay, material, decal set, glass) |
+| `music`, `lp.ticks` | the music playing, the VBlank tick counter (the seed, with `seed_vblanks`) |
+| `profile`, `camera`, `screen`, `input`, `query`, `hud`, `lp`, `audio`, `gradient`, ... | what the race keeps as the menus left it (units, language, HUD option, sound engine, frame-buffer size and pages, the previous rim buffers and atlases) |
+| `heap` | the EWRAM heap: node table, data area and the freed blocks' bytes (R24) |
 
-It reads nothing of the freed memory it writes over; every byte it does not write keeps the previous scene's
-value. Laps, difficulty and catch-up are not read here (the car init reads them in the first race frame).
+`Display` is the video memory the start writes: VRAM (page clears, sprite tiles), OAM, I/O, and the untouched palette.
 
-A race from the ROM alone therefore needs the boot and menu code that produce these bytes, above all the heap's
-block layout (the sound init and the menus' live allocations fix every heap address the race uses).
+A race from the ROM alone needs the boot and menu code that produce these fields, above all the heap's block layout.
 
-`race_start` returns the race's typed `World` (`nfsgba-game/src/world.rs`), which `Game` runs on. It still builds it
-on this RAM image and loads the world from the result (`World::load`, G3): the inputs above come from the pre-state
-capture, and the heap layout they fix is kept as the world's atlas arena (`World::heap`, R24).
+`race_start` returns the race's typed `World` (`nfsgba-game/src/world.rs`), which `Game` runs on. The heap arena is the
+one byte image left (`World::heap`, R24): the start allocates in it as the game's heap does and writes what lies around
+the atlases and rim buffers; the level's other blocks are typed in the `World` and hold zeros there.
 
 ## Timing
 
@@ -88,11 +87,9 @@ equals mGBA (`NAME_seed.txt`). The race music (`rand & 3`) and every later rando
   flag, the previous race's lapped flag 1 and atlas block), and each Quick Play setup twice from different menu
   histories (other RNG index and tick).
 - **Against the game's code** (`tools/oracle/cases.py race-init`): the oracle runs `race_start_from_table_a` on each
-  entry state; `tests/race_init.rs` requires the port's EWRAM, IWRAM, I/O, palette, VRAM and OAM to equal it byte
-  for byte. 14/14.
-- **Against mGBA:** with the recorded seed timing, the port equals the emulator's state at the return in every
-  byte outside the IRQs' own writes (sound engine block, counters, mix buffers, IRQ stack, DISPSTAT/VCOUNT, the
-  sound FIFOs and DMA 1/2, and the rand index the seed feeds). 14/14.
+  entry state; `tests/race_init.rs` requires the port's `World` to equal `World::load` of the oracle's result field by
+  field (the arena as its atlases and node table) and its VRAM, OAM, I/O and palette to equal it byte for byte. 14/14.
+- **Against mGBA:** with the recorded seed timing, the rand index, the racer slots and VRAM/OAM equal the emulator's. 14/14.
 - **Mutations** that each fail the test: the ring keeping the final literal, OAM tile 0x201, the old atlas not
   freed, the sector-list link, the rebuild's scratch total, the plane table not built, the seed ignoring the
   timing.
@@ -103,6 +100,7 @@ equals mGBA (`NAME_seed.txt`). The race music (`rand & 3`) and every later rando
   light tint with `0x03005630`) and the first inline `race_frame_update`, and then the intro frames (phase 9,
   fade 0x10), are not in the game loop yet (G1: `Game::frame` stops at the fades and the countdown), so the
   replay cannot continue from this state yet.
-- **Races from the ROM alone** need the boot and menu ports that produce the inputs above (the heap layout first).
+- **Races from the ROM alone** need the boot and menu ports that produce the `Setup` (the heap layout first).
+- Route index 0 and modes above 3 stop with `Unported`; the previous race's stale wingman pointers are dropped.
 - Not exercised by a capture: link play (`0x03005624`), a route index 0, `unpack_material_format4` (stops with
   `Unported`), a heap that runs full.

@@ -90,7 +90,10 @@ Done:
   palettes, frame buffers, the text and blit primitives, game functions not ported) through the `Host` trait,
   `menu/adapt.rs`. Only the garage screens (Kind18, U3) and the exit handlers are unported calls.
 
-Still on RAM: the menus' scene/palette/VRAM helpers (`menu/mod.rs`, FIDELITY U7); the race start
-(`race_init::race_start` runs on the menus' RAM image and returns `World::load` of the result, G3); the atlases' heap
-arena `World::heap`, which the rim redraw reads around its buffer (R24; the live cars are written into it first).
-Next: the race start on typed state (the menus' outputs as its inputs), then the arena.
+Also done: the race start (`race_init::race_start` builds the `World` from a typed `Setup`, `race_setup.rs`: no RAM
+image, G3 closed).
+
+Still on RAM: the menus' scene/palette/VRAM helpers (`menu/mod.rs`, FIDELITY U7); the atlases' heap arena
+`World::heap`, which the start fills as the game's heap does and the rim redraw reads around its buffer (R24; the live
+cars are written into it first).
+Next: the menus produce the `Setup` (G1c), then the arena.

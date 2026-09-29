@@ -14,6 +14,7 @@ pub mod camera;
 pub mod menu;
 pub mod oam;
 pub mod race_init;
+pub mod race_setup;
 pub mod slots;
 pub mod trace;
 pub mod view;

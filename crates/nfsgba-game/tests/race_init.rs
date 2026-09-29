@@ -1,12 +1,18 @@
 //! The race start (`race_init::race_start`) against the game's own code: for every capture in
 //! `work/e5298b24/race-init/` (`tools/race_init_capture.py`: the machine at the entry of
-//! `race_start_from_table_a`), the port must give the state the game's code gives in the function oracle
-//! (`tools/race_init_oracle.py`, `NAME_oracle.*`), byte for byte in EWRAM, IWRAM, I/O, palette, VRAM and OAM.
-//! Missing captures follow `nfsgba_testkit`'s rule (`NFSGBA_REQUIRE_DATA`).
+//! `race_start_from_table_a`), the typed `Setup` read from the pre-state gives the `World` that `World::load` reads
+//! from the function oracle's result (`tools/race_init_oracle.py`, `NAME_oracle.*`), and the display memory (VRAM,
+//! OAM, I/O) equals it byte for byte. With the recorded seed timing the rand index, racer slots and music request
+//! are the emulator's (`NAME_post.*`). Missing captures follow `nfsgba_testkit`'s rule (`NFSGBA_REQUIRE_DATA`).
 
 use std::{fs, path::PathBuf};
 
-use nfsgba_game::{Machine, race_init, world::World};
+use nfsgba_game::{
+    Machine, race_init,
+    race_setup::{Display, Setup, load_pre},
+    world::World,
+};
+use nfsgba_sim::data::GameData;
 
 fn dir() -> Option<PathBuf> {
     nfsgba_testkit::fixture("race-init")
@@ -42,33 +48,12 @@ fn diff_runs(a: &[u8], b: &[u8], base: u32) -> Vec<(u32, u32)> {
     runs
 }
 
-/// What the VBlank and VCount IRQs write while the race start runs (as `tools/race_init_oracle.py` lists them):
-/// the sound engine's block, the counters, the mix buffers, the rand index (seeded from the tick counter the
-/// IRQs advance; the seed timing itself is an input), the IRQ stack and the time-varying hardware registers.
-fn irq_write(a: u32, engine: u32) -> bool {
-    (engine..engine + 0x26AC).contains(&a)
-        || [
-            (0x0300_0044, 0x0300_0048),
-            (0x0300_53B4, 0x0300_53B8),
-            (0x0300_56E8, 0x0300_56EC),
-            (0x0300_5724, 0x0300_572C),
-            (0x0300_5DEC, 0x0300_5F4C),
-            (0x0300_6378, 0x0300_6380),
-            (0x0300_64C8, 0x0300_64CC),
-            (0x0300_7B00, 0x0300_8000),
-            (0x0400_0004, 0x0400_0008),
-            (0x0400_00A0, 0x0400_00A8),
-            (0x0400_00BC, 0x0400_00D4),
-        ]
-        .iter()
-        .any(|&(lo, hi)| (lo..hi).contains(&a))
-}
-
 #[test]
 fn race_start_matches_the_game() {
     let (Some(dir), Some(rom)) = (dir(), nfsgba_testkit::rom()) else {
         return;
     };
+    let data = GameData::parse(&rom);
     let mut names: Vec<String> = fs::read_dir(&dir)
         .unwrap()
         .filter_map(|e| {
@@ -86,26 +71,35 @@ fn race_start_matches_the_game() {
     );
     let mut bad = Vec::new();
     for name in &names {
-        let pre = dir.join(format!("{name}_pre"));
-        let mut g = Machine::load_dump(rom.clone(), &pre).unwrap();
-        let mut io: race_init::Io = fs::read(dir.join(format!("{name}_pre.io.bin"))).unwrap()[..0x400]
-            .try_into()
-            .unwrap();
-        let world = race_init::race_start(&mut g, &mut io, 0).unwrap();
+        let (setup, mut display): (Setup, Display) = load_pre(rom.clone(), &dir.join(format!("{name}_pre"))).unwrap();
+        let world = race_init::race_start(&rom, &data, &setup, 0, &mut display).unwrap();
         let want = |d: &str| fs::read(dir.join(format!("{name}_oracle.{d}.bin"))).unwrap();
         let mut report = Vec::new();
-        // The typed world against the oracle's.
-        let oracle = Machine::load_dump(rom.clone(), &dir.join(format!("{name}_oracle"))).unwrap();
-        if world != World::load(&oracle) {
-            report.push("  the typed world differs from the oracle's".to_string());
+        // The typed world against the oracle's: every field but the arena, then the arena as the game reads it.
+        let mut oracle = World::load(&Machine::load_dump(rom.clone(), &dir.join(format!("{name}_oracle"))).unwrap());
+        // The stale entity pointers the start drops (the previous race's wingman, read against this race's array).
+        (oracle.g.wingman_car, oracle.g.wingman_target) = Default::default();
+        let fields = race_init::differing(&world, &oracle);
+        if !fields.is_empty() {
+            report.push(format!(
+                "  the typed world differs from the oracle's: {}",
+                fields.join(" ")
+            ));
+            if fields.contains(&"g") {
+                let (a, b) = (format!("{:?}", world.g), format!("{:?}", oracle.g));
+                for (x, y) in a.split(", ").zip(b.split(", ")).filter(|(x, y)| x != y) {
+                    report.push(format!("    g: {x} vs {y}"));
+                }
+            }
+        }
+        if race_init::arena_view(&world) != race_init::arena_view(&oracle) {
+            report.push("  the heap arena (atlases, node table) differs".to_string());
         }
         for (d, ours, base) in [
-            ("wram", &g.mem.ewram[..], 0x0200_0000),
-            ("iwram", &g.mem.iwram[..], 0x0300_0000),
-            ("io", &io[..], 0x0400_0000),
-            ("palette", &g.palette[..], 0x0500_0000),
-            ("vram", &g.vram[..], 0x0600_0000),
-            ("oam", &g.oam[..], 0x0700_0000),
+            ("io", &display.io[..], 0x0400_0000),
+            ("palette", &display.palette[..], 0x0500_0000),
+            ("vram", &display.vram[..], 0x0600_0000),
+            ("oam", &display.oam[..], 0x0700_0000),
         ] {
             let runs = diff_runs(ours, &want(d), base);
             if !runs.is_empty() {
@@ -113,29 +107,24 @@ fn race_start_matches_the_game() {
                 report.push(format!("  {d}: {} runs: {}", runs.len(), shown.join(" ")));
             }
         }
-        // Against the emulator: with the recorded seed timing, every byte outside the IRQs' own writes.
+        // Against the emulator, with the recorded seed timing.
         let seed = fs::read_to_string(dir.join(format!("{name}_seed.txt"))).expect("seed timing");
         {
-            let mut g = Machine::load_dump(rom.clone(), &pre).unwrap();
-            let mut io: race_init::Io = fs::read(dir.join(format!("{name}_pre.io.bin"))).unwrap()[..0x400]
-                .try_into()
-                .unwrap();
-            race_init::race_start(&mut g, &mut io, seed.trim().parse().unwrap()).unwrap();
-            let engine = g.mem.u32(0x0300_6370);
-            let post = |d: &str| fs::read(dir.join(format!("{name}_post.{d}.bin"))).unwrap();
+            let (setup, mut display) = load_pre(rom.clone(), &dir.join(format!("{name}_pre"))).unwrap();
+            let world = race_init::race_start(&rom, &data, &setup, seed.trim().parse().unwrap(), &mut display).unwrap();
+            let post = World::load(&Machine::load_dump(rom.clone(), &dir.join(format!("{name}_post"))).unwrap());
+            if (world.g.rand, world.g.results) != (post.g.rand, post.g.results) {
+                report.push("  vs mGBA: the rand index or the racer slots differ".to_string());
+            }
+            let post_bytes = |d: &str| fs::read(dir.join(format!("{name}_post.{d}.bin"))).unwrap();
             for (d, ours, base) in [
-                ("wram", &g.mem.ewram[..], 0x0200_0000u32),
-                ("iwram", &g.mem.iwram[..], 0x0300_0000),
-                ("io", &io[..], 0x0400_0000),
-                ("palette", &g.palette[..], 0x0500_0000),
-                ("vram", &g.vram[..], 0x0600_0000),
-                ("oam", &g.oam[..], 0x0700_0000),
+                ("vram", &display.vram[..], 0x0600_0000u32),
+                ("oam", &display.oam[..], 0x0700_0000),
             ] {
-                let want = post(d);
+                let want = post_bytes(d);
                 let off: Vec<u32> = (0..ours.len())
                     .filter(|&i| ours[i] != want[i])
                     .map(|i| base + i as u32)
-                    .filter(|&a| !irq_write(a, engine))
                     .collect();
                 if !off.is_empty() {
                     report.push(format!("  vs mGBA {d}: {} bytes, first {:#x}", off.len(), off[0]));

@@ -4,8 +4,8 @@
 //! - `NFSGBA_PLAY=1` with `NFSGBA_DUMP`: the keyboard drives the game, one game frame every four video frames
 //!   (59.7275 Hz), from the dump's machine state (`docs/engine/game-loop.md`);
 //! - `NFSGBA_DUMP` alone: the same machine, paused;
-//! - a route (`NFSGBA_ROUTE`, R, K): `race_init::race_start` on the pre-race capture with the setup poked in
-//!   (`apply_setup`), paused.
+//! - a route (`NFSGBA_ROUTE`, R, K): the typed `race_init::start` on the pre-race capture's `Setup` with
+//!   the choice made (`Setup::choose`), paused.
 //!
 //! NOT 1:1 (G1): a route's race start is paused; the handover to `Game::frame` (intro, countdown, fades) is not
 //! ported. The camera and matrix slots are the game's (`race_init::pose`), the light tint the viewer's.
@@ -30,7 +30,7 @@ use bevy::{
     prelude::*,
 };
 use nfsgba_formats as rom;
-use nfsgba_game::{Game, Machine, Timing, race_init, view};
+use nfsgba_game::{Game, Machine, Timing, race_init, race_setup, view};
 
 use crate::{Race, texture_2d};
 
@@ -116,13 +116,10 @@ impl Play {
     /// A Quick Play race start on `route` in environment `env`, paused (`race_init::start`).
     pub fn grid(rom_bytes: Vec<u8>, env: u32, route: u32, hud: Handle<Image>) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24/race-init/circuit_pre");
-        let (mut machine, mut io) = race_init::load_pre(rom_bytes, &path)?;
-        race_init::apply_setup(&mut machine, env, route, 0, PLAYER_CAR);
-        let mut world =
-            race_init::race_start(&mut machine, &mut io, SEED_VBLANKS).map_err(|e| io::Error::other(e.to_string()))?;
-        race_init::enter_race(&mut world);
-        let data = machine.mem.data().clone();
-        let game = Game::with_world(machine.mem.rom, data, world, machine.palette, machine.vram, machine.oam);
+        let (mut setup, display) = race_setup::load_pre(rom_bytes.clone(), &path)?;
+        setup.choose(env, route, 0, PLAYER_CAR);
+        let game =
+            race_init::start(rom_bytes, &setup, display, SEED_VBLANKS).map_err(|e| io::Error::other(e.to_string()))?;
         let mut play = Play::new(game, hud, true, Some((env, route)));
         // The first race frame runs up to the countdown, which is not ported (G1): the drivers, camera, matrix slots
         // and the world are the game's; anything else that stops it is an error.

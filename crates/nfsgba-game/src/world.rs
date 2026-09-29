@@ -167,8 +167,18 @@ fn in_ewram(addr: u32, size: u32) -> bool {
     addr >> 24 == 2 && (addr & 0x3_FFFF) + size <= 0x4_0000
 }
 
+/// The sound engine of a machine state.
+pub(crate) fn load_audio(m: &Mem) -> Engine {
+    let buffer = |k: u32| m.bytes(0x0300_5DEC + 0xB0 * k, 0xB0);
+    nfsgba_audio::ram::load(
+        m.bytes(m.u32(AUDIO_GLOBALS), WORK_AREA),
+        m.bytes(AUDIO_GLOBALS, 16),
+        [buffer(0), buffer(1)],
+    )
+}
+
 /// The heap offset of an EWRAM address (0: none).
-fn heap_offset(addr: u32) -> u32 {
+pub(crate) fn heap_offset(addr: u32) -> u32 {
     if addr == 0 { 0 } else { addr & 0x3_FFFF }
 }
 
@@ -222,15 +232,7 @@ impl World {
             SlotGlobals::load(m, 0),
             SpritePool::load(m, 0),
         );
-        let audio = {
-            let eng = m.u32(AUDIO_GLOBALS);
-            let buffer = |k: u32| m.bytes(0x0300_5DEC + 0xB0 * k, 0xB0);
-            nfsgba_audio::ram::load(
-                m.bytes(eng, WORK_AREA),
-                m.bytes(AUDIO_GLOBALS, 16),
-                [buffer(0), buffer(1)],
-            )
-        };
+        let audio = load_audio(m);
         let (gradient_at, gradient_ptr) = (m.u32(0x0300_56E8), m.u32(0x0300_53B8));
         let palette = |p: u32| Ptr::<u16>::new(p).read_n(m, 256);
         // main_frame's fade target for the gradient: world[0] + level table (world +0x20) [material] +8.
