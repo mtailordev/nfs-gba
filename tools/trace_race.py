@@ -46,6 +46,11 @@ SCENARIOS = {
     # (Chaotic: A pressed one frame earlier or later and the car stays upright, hence this command order.)
     "tipped": [AUTOPILOT[0], "load hunter-info", "trace", AUTOPILOT[1], "hold A 5", "wait 60", "luax AUTOPILOT.hunt=4000",
                'luax AUTOPILOT.mode="race"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
+    # The same drive; once tipped for 20 steps the counter is raised to 100 (RAM test input, same frame timing),
+    # so the stuck reset (FUN_0814efa8) puts the car back on the road.
+    "stuck": [AUTOPILOT[0], "load hunter-info", "trace", "luax AUTOPILOT.reset();AUTOPILOT.tipped=20", "hold A 5",
+              "wait 60", "luax AUTOPILOT.hunt=4000", 'luax AUTOPILOT.mode="race"', "wait 3000",
+              'luax AUTOPILOT.mode="off"'],
 }
 
 # Entity 0 fields for --summary: name, offset, size (see docs/engine/physics.md)

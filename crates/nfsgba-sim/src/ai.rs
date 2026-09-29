@@ -451,7 +451,8 @@ fn step(sim: &mut Sim, e: u32) -> Result<i32> {
     if stuck > 0x96 {
         let player_wp = m.i16(m.u32(PLAYER_ENTITY) + 0x90) as i32;
         if stuck > 0xFA || (m.u16(e + 0xA) & 4 == 0 && player_wp != wp && player_wp != wp + 1) {
-            return Err(Unported("FUN_0814efa8 (put the opponent back on the road)"));
+            m.set_i32(p + 0x4B0, 0);
+            crate::car::put_back_on_road(m, e, b);
         }
     }
     if m.u16(e + 0x4A) == 2 {
@@ -600,7 +601,9 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     let mut accelerate = false;
     let dt = recip(m, frame_time << 8).min(0xC00);
     if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
-        return Err(Unported("FUN_0814efa8 (put the opponent back on the road)"));
+        let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
+        crate::car::put_back_on_road(m, e, w);
+        m.set_i16(p + 0x4E4, 0);
     }
     for k in 0..4 {
         let w = p + WHEELS + WHEEL_SIZE * k;

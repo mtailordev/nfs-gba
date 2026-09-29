@@ -13,6 +13,7 @@ local FUNCS = {
   {"hunter_life_tick", 0x08140F78, "r1"}, {"break_wall", 0x0813B5A0, "r0"},
   {"hunter_wall_hit", 0x0814136C, "r0"}, {"push_back_loop", 0x0813DF98, "r0"},
   {"route_side_segment", 0x0813F234, "r1"}, {"traffic_hit", 0x08145DAC, "r1"},
+  {"car_put_back_on_road@", 0x0814EFA8, "r1"},
 }
 local counts = {}
 local function line(s) out:write(emu:currentFrame() .. " " .. s .. "\n"); out:flush() end

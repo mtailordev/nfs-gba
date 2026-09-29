@@ -6,7 +6,8 @@
 --   luax AUTOPILOT.mode="off"    leave the keys alone (hold/wait commands work again)
 --   AUTOPILOT.extra = key mask OR'd in (e.g. 0x200 L for nitro with A); AUTOPILOT.gas = false releases A;
 --   AUTOPILOT.section / AUTOPILOT.index: follow that racing-line section from that waypoint (a shortcut branch);
---   AUTOPILOT.recover = false: no reversing out when stuck.
+--   AUTOPILOT.recover = false: no reversing out when stuck;
+--   AUTOPILOT.tipped = N: after N tipped-over steps, raise the tipped counter to 100 (test input for the reset).
 -- Steering: heading and target angles are 0x4000 per turn, measured from +z towards +x (the game's atan2);
 -- LEFT turns towards smaller angles, RIGHT towards larger (measured in the recorded traces).
 AUTOPILOT = AUTOPILOT or {}
@@ -16,6 +17,7 @@ function ap.reset()
   ap.mode, ap.ahead, ap.extra, ap.dead, ap.gas = "off", 1, 0, 0x60, true
   ap.hunt, ap.target, ap.section, ap.index, ap.recover, ap.log = nil, nil, nil, nil, nil, nil
   ap.reverse, ap.stuck, ap.diff = 0, 0, 0
+  ap.tipped, ap.tipped_done = nil, nil
   emu:setKeys(0)
 end
 if not ap.loaded then ap.reset() end
@@ -40,6 +42,12 @@ function ap.step()
   end
   ap.driving = true
   local e = entity(emu:read32(0x03000060))
+  if ap.tipped and not ap.tipped_done then
+    -- Test input (RAM, not ROM): once the player has been tipped over for ap.tipped steps, set the tipped-step
+    -- counter (physics +0x4E4) to 100, so the stuck reset FUN_0814efa8 runs without 100 real tipped steps.
+    local p = emu:read32(e + 0x8C)
+    if emu:read16(p + 0x4E4) >= ap.tipped then emu:write16(p + 0x4E4, 100); ap.tipped_done = true end
+  end
   local x, z = s32(emu:read32(e + 0x0C)) // 256, s32(emu:read32(e + 0x14)) // 256
   local tx, tz
   if ap.mode == "ram" then

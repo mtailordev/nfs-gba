@@ -264,19 +264,7 @@ fn body_init(m: &mut Mem, b: u32, pos: [i32; 3], heading: i32, h: u32, mass: i32
     let rest = m.vec3(0x087F_3DD0);
     m.set_vec3(b + body::MOMENTUM, rest);
     m.set_vec3(b + body::ANG_MOMENTUM, rest);
-    let a = (heading >> 10) * 4;
-    let (c, s) = (cos(m, a) >> 2, sin(m, a) >> 2);
-    let q = matrix_quat(m, &[c, 0, -s, 0, 0x1000, 0, s, 0, c]);
-    let norm2 = q.iter().map(|&v| mul12(v, v)).fold(0i32, i32::wrapping_add);
-    let len = isqrt(norm2.wrapping_mul(0x1000) as u32);
-    let inv = if len != 0 { recip_entry(m, len >> 1) >> 1 } else { 0 };
-    let q = q.map(|v| mul12(inv, v));
-    for (k, v) in q.into_iter().enumerate() {
-        m.set_i32(b + body::QUAT + 4 * k as u32, v);
-    }
-    for (k, v) in quat_matrix(q).into_iter().enumerate() {
-        m.set_i32(b + body::ROT + 4 * k as u32, v);
-    }
+    orient(m, b, heading >> 8);
     // The game's inline reciprocal differs from `recip` for negative values; masses are positive.
     m.set_i32(b + body::MASS, mass * 3);
     m.set_i32(b + body::INV_MASS, recip(m, mass * 3));
@@ -288,6 +276,24 @@ fn body_init(m: &mut Mem, b: u32, pos: [i32; 3], heading: i32, h: u32, mass: i32
     m.set_vec3(b + body::ANG_VEL, rest);
     for off in [0xA8, 0x9C, 0xA0, 0xA4] {
         m.set_i32(b + off, 0);
+    }
+}
+
+/// `FUN_08148f24`: turn body `b` upright to `heading` (14-bit, low 2 bits dropped): quaternion (renormalised
+/// through the reciprocal table) and rotation matrix. Momenta and velocities are left alone.
+pub(crate) fn orient(m: &mut Mem, b: u32, heading: i32) {
+    let a = (heading >> 2) * 4;
+    let (c, s) = (cos(m, a) >> 2, sin(m, a) >> 2);
+    let q = matrix_quat(m, &[c, 0, -s, 0, 0x1000, 0, s, 0, c]);
+    let norm2 = q.iter().map(|&v| mul12(v, v)).fold(0i32, i32::wrapping_add);
+    let len = isqrt(norm2.wrapping_mul(0x1000) as u32);
+    let inv = if len != 0 { recip_entry(m, len >> 1) >> 1 } else { 0 };
+    let q = q.map(|v| mul12(inv, v));
+    for (k, v) in q.into_iter().enumerate() {
+        m.set_i32(b + body::QUAT + 4 * k as u32, v);
+    }
+    for (k, v) in quat_matrix(q).into_iter().enumerate() {
+        m.set_i32(b + body::ROT + 4 * k as u32, v);
     }
 }
 

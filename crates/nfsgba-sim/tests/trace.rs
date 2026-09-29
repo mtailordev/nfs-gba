@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 11] = [
+const SCENARIOS: [&str; 12] = [
     "accel",
     "brake",
     "steer",
@@ -24,6 +24,7 @@ const SCENARIOS: [&str; 11] = [
     "start",
     "hunter",
     "tipped",
+    "stuck",
 ];
 const EWRAM: usize = 0x4_0000;
 /// Bits other game code maintains between car steps, as (offset, mask): the entity's sector-list link

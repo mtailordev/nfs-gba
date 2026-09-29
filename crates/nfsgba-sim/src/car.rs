@@ -232,7 +232,10 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         route::wingman_command(m)?;
     }
     if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
-        return Err(Unported("FUN_0814efa8 (put the car back on the road)"));
+        // Tipped over for more than 100 steps with a corner down, and slow: back onto the racing line.
+        let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
+        put_back_on_road(m, e, w);
+        m.set_i16(p + 0x4E4, 0);
     }
     route::track_segment(m, e);
     if m.u32(0x0300_53AC) == e {
@@ -698,6 +701,26 @@ pub fn store_racer(m: &mut Mem, e: u32, r: &Racer) {
     let p = m.u32(e + 0x8C);
     m.set_i32(p + 0x4E8, r.life);
     m.set_i16(p + 0x4F0, r.hit);
+}
+
+/// `FUN_0814efa8`: put car `e` back on the road at waypoint `w` (24 bytes: x, z, `+0x0A` u16 heading, `+0x14`
+/// sector): the entity on the floor there with heading `+0x0A` as is, the body 0x1900 above it, upright along the
+/// waypoint's line (`*0x03005FB4`, 0x20 bytes per line). Momenta and velocities are kept.
+pub(crate) fn put_back_on_road(m: &mut Mem, e: u32, w: u32) {
+    let p = m.u32(e + 0x8C);
+    let (index, seg) = route::advance(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
+    let first = m.i32(m.u32(W_SEGMENTS) + seg * 8 + 4);
+    let (x, z) = (m.i32(w) << 8, m.i32(w + 4) << 8);
+    m.set_i32(e + 0xC, x);
+    m.set_i32(e + 0x14, z);
+    m.set_u32(e + 0x2C, m.u16(w + 10) as u32);
+    m.set_u16(e + 0x78, m.i32(w + 0x14) as u16);
+    let y = world::floor_height(m, m.u16(e + 0x78) as u32, x >> 8, z >> 8);
+    m.set_i32(e + 0x10, y);
+    m.set_vec3(p + 0xD0, [x, y.wrapping_sub(0x1900), z]);
+    let line = m.u32(0x0300_5FB4).wrapping_add((index + first) as u32 * 0x20);
+    let heading = atan2(m.i32(line), m.i32(line + 4));
+    crate::init::orient(m, p + 0xC8, heading);
 }
 
 fn release_accelerator(m: &mut Mem, player: bool, stats: u32) {
