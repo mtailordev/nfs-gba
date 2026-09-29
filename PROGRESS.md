@@ -35,7 +35,10 @@ What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 
 ## Start here (next session)
 
-Everything is merged and pushed (`origin/main`), nothing runs, the gate passes.
+**Paused 2026-09-29 (the user needed the machine):** two finished branches wait for their gate and merge, one at a time, nothing else running:
+1. `worktree-agent-a3797a64bf61fc08c` (U7b: menu scenes and sprites on typed state; `.claude/worktrees/agent-a3797a64bf61fc08c`): run `tools/fixtures.py build` (it lacks `menus3/scene-*`, `po-*` rows), then `tools/gate.py`; fast-forward `main`.
+2. `worktree-agent-a43cd0fc938d8b559` (save data, boot path, `map_zone_palettes`; `.claude/worktrees/agent-a43cd0fc938d8b559`): rebase onto `main`, run `NFSGBA_REQUIRE_DATA=1 cargo test -p nfsgba-game --release menu` (its last edit was committed untested), `tools/fixtures.py build`, `tools/gate.py`; merge; `notes_merge.py --write` if notes remain. `map_draw` is still a stub.
+Then remove both worktrees, push, and continue with the garage (Kind18, U3) and the one `Game` loop (menus ⇄ race through `Setup`/`Handover`).
 
 ### 1. Toolchain (decided 2026-09-29; results in `docs/engine/harness.md` "Tool bake-off")
 
@@ -79,6 +82,7 @@ Rules:
 - **Exact where it is observable** (the contract in `docs/DECISIONS.md`): gameplay state, rules, AI, physics, audio, save data, the 240×160 frame. Traces are compared on typed gameplay state, not raw RAM. Invisible internals (heap bytes, stale registers, mid-frame IRQ timing) are not reproduced and not chased.
 - **Minimal docs.** Code comments, one `docs/FIDELITY.md` row and address/symbol rows per finding (`docs/engine/notes/*.<agent>.csv` → `tools/notes_merge.py --write`). No prose write-ups, no "Integration notes" sections, no long reports.
 - **Better code, not just more.** New code on typed state, one copy of each helper (`nfsgba-fixed`, `nfsgba-testkit`), small modules; no new RAM-image code.
+- **Machine load (the user plays on this PC):** at most one cargo build or gate at a time across all worktrees (the test kit's fixture log and the `menus3` case files are shared, so parallel gates also give false failures); agents build but leave the gate to the coordinator, who runs gates one after another.
 - **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; each worktree builds into its own `target/` (never a shared `CARGO_TARGET_DIR`: cargo then reuses another worktree's build of a crate and tests the wrong code) and is removed after merging; an emulator session is stopped by its own PID.
 
 ## Environment notes
