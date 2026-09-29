@@ -28,8 +28,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x345114` | 273 × 0x24 | menu materials (menu descriptor `+0x24`) | formats/ui |
 | `0x347778` | 10 × 8 | menu sprite screens (`+0x2C`) | formats/ui |
 | `0x3477C8` | 47 × 0x14 | menu sprite elements (`+0x30`) | formats/ui |
-| `0x347B74` | | HUD sprite texels, 4bpp (rec `+0x10`) | formats/ui |
-| `0x350000–0x368000` | 96 KiB | ARM code, purpose unknown (not the race IWRAM code) | |
+| `0x347B74–0x36C55C…` | | HUD sprite texels, 4bpp (rec `+0x10`); includes `0x350000–0x368000`, once mistaken for ARM code (runs of `0xEEEEEEEE`) | formats/ui |
 | `0x36C75C` | 4 × 0x200 | OBJ palettes (rec `+0x04`; the loaded one is `+ (+0x58)·2`); also the literal base of `load_car_palettes` | formats/ui, formats/car-paint |
 | `0x36C95C` | 0x20 each | car paint ramps (block `+0x200`), 16 colours per paint number; glass = colour 12 | formats/car-paint |
 | `0x36CD5C` | 8 × 2 B rows | extra rows for palette slots 240 and 248 (block `+0x600`) | formats/car-paint |
@@ -55,7 +54,8 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x723DD4` | 1,113 × 0x30 | sectors (rec `+0x18`) | formats/city-sectors |
 | `0x730E84` | 4,423 × 0x44 | walls (rec `+0x14`) | formats/city-sectors |
 | `0x77A000–0x78E000` | | route data: template entities, racing lines | formats/race-routes |
-| `0x797D10–0x7E53EC` | | text strings | formats/text-table |
+| `0x794000–0x799B88` | ~22 KiB | **unknown tables**, referenced 49 times from game code (`0x12AD40…`) | |
+| `0x799B88–0x7BFC53` | | text strings (the text table's targets) | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
 | `0x7BFC68` | | camera probe vector (0, 0, 72) for the start-sector search | engine/renderer |
 | `0x7BFD0C` / `0x7BFD18` | | EEPROM 4 Kbit / 64 Kbit descriptors (`eeprom_select_type`) | formats/career |
@@ -107,6 +107,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F4598` | 1 per route | minimap palette per route | formats/ui |
 | `0x7F5BA4` | | pointers to the linear-mode step tables | formats/audio |
 | `0x7F5BC8` | 256 | character → glyph map | formats/ui |
+| `0x7F5CC8–0x800000` | ~41 KiB | **unknown**; starts like another byte map (`e0 e1 e2 …`); about one plausible code reference (`0x169B20`); the ROM has no padding | |
 | `0x7F0636` | i16 per `car·0x10 + rec[0]` | entity `+0x64` source (clamped at 0) | formats/car-paint |
 | `0x7F4344` | 12 × u32 | opponent 1's paint per wingman 1..12 (`pick_opponent_cars` reads `[wingman − 1]`; wingman 0 reads `0x7F4340` = 11) | formats/car-paint |
 

@@ -12,7 +12,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Code
 
-10. **What does the 96 KiB of ARM code at `0x350000–0x368000` do?** It is *not* what runs in IWRAM during a race: that code comes from `0x14FC38`, `0x165154` and `0x168264`.
+10. **What are the tables at `0x794000–0x799B88`** (referenced 49 times from game code) **and the ~41 KiB at `0x7F5CC8–0x800000`?**
 11. **What does the 65-entry Thumb function table at `0x7F38B8` dispatch?** Hypothesis: game states or menus.
 
 18. **Menu materials 6, 16–152 and most overlays:** what are they, and which palette does each screen use (FIDELITY U4)?
@@ -34,6 +34,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Answered
 
+- ~~96 KiB of ARM code at `0x350000–0x368000`~~ **Not code:** 4bpp HUD sprite texels inside `0x347B74–0x36C55C` (runs of `0xEEEEEEEE`).
 - ~~Runtime palette~~ **Answered:** the city palette is picked by the environment (`race_load_palettes`) and tinted every frame by the wall light at the player (`apply_sector_light_to_palette`); car colours are ramps from `0x36C95C` (`load_car_palettes`, `shade_car_paint`). See [FIDELITY.md](FIDELITY.md), [formats/car-paint.md](formats/car-paint.md). The event's environment comes from `0x7F2588` ([formats/career.md](formats/career.md)).
 - ~~Route table fields~~ **Answered:** `+0x04` is the racing-line section table (lap plus branches). See [formats/race-routes.md](formats/race-routes.md), [formats/career.md](formats/career.md). Descriptor `+0x62`/`+0x64` are sky offsets ([engine/sky.md](engine/sky.md)).
 - ~~Portal walls between sectors of different heights~~ **Answered:** portal walls with flag bit 0 clear and a non-zero material are drawn like solid walls over their own top and bottom; there are no separate upper and lower parts ([engine/renderer.md](engine/renderer.md)).
