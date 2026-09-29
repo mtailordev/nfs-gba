@@ -328,9 +328,19 @@ fn main() {
         Update,
         (
             shot,
-            (play::play, poses, keys, game_camera, visibility, sky, tint).chain(),
+            (
+                play::play,
+                poses,
+                keys,
+                game_camera,
+                visibility,
+                traffic,
+                sky,
+                tint,
+                play::hud_layer,
+            )
+                .chain(),
             racing_line,
-            play::hud_layer,
         ),
     );
     embedded_asset!(app, "indexed.wgsl");
@@ -824,16 +834,18 @@ fn keys(
     }
 }
 
-/// The camera and every racer's world pose at one game frame.
+/// The camera's render frame and every entity's world pose (by entity index) at one game frame.
 #[derive(Clone, Default)]
 struct Poses {
-    camera: Transform,
-    /// Per racer (index = `RaceCar::slot`); `None` without a matrix slot.
-    cars: Vec<Option<Transform>>,
+    frame: Option<render::Frame>,
+    /// `None` without a vehicle matrix slot.
+    ents: Vec<Option<Transform>>,
 }
 
 /// The poses of the last two game frames; the display blends between them (`Play::alpha`), so cars and camera move
-/// at the display rate while the game steps at its own.
+/// at the display rate while the game steps at its own. The camera is blended as the game's render frame (the yaw
+/// and the eye), and the visible-sector list and the wall spans are computed for that blended frame, so the walls
+/// clip to their portals exactly as they would if the game had stepped there.
 /// NOT 1:1 (presentation, by contract): the picture lags the simulation by up to one game frame; a jump larger
 /// than `TELEPORT` (a respawn, a new race) is not interpolated.
 #[derive(Resource, Default)]
@@ -858,21 +870,50 @@ fn blend(a: &Transform, b: &Transform, t: f32) -> Transform {
     }
 }
 
-/// Reads the game's camera and racer poses when it has stepped.
-fn poses(play: Res<play::Play>, race: Res<Race>, mut smooth: ResMut<Smooth>) {
+/// The render frame between two game frames: the chase camera never pitches (a yaw about the vertical, m4 =
+/// 0x4000), so the yaw turns the short way and the eye moves in a line. Anything else, or a jump, is `b`.
+fn blend_frame(a: &render::Frame, b: &render::Frame, t: f32) -> render::Frame {
+    let (ma, mb) = (&a.camera, &b.camera);
+    let flat = |m: &[i32; 12]| [1, 3, 5, 7].iter().all(|&i| m[i] == 0) && m[4] == 16384;
+    let jump = (9..12)
+        .map(|k| (ma[k] - mb[k]) as f32)
+        .map(|d| d * d)
+        .sum::<f32>()
+        .sqrt();
+    if !flat(ma) || !flat(mb) || jump > 2000.0 {
+        return *b;
+    }
+    let yaw = |m: &[i32; 12]| (m[2] as f32).atan2(m[0] as f32);
+    let turn = (yaw(mb) - yaw(ma) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    let r = yaw(ma) + turn * t;
+    let mut m = *mb;
+    m[0] = (r.cos() * 16384.0).round() as i32;
+    m[2] = (r.sin() * 16384.0).round() as i32;
+    (m[6], m[8]) = (-m[2], m[0]);
+    for k in 9..12 {
+        m[k] = ma[k] + ((mb[k] - ma[k]) as f32 * t).round() as i32;
+    }
+    render::Frame { camera: m, ..*b }
+}
+
+/// Reads the game's camera and every entity's pose when it has stepped.
+fn poses(play: Res<play::Play>, mut smooth: ResMut<Smooth>) {
     let key = Some((play.id, play.frames));
     if !play.paused && smooth.key == key {
         return;
     }
     let mem = &play.game.world;
-    let eye = game::frame_transform(&view::frame(mem), world);
+    let frame = view::frame(mem);
+    let eye = game::frame_transform(&frame, world);
     let now = Poses {
-        camera: eye,
-        cars: race
-            .setup
-            .racers
+        frame: Some(frame),
+        ents: mem
+            .slots
             .iter()
-            .map(|r| (r.slot != 0xFF).then(|| pose_from_matrix(&eye, &view::matrix(mem, r.slot))))
+            .map(|s| {
+                let m = mem.matrices.get(s.e.slot as usize)?;
+                Some(pose_from_matrix(&eye, m))
+            })
             .collect(),
     };
     let fresh = smooth.key.is_none_or(|k| k.0 != play.id) || play.paused;
@@ -898,10 +939,15 @@ fn game_camera(
         (race.frame, race.visible) = (None, None);
         return;
     }
-    let (frame, root, visible) = play::frame(&play, &tint.rom);
+    let root = view::root(&play.game.world);
     // The original frame is one picture per game frame; the GPU view moves between the last two.
     let alpha = if race.original { 1.0 } else { play.alpha() };
-    **camera = blend(&smooth.prev.camera, &smooth.curr.camera, alpha);
+    let frame = match (&smooth.prev.frame, &smooth.curr.frame) {
+        (Some(a), Some(b)) => blend_frame(a, b, alpha),
+        _ => view::frame(&play.game.world),
+    };
+    **camera = game::frame_transform(&frame, world);
+    let visible = render::visible_sectors(&tint.rom, &frame, root);
     (race.frame, race.visible) = (Some((frame, root)), Some(visible));
 }
 
@@ -959,7 +1005,8 @@ fn visibility(
     let alpha = if race.original { 1.0 } else { play.alpha() };
     for (car, mut t, mut v) in &mut cars {
         let r = &race.setup.racers[car.slot];
-        if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.cars.get(car.slot), smooth.curr.cars.get(car.slot)) {
+        let ent = (play.game.world.g.player as usize + car.slot) % 4;
+        if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(ent), smooth.curr.ents.get(ent)) {
             t.set_if_neq(blend(a, b, alpha));
         }
         // The entity's camera depth as `draw_sector_entities` computes it.
@@ -973,6 +1020,110 @@ fn visibility(
             .is_none_or(|d| d.iter().any(|(p, _)| p.sector == r.sector));
         let drawn_model = r.models_at(depth).contains(&car.model);
         v.set_if_neq(shown(race.active && !race.original && listed && drawn_model));
+    }
+}
+
+/// A traffic car part: entity `ent`'s model `model` in vehicle material `material`.
+#[derive(Component)]
+struct TrafficCar {
+    ent: usize,
+    model: usize,
+    material: usize,
+}
+
+/// The game's traffic cars (`Slot::block`; the racers and the effect entities are other slots), drawn like the
+/// racers: the models `draw_sector_entities` picks at the car's depth, on the pose of its vehicle matrix slot,
+/// blended between game frames. Parts are made the first time an entity shows them.
+/// NOT 1:1 (R29): as for the racers, no portal-span clip; a traffic atlas kept in RAM (flag bit 3) is not drawn.
+#[allow(clippy::too_many_arguments)]
+fn traffic(
+    mut commands: Commands,
+    race: Res<Race>,
+    tint: Res<Tint>,
+    skies: Res<Skies>,
+    play: Res<play::Play>,
+    smooth: Res<Smooth>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut indexed: ResMut<Assets<Indexed>>,
+    mut bank: Local<Option<(Vec<rom::Model>, Vec<rom::Texture>)>>,
+    mut made: Local<BTreeMap<(usize, usize), Handle<Mesh>>>,
+    mut looks: Local<BTreeMap<usize, Handle<Indexed>>>,
+    mut parts: Query<(Entity, &TrafficCar, &mut Transform, &mut Visibility), Without<RaceCar>>,
+) {
+    let mem = &play.game.world;
+    let (models, textures) = bank.get_or_insert_with(|| (rom::models(&tint.rom), rom::vehicle_textures(&tint.rom)));
+    let game_frame = view::frame(mem);
+    let alpha = if race.original { 1.0 } else { play.alpha() };
+    let listed = |sector: u16| {
+        race.visible
+            .as_ref()
+            .is_none_or(|v| v.portals.iter().any(|p| p.flags & 8 == 0 && p.sector == sector))
+    };
+    let mut wanted = Vec::new();
+    for (i, slot) in mem.slots.iter().enumerate().filter(|(_, s)| s.block.is_some()) {
+        let e = &slot.e;
+        let material = e.material as usize + e.material_offset as usize + (e.material_step >> 8) as usize;
+        if e.slot == 0xFF || e.material == 0 || e.flags & 0x18 != 0 || material >= textures.len() {
+            continue;
+        }
+        let racer = view::Racer {
+            pos: e.pos,
+            heading: 0,
+            sector: e.sector,
+            slot: e.slot,
+            flags: e.flags,
+            model: e.model,
+            extra: e.extra_model,
+        };
+        let m = &game_frame.camera;
+        let (x, z) = (m[9].wrapping_add(e.pos[0] >> 8), m[11].wrapping_add(e.pos[2] >> 8));
+        let depth = m[2].wrapping_mul(x).wrapping_add(m[8].wrapping_mul(z)) >> 14;
+        if listed(e.sector) && race.active && !race.original {
+            wanted.extend(racer.models_at(depth).into_iter().map(|model| (i, model, material)));
+        }
+    }
+    let mut have = Vec::new();
+    for (entity, part, mut t, mut v) in &mut parts {
+        let show = wanted.contains(&(part.ent, part.model, part.material));
+        if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(part.ent), smooth.curr.ents.get(part.ent)) {
+            t.set_if_neq(blend(a, b, alpha));
+        }
+        v.set_if_neq(if show {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+        if part.ent >= mem.slots.len() {
+            commands.entity(entity).despawn();
+        }
+        have.push((part.ent, part.model, part.material));
+    }
+    for &(ent, model, material) in wanted.iter().filter(|w| !have.contains(w)) {
+        let atlas = &textures[material];
+        let mesh = made
+            .entry((model, material))
+            .or_insert_with(|| meshes.add(model_tris(&models[model], Some(atlas), Color::WHITE).mesh()))
+            .clone();
+        let look = looks
+            .entry(material)
+            .or_insert_with(|| {
+                indexed.add(Indexed {
+                    indices: images.add(index_image(atlas)),
+                    palette: tint.palette.clone(),
+                    backdrop: skies.backdrop.clone(),
+                    mode: UVec4::ZERO,
+                    portals: race.portals.clone(),
+                })
+            })
+            .clone();
+        let pose = smooth.curr.ents.get(ent).copied().flatten().unwrap_or_default();
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(look),
+            pose,
+            TrafficCar { ent, model, material },
+        ));
     }
 }
 
@@ -1231,15 +1382,26 @@ fn sky(
     skies.drawn = Some(key);
 }
 
-/// With `NFSGBA_SHOT=<file.png>`: save a frame after 8 s (shader pipelines compile in the background first) and quit.
-fn shot(mut commands: Commands, time: Res<Time>, mut taken: Local<bool>, mut exit: MessageWriter<AppExit>) {
+/// With `NFSGBA_SHOT=<file.png>`: save a frame after 8 s (shader pipelines compile in the background first), or
+/// with `NFSGBA_SHOT_FRAME=<n>` once the game has stepped n frames (and 2 s later than that), and quit.
+fn shot(
+    mut commands: Commands,
+    time: Res<Time>,
+    play: Res<play::Play>,
+    mut taken: Local<Option<f32>>,
+    mut exit: MessageWriter<AppExit>,
+) {
     let Ok(path) = std::env::var("NFSGBA_SHOT") else { return };
+    let frames: u64 = std::env::var("NFSGBA_SHOT_FRAME")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let t = time.elapsed_secs();
-    if t > 8.0 && !*taken {
+    if t > 8.0 && play.frames >= frames && taken.is_none() {
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
-        *taken = true;
+        *taken = Some(t);
     }
-    if t > 10.0 {
+    if taken.is_some_and(|at| t > at + 2.0) {
         exit.write(AppExit::Success);
     }
 }
@@ -1372,6 +1534,33 @@ mod tests {
             }
             assert!(posed >= cars, "{name}: {posed} racers have a matrix slot");
         }
+    }
+
+    /// The blended render frame is the game's at both ends and turns the short way between.
+    #[test]
+    fn blend_frame_turns_the_yaw() {
+        let at = |deg: f32| {
+            let (s, c) = (deg.to_radians().sin(), deg.to_radians().cos());
+            let m = [c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c].map(|v| (v * 16384.0).round() as i32);
+            let mut camera = [0; 12];
+            camera[..9].copy_from_slice(&m);
+            camera[9..].copy_from_slice(&[-1000, -30, 500]);
+            render::Frame {
+                view: render::View {
+                    cx: 120,
+                    cy: 79,
+                    near: 64,
+                    focal: 150,
+                },
+                camera,
+                rect: [0, 240, 0, 159],
+            }
+        };
+        let (a, b) = (at(179.0), at(-179.0));
+        assert_eq!(blend_frame(&a, &b, 1.0).camera[..9], b.camera[..9]);
+        // Half way is 180 degrees (the short way through 180, not through 0).
+        let mid = blend_frame(&a, &b, 0.5).camera;
+        assert!(mid[0] < -16380 && mid[2].abs() < 30, "{mid:?}");
     }
 
     /// The display blends between game frames, and a teleport is shown at once.

@@ -266,6 +266,7 @@ pub fn play(
 }
 
 /// The game's frame, camera and visible list, straight from its RAM (play mode).
+#[cfg(test)]
 pub fn frame(play: &Play, rom_bytes: &[u8]) -> (rom::render::Frame, rom::render::Portal, rom::render::Visibility) {
     let m = &play.game.world;
     (view::frame(m), view::root(m), view::visible(rom_bytes, m))
@@ -282,11 +283,15 @@ const BLEND: (u32, u32) = (15, 13);
 /// NOT 1:1 (G2, high-resolution view only): semi-transparent sprites are drawn at 50% alpha (the blend brightens the
 /// GPU image, which the 2D layer cannot read). OBJ priority against the background is not modelled (the HUD is
 /// always in front).
-pub fn hud_layer(play: Res<Play>, race: Res<Race>, mut images: ResMut<Assets<Image>>) {
+pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, mut images: ResMut<Assets<Image>>) {
     let g = &play.game;
     let colour = |pal: &[u8], i: usize| u16::from_le_bytes([pal[2 * i], pal[2 * i + 1]]);
     let obj_palette: Vec<u16> = (0..256).map(|i| colour(&g.palette[0x200..], i)).collect();
-    let objects = draw_objects(&g.oam, &g.vram[0x1_0000..], &obj_palette);
+    let mut oam = g.oam.clone();
+    if !race.original && !play.paused {
+        lock_effects(&mut oam, &play, &race, &smooth);
+    }
+    let objects = draw_objects(&oam, &g.vram[0x1_0000..], &obj_palette);
     let backdrop = g.backdrop();
     let mut out = vec![0u8; 240 * 160 * 4];
     for (p, o) in objects.into_iter().enumerate() {
@@ -330,16 +335,86 @@ pub fn hud_layer(play: Res<Play>, race: Res<Race>, mut images: ResMut<Assets<Ima
     }
 }
 
+/// Sprite sizes by shape and size code.
+const SIZES: [[(i32, i32); 4]; 3] = [
+    [(8, 8), (16, 16), (32, 32), (64, 64)],
+    [(16, 8), (32, 8), (32, 16), (64, 32)],
+    [(8, 16), (8, 32), (16, 32), (32, 64)],
+];
+
+/// A point in the world on the 240×160 screen as the game projects it (`None` behind the near plane).
+fn screen_of(cam: &Transform, p: Vec3) -> Option<Vec2> {
+    let v = cam.to_matrix().inverse().transform_point3(p) / crate::SCALE;
+    let d = -v.z;
+    (d > 1.0).then(|| Vec2::new(120.0 + 150.0 * v.x / (d + 1.0), 79.0 - 150.0 * v.y / (d + 1.0)))
+}
+
+/// The effect sprites (lights, sparks, flames: the game's sprite pool) sit on screen positions the game worked out
+/// for its own frame's cars. While the display shows the cars between two game frames, each pool sprite that lies
+/// within `NEAR` pixels of a car's projected origin moves with that car: by how far the car's screen position
+/// changed from the game frame to the blended view.
+/// NOT 1:1 (presentation): the sprites are matched to cars by screen distance, not by the effect's owner.
+fn lock_effects(oam: &mut [u8], play: &Play, race: &Race, smooth: &crate::Smooth) {
+    const NEAR: f32 = 30.0;
+    let (Some(fc), Some((fb, _))) = (&smooth.curr.frame, &race.frame) else {
+        return;
+    };
+    let (cam_n, cam_b) = (
+        crate::game::frame_transform(fc, crate::world),
+        crate::game::frame_transform(fb, crate::world),
+    );
+    let alpha = play.alpha();
+    let anchors: Vec<(Vec2, Vec2)> = smooth
+        .prev
+        .ents
+        .iter()
+        .zip(&smooth.curr.ents)
+        .filter_map(|(a, b)| {
+            let (a, b) = (a.as_ref()?, b.as_ref()?);
+            let n = screen_of(&cam_n, b.translation)?;
+            let shown = screen_of(&cam_b, crate::blend(a, b, alpha).translation)?;
+            Some((n, shown - n))
+        })
+        .collect();
+    let first = play.game.world.pool_first as i32;
+    for k in 0..play.game.world.pool.len() as i32 {
+        let i = first - k;
+        if !(0..128).contains(&i) {
+            continue;
+        }
+        let at = 8 * i as usize;
+        let h = |o: usize| u16::from_le_bytes([oam[at + o], oam[at + o + 1]]);
+        let (a0, a1) = (h(0), h(2));
+        if a0 & 0xFF == 0xA0 || (a0 >> 8) & 3 == 2 || a0 >> 14 == 3 {
+            continue;
+        }
+        let (w, ht) = SIZES[(a0 >> 14) as usize][(a1 >> 14) as usize];
+        let (mut x, mut y) = ((a1 & 0x1FF) as i32, (a0 & 0xFF) as i32);
+        if x >= 256 {
+            x -= 512;
+        }
+        if y >= 160 {
+            y -= 256;
+        }
+        let centre = Vec2::new((x + w / 2) as f32, (y + ht / 2) as f32);
+        let Some((_, delta)) = anchors
+            .iter()
+            .filter(|(p, _)| p.distance(centre) < NEAR)
+            .min_by(|a, b| a.0.distance(centre).total_cmp(&b.0.distance(centre)))
+        else {
+            continue;
+        };
+        let (x, y) = (x + delta.x.round() as i32, y + delta.y.round() as i32);
+        oam[at..at + 2].copy_from_slice(&((a0 & !0xFF) | (y & 0xFF) as u16).to_le_bytes());
+        oam[at + 2..at + 4].copy_from_slice(&((a1 & !0x1FF) | (x & 0x1FF) as u16).to_le_bytes());
+    }
+}
+
 /// OBJ layer of the GBA (1-D tile mapping, as the game sets it): regular and affine sprites, 16 and 256 colours;
 /// per screen pixel the top sprite's colour (earlier OAM entries over later ones) and whether it is
 /// semi-transparent.
 pub fn draw_objects(oam: &[u8], tiles: &[u8], palette: &[u16]) -> Vec<Option<(u16, bool)>> {
     let mut out = vec![None; 240 * 160];
-    const SIZES: [[(i32, i32); 4]; 3] = [
-        [(8, 8), (16, 16), (32, 32), (64, 64)],
-        [(16, 8), (32, 8), (32, 16), (64, 32)],
-        [(8, 16), (8, 32), (16, 32), (32, 64)],
-    ];
     let h = |i: usize| u16::from_le_bytes([oam[i], oam[i + 1]]);
     for i in (0..128).rev() {
         let (a0, a1, a2) = (h(8 * i), h(8 * i + 2), h(8 * i + 4));
