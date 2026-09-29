@@ -47,6 +47,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **entity-draw:** R12, the exact car/entity draw on top of `render::draw_world`, checked against every pixel of reference frames. Owns `render.rs` (+ `render_entities.rs`), `docs/engine/renderer.md`.
 - **viewer-geometry:** R23 racers and atlas from `atlas`, R8, R10, R11, R14, R19, R22 in the viewer, plus an original-resolution mode from `render::draw_world`. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
 - **hud-logic:** U1/U2, the HUD element logic and the minimap, traced frame by frame against shadow OAM, tiles and OBJ palette. Owns `ui.rs` (+ `hud.rs`), `docs/formats/ui.md`, `tools/ui_*`.
+- **harness:** shared tooling so agents stop hand-driving mGBA: a unicorn function oracle (call any game function on a RAM snapshot, diff its writes), a function coverage map over real play, and a merge tool for machine-readable integration notes. Owns `tools/oracle/`, `tools/coverage*`, `tools/notes_merge.py`, `docs/engine/harness.md`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
