@@ -3,6 +3,8 @@
 //! The port keeps the game's memory layout (entity array, 0x4FC-byte car physics structs, the world struct and
 //! the globals), so every step can be compared byte for byte with the reference build. The step reads the
 //! ROM and the race's RAM state ([`mem::Mem`]); `docs/engine/physics.md` documents the fields and algorithms.
+//! The migration to typed state ([`state`], [`layout`], [`data::GameData`]) is under way:
+//! `docs/engine/typed-state.md`.
 
 // Fixed-point expressions are written the way the game's C writes them (`a * b >> 12`); Rust gives `*` and `>>`
 // the same precedence as C, so the parentheses clippy asks for would only add noise.
