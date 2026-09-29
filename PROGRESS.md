@@ -41,7 +41,7 @@ Run everything: `cargo test --release --workspace` (about 3 minutes; the AI trac
    - a scenario library replacing the per-agent folders;
    - exact stop lists and frame counts in the replay tests;
    - the out-of-workspace oracle checker folded in.
-2. **One copy of everything:**
+2. **One copy of everything** (running: *dedup* agent on `crates/` for the maths crate, decoder, dump loader and domain helpers; *tools* agent on `tools/` for one recorder, one oracle CLI and one script loader; the viewer's camera and R28 come after dedup):
    - a fixed-point maths crate (`div`, `recip`, sine/atan, `isqrt`, `rand_table`, `angle_diff`);
    - one camera (drop the viewer's `Chase`), one racing line, one decoder;
    - one mGBA recorder with probe modules, and one oracle case CLI;
