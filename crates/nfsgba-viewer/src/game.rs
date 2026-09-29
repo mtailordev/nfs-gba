@@ -2,7 +2,7 @@
 //! route's grid), the chase camera (`camera_update` `0x08137cb0`, view 2) and its projection. Everything here is
 //! exact unless marked; `docs/engine/viewer-rendering.md` ("Game camera") has the derivation and the checks.
 
-use std::{fs, io};
+use std::io;
 
 use bevy::{
     camera::{CameraProjection, SubCameraView},
@@ -351,41 +351,37 @@ pub fn frame_transform(frame: &render::Frame, world: impl Fn(f32, f32, f32) -> V
     Transform::from_translation(eye).looking_to(ahead, Vec3::Y)
 }
 
-/// IWRAM and EWRAM of an mGBA race dump (`<prefix>.iwram.bin`, `<prefix>.wram.bin`).
-pub struct Dump {
-    iwram: Vec<u8>,
-    wram: Vec<u8>,
-}
+/// A race dump (`nfsgba_formats::Dump`: `<prefix>.iwram.bin`, `<prefix>.wram.bin`, …) with the reads the race
+/// setup needs.
+pub struct Dump(rom::Dump);
 
 impl Dump {
     /// `prefix` is relative to `$NFSGBA_DATA/work/e5298b24/`, e.g. `mgba/race`.
     pub fn load(prefix: &str) -> io::Result<Dump> {
-        let dir = rom::data_dir().join("work/e5298b24");
-        let read = |domain: &str| fs::read(dir.join(format!("{prefix}.{domain}.bin")));
-        Ok(Dump {
-            iwram: read("iwram")?,
-            wram: read("wram")?,
-        })
+        Ok(Dump(rom::Dump::load(
+            &rom::data_dir().join("work/e5298b24").join(prefix),
+        )?))
     }
 
     /// Live RAM (play mode: `nfsgba_game::Game`'s IWRAM and EWRAM).
     pub fn from_ram(iwram: Vec<u8>, wram: Vec<u8>) -> Dump {
-        Dump { iwram, wram }
+        Dump(rom::Dump {
+            iwram,
+            ewram: wram,
+            ..Default::default()
+        })
     }
 
     fn at(&self, a: u32) -> &[u8] {
-        match a {
-            0x0300_0000.. => &self.iwram[(a - 0x0300_0000) as usize..],
-            _ => &self.wram[(a - 0x0200_0000) as usize..],
-        }
+        self.0.at(a)
     }
 
     fn word(&self, a: u32) -> i32 {
-        i32::from_le_bytes(self.at(a)[..4].try_into().unwrap())
+        self.0.u32(a) as i32
     }
 
     fn half(&self, a: u32) -> u16 {
-        u16::from_le_bytes(self.at(a)[..2].try_into().unwrap())
+        self.0.u16(a)
     }
 
     /// `0x03005720`: the race's route index.
@@ -421,7 +417,7 @@ impl Dump {
                 .collect(),
             (0..sectors as u32).map(|s| self.half(heads + 2 * s)).collect(),
             (0..64).map(|s| self.matrix(s)).collect(),
-            &self.wram,
+            &self.0.ewram,
         )
     }
 }

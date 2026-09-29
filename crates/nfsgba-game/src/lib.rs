@@ -17,7 +17,7 @@ pub mod slots;
 pub mod trace;
 pub mod view;
 
-use std::{fs, io, path::Path};
+use std::{io, path::Path};
 
 use nfsgba_audio::{Engine, Rom, ram};
 use nfsgba_formats::{
@@ -96,16 +96,11 @@ impl Machine {
 
     /// From an mGBA dump (`PREFIX.wram.bin`, `.iwram.bin`, `.palette.bin`, `.vram.bin`, `.oam.bin`).
     pub fn load_dump(rom: Vec<u8>, prefix: &Path) -> io::Result<Machine> {
-        let read = |d: &str| fs::read(format!("{}.{d}.bin", prefix.display()));
-        let s = [
-            read("wram")?,
-            read("iwram")?,
-            read("palette")?,
-            read("vram")?,
-            read("oam")?,
-        ]
-        .concat();
-        Ok(Machine::from_state(rom, &s))
+        let d = nfsgba_formats::Dump::load(prefix)?.require(&["palette", "vram", "oam"])?;
+        Ok(Machine::from_state(
+            rom,
+            &[d.ewram, d.iwram, d.palette, d.vram, d.oam].concat(),
+        ))
     }
 
     pub fn state(&self) -> Vec<u8> {

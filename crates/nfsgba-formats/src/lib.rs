@@ -49,6 +49,107 @@ pub fn data_dir() -> PathBuf {
         .map_or_else(|| "data".into(), PathBuf::from)
 }
 
+/// An mGBA memory dump (`tools/mgba_remote.lua` `dump`, `tools/mgba_ctl.py`): one `<prefix>.<domain>.bin` file per
+/// memory domain. EWRAM (`wram`) and IWRAM are required; a domain without a file is empty.
+#[derive(Clone, Default)]
+pub struct Dump {
+    pub ewram: Vec<u8>,
+    pub iwram: Vec<u8>,
+    pub io: Vec<u8>,
+    pub palette: Vec<u8>,
+    pub vram: Vec<u8>,
+    pub oam: Vec<u8>,
+}
+
+impl Dump {
+    /// A dump fixture by its prefix under the test kit's work folder, with `required` domains present.
+    #[cfg(test)]
+    pub(crate) fn fixture(prefix: &str, required: &[&str]) -> Option<Dump> {
+        let path = nfsgba_testkit::dump(prefix)?;
+        match Dump::load(&path).and_then(|d| d.require(required)) {
+            Ok(d) => Some(d),
+            Err(e) => nfsgba_testkit::missing(&format!("{prefix}: {e}")),
+        }
+    }
+
+    /// The files `<prefix>.<domain>.bin`.
+    pub fn load(prefix: &std::path::Path) -> io::Result<Dump> {
+        let read = |d: &str| fs::read(format!("{}.{d}.bin", prefix.display()));
+        let optional = |d: &str| {
+            read(d).or_else(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Ok(Vec::new())
+                } else {
+                    Err(e)
+                }
+            })
+        };
+        Ok(Dump {
+            ewram: read("wram")?,
+            iwram: read("iwram")?,
+            io: optional("io")?,
+            palette: optional("palette")?,
+            vram: optional("vram")?,
+            oam: optional("oam")?,
+        })
+    }
+
+    /// From a per-domain reader (the test kit's, which logs every fixture it reads); `None` without EWRAM or IWRAM.
+    pub fn from_domains(mut read: impl FnMut(&str) -> Option<Vec<u8>>) -> Option<Dump> {
+        Some(Dump {
+            ewram: read("wram")?,
+            iwram: read("iwram")?,
+            io: read("io").unwrap_or_default(),
+            palette: read("palette").unwrap_or_default(),
+            vram: read("vram").unwrap_or_default(),
+            oam: read("oam").unwrap_or_default(),
+        })
+    }
+
+    /// An error unless every named domain is present (for callers that need more than the RAM).
+    pub fn require(self, domains: &[&str]) -> io::Result<Dump> {
+        for &d in domains {
+            let got = match d {
+                "io" => &self.io,
+                "palette" => &self.palette,
+                "vram" => &self.vram,
+                "oam" => &self.oam,
+                _ => continue,
+            };
+            if got.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::NotFound, format!("dump has no {d} file")));
+            }
+        }
+        Ok(self)
+    }
+
+    /// The bytes from GBA address `addr` to the end of its domain (EWRAM, IWRAM, I/O, palette, VRAM, OAM).
+    pub fn at(&self, addr: u32) -> &[u8] {
+        let (mem, off) = match addr >> 24 {
+            0x02 => (&self.ewram, addr & 0x3_FFFF),
+            0x03 => (&self.iwram, addr & 0x7FFF),
+            0x04 => (&self.io, addr & 0x3FF),
+            0x05 => (&self.palette, addr & 0x3FF),
+            0x06 => (&self.vram, addr & 0x1_FFFF),
+            0x07 => (&self.oam, addr & 0x3FF),
+            _ => panic!("dump has no domain at {addr:#010x}"),
+        };
+        &mem[off as usize..]
+    }
+
+    pub fn u8(&self, addr: u32) -> u8 {
+        self.at(addr)[0]
+    }
+
+    pub fn u16(&self, addr: u32) -> u16 {
+        u16_at(self.at(addr), 0)
+    }
+
+    pub fn u32(&self, addr: u32) -> u32 {
+        u32_at(self.at(addr), 0)
+    }
+}
+
 /// The canonical ROM named by `vault/manifest.json` (built by `tools/vault.py`).
 pub fn canonical_rom() -> io::Result<Vec<u8>> {
     let dir = data_dir();

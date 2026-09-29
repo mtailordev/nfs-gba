@@ -102,27 +102,25 @@ pub(crate) mod tests {
     use crate::{city, city_palette_raw, environments, sector_light};
     use nfsgba_testkit::rom;
 
-    /// IWRAM, EWRAM and palette RAM of an mGBA dump (`<dir>/<name>.<domain>.bin`).
-    pub(crate) struct Dump(Vec<u8>, Vec<u8>, pub(crate) Vec<u16>);
+    /// An mGBA dump (`<dir>/<name>.<domain>.bin`, `crate::Dump`) and its palette RAM as colours.
+    pub(crate) struct Dump(crate::Dump, pub(crate) Vec<u16>);
 
     impl Dump {
         pub(crate) fn load(dir: &str, name: &str) -> Option<Dump> {
-            let read = |domain: &str| nfsgba_testkit::read(&format!("{dir}/{name}.{domain}.bin"));
-            let pal = read("palette")?
+            let d = crate::Dump::fixture(&format!("{dir}/{name}"), &["palette"])?;
+            let pal = d
+                .palette
                 .chunks(2)
                 .take(256)
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
-            Some(Dump(read("iwram")?, read("wram")?, pal))
+            Some(Dump(d, pal))
         }
         pub(crate) fn at(&self, a: u32) -> &[u8] {
-            match a {
-                0x0300_0000.. => &self.0[(a - 0x0300_0000) as usize..],
-                _ => &self.1[(a - 0x0200_0000) as usize..],
-            }
+            self.0.at(a)
         }
         pub(crate) fn word(&self, a: u32) -> u32 {
-            u32::from_le_bytes(self.at(a)[..4].try_into().unwrap())
+            self.0.u32(a)
         }
         pub(crate) fn bytes4(&self, a: u32) -> [i8; 4] {
             <[u8; 4]>::try_from(&self.at(a)[..4]).unwrap().map(|b| b as i8)
@@ -165,7 +163,7 @@ pub(crate) mod tests {
         let sector = &city(&rom)[d.word(0x0300_5614) as usize];
         let light = sector_light(&rom, sector, px, pz).expect("two walls straddle the player");
         let ram = race_palette(&base, light);
-        for (i, (got, want)) in ram.iter().zip(&d.2).enumerate().skip(160) {
+        for (i, (got, want)) in ram.iter().zip(&d.1).enumerate().skip(160) {
             assert_eq!(got, want, "palette RAM entry {i}");
         }
     }
@@ -188,7 +186,7 @@ pub(crate) mod tests {
                 "{before} -> {after}"
             );
             assert_eq!(
-                [b.2[192], b.2[208]],
+                [b.1[192], b.1[208]],
                 [base[192], base[208]],
                 "{after}: palette RAM holds the raw shades"
             );

@@ -85,15 +85,15 @@ pub const STACK_TEXT: u32 = 0x0300_7400;
 impl Gba {
     /// An mGBA dump (`<prefix>.{wram,iwram,io,palette,vram,oam}.bin`, `tools/mgba_ctl.py dump`).
     pub fn from_dump(rom: Vec<u8>, prefix: &std::path::Path) -> std::io::Result<Gba> {
-        let read = |d: &str| std::fs::read(format!("{}.{d}.bin", prefix.display()));
+        let d = crate::Dump::load(prefix)?.require(&["io", "palette", "vram", "oam"])?;
         Ok(Gba {
             rom,
-            ewram: read("wram")?,
-            iwram: read("iwram")?,
-            io: read("io")?,
-            pal: read("palette")?,
-            vram: read("vram")?,
-            oam: read("oam")?,
+            ewram: d.ewram,
+            iwram: d.iwram,
+            io: d.io,
+            pal: d.palette,
+            vram: d.vram,
+            oam: d.oam,
             calls: Vec::new(),
             returns: Default::default(),
             texts: Vec::new(),
