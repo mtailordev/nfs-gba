@@ -200,6 +200,7 @@ mod intro;
 mod list;
 mod map;
 mod results;
+pub mod scene;
 mod setup;
 pub mod text;
 pub use adapt::*;

@@ -471,6 +471,21 @@ pub struct Object {
 }
 
 impl Object {
+    /// The game's 0x10-byte record (`from_bytes` reversed).
+    pub fn to_bytes(&self) -> [u8; 0x10] {
+        let f = [
+            self.flags,
+            self.scale[0] as u16,
+            self.scale[1] as u16,
+            self.frame as u16,
+            self.loaded as u16,
+            self.dy as u16,
+            self.dx as u16,
+            self.angle,
+        ];
+        std::array::from_fn(|i| f[i / 2].to_le_bytes()[i % 2])
+    }
+
     pub fn from_bytes(b: &[u8]) -> Self {
         let h = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
         Object {

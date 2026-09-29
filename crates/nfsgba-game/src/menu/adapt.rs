@@ -398,3 +398,26 @@ impl Gba {
         })
     }
 }
+
+/// The typed [`draw::Screen`] a RAM image shows: both pages, the palettes, the shadow OAM, OBJ tiles and the
+/// registers the menus set (for the checks of `scene.rs` and the frame comparisons against a headless run).
+pub fn screen_of(g: &Gba) -> draw::Screen {
+    let u16s = |b: &[u8]| -> Vec<u16> { b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() };
+    let mut s = draw::Screen::default();
+    s.pages[0].copy_from_slice(&g.vram[..240 * 160]);
+    s.pages[1].copy_from_slice(&g.vram[0xA000..0xA000 + 240 * 160]);
+    s.dispcnt = g.u16(0x0400_0000);
+    s.palette.copy_from_slice(&u16s(&g.pal[..0x400]));
+    for (i, e) in s.oam.iter_mut().enumerate() {
+        *e = std::array::from_fn(|k| g.u16(0x0300_64F0 + 8 * i as u32 + 2 * k as u32));
+    }
+    s.obj_tiles.copy_from_slice(&g.vram[0x14000..0x18000]);
+    s.tile_base = g.u16(0x0300_64E0);
+    (s.bldcnt, s.bldalpha, s.dispstat, s.timer3) = (
+        g.u16(0x0400_0050),
+        g.u16(0x0400_0052),
+        g.u16(0x0400_0004),
+        g.u16(0x0400_010E),
+    );
+    s
+}

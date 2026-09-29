@@ -202,6 +202,15 @@ pub struct Screen {
     pub palette: [u16; 512],
     /// Shadow OAM: 128 entries of attr0, attr1, attr2 and the affine parameter.
     pub oam: [[u16; 4]; 128],
+    /// OBJ VRAM in the bitmap modes (`0x06014000..`, 16 KiB; below it are the pages): the sprite tiles from tile 0x200.
+    pub obj_tiles: Vec<u8>,
+    /// The OBJ tile base (`*0x030064E0`): the tile number of OBJ VRAM's first tile the OAM entries count from.
+    pub tile_base: u16,
+    /// Registers the menus set: `BLDCNT`, `BLDALPHA`, `DISPSTAT` and timer 3's control.
+    pub bldcnt: u16,
+    pub bldalpha: u16,
+    pub dispstat: u16,
+    pub timer3: u16,
 }
 
 impl Default for Screen {
@@ -211,6 +220,12 @@ impl Default for Screen {
             dispcnt: 0x0404,
             palette: [0; 512],
             oam: [[0; 4]; 128],
+            obj_tiles: vec![0; 0x4000],
+            tile_base: 0x200,
+            bldcnt: 0,
+            bldalpha: 0,
+            dispstat: 0,
+            timer3: 0,
         }
     }
 }
