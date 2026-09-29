@@ -5,7 +5,7 @@
 -- Globals (GLOBALS): mode lapped laps opponents time finished view player difficulty state48 rand ww_flag route
 -- Commands in rr_cmd.txt (polled every 8 frames): "auto on", "auto off", "auto back N" (reverse for N frames),
 -- "mark TEXT", "every N" (sample period for unchanged per-frame calls; 0 = changes only), "log NAME" (write to
--- NAME.log from now on).
+-- NAME.log from now on), "planes" (log the world line and plane tables now, as fn=planes_now).
 local dir = os.getenv("NFSGBA_MGBA_DIR")
 local out = assert(io.open(dir .. "/rr.log", "a"))
 local every = 64
@@ -47,11 +47,11 @@ local function globals()
 end
 
 -- Every racer, the globals and the results block (0x03005650, 0x40 bytes).
-local function race(tag)
+local function race(tag, upto)
   local t, e = {}, entities()
   t[#t + 1] = tag .. ".g=" .. globals()
   t[#t + 1] = tag .. ".res=" .. hex(0x03005650, 0x40)
-  for i = 0, racers() - 1 do
+  for i = 0, math.max(racers() - 1, upto or 0) do
     local r = racer(e + 0xA4 * i)
     if r then t[#t + 1] = tag .. ".c" .. i .. "=" .. r end
   end
@@ -107,9 +107,9 @@ local open = nil -- the tracker/AI call around a lap_crossing, which records its
 trace(0x0813F098, "lap_crossing", function()
   local e = emu:readRegister("r1")
   if open then open.mid = racer(e) end
-  return {who = r16(e), text = race("pre")}
+  return {who = r16(e), text = race("pre", r16(e))}
 end, function(p)
-  return "who=" .. p.who .. " " .. p.text .. " " .. race("post")
+  return "who=" .. p.who .. " " .. p.text .. " " .. race("post", p.who)
 end)
 
 -- The player's racing-line tracker FUN_0813EDD8(world, entity); exit at its epilogue 0x0813EFF6.
@@ -227,11 +227,13 @@ local function profile() return r32(0x030056EC) end
 trace(0x0812EFE8, "career_race_payout", function()
   local p = profile()
   return {cash = r32(p + 0xC), ev = hex(p + 0x205, 18), zone = r8(p + 0x1FB), slot = r8(p + 0x1FC),
-    flag = r32(0x030000A0), mode = r32(0x030056E0), car = hex(r32(0x0300539C), 17 * 15), pcar = i8(p + 0x10)}
+    res = hex(0x03005730, 0x40), flag = r32(0x030000A0), mode = r32(0x030056E0), opp = r32(0x03005784),
+    car = hex(r32(0x0300539C), 17 * 15), pcar = i8(p + 0x10)}
 end, function(p)
   local q = profile()
-  return "career=" .. p.flag .. " mode=" .. p.mode .. " zone=" .. p.zone .. " slot=" .. p.slot .. " car=" .. p.pcar ..
-    " records=" .. p.car .. " pre.cash=" .. p.cash .. " pre.events=" .. p.ev .. " order=" .. hex(0x03005730, 8) ..
+  return "career=" .. p.flag .. " mode=" .. p.mode .. " opponents=" .. p.opp .. " zone=" .. p.zone .. " slot=" ..
+    p.slot .. " car=" .. p.pcar .. " records=" .. p.car .. " pre.cash=" .. p.cash .. " pre.events=" .. p.ev ..
+    " pre.ranked=" .. p.res .. " order=" .. hex(0x03005730, 8) .. " post.ranked=" .. hex(0x03005730, 0x40) ..
     " post.cash=" .. r32(q + 0xC) .. " post.events=" .. hex(q + 0x205, 18) .. " paid=" .. i32(q + 0x3B8)
 end)
 trace(0x0812C30C, "style_rating", function()
@@ -262,42 +264,54 @@ end, function(p)
     " out=" .. hex(p.b, 0x200)
 end)
 
--- Autopilot: throttle, and steer at the racing-line point two ahead of the player's segment.
+-- Autopilot: aim at the first racing-line point more than LOOK units away (following the player's section and
+-- its end link), lift off in sharp turns, brake in very sharp ones, and back out when stuck.
 local auto, back = false, 0
+local LOOK = 2500
 local KEY = {A = 1, B = 2, RIGHT = 16, LEFT = 32}
+local stuck, last = 0, nil
 local function point(sec, idx)
   local h = r32(WORLD + 0x40) + 8 * sec
   local w = r32(WORLD + 0x44) + 0x18 * (r32(h + 4) + idx)
   return i32(w), i32(w + 4), w
 end
-local function target()
-  local e = entities() + 0xA4 * r32(0x03000060)
-  local sec, idx = r16(e + 0x72), i16(e + 0x90) + 2
-  for _ = 1, 4 do
+local function target(e, x, z)
+  local sec, idx = r16(e + 0x72), i16(e + 0x90)
+  local tx, tz
+  for _ = 1, 8 do
+    idx = idx + 1
     local count = r16(r32(WORLD + 0x40) + 8 * sec)
-    if idx <= count - 1 then break end
-    if sec == 0 then idx = idx - (count - 1) break end
-    local _, _, w = point(sec, count - 1)
-    if r16(w + 0xE) == 0xFFFF then idx = count - 1 break end
-    idx, sec = r16(w + 0xE) + idx - count + 1, r16(w + 0xC)
+    if idx > count - 1 then
+      if sec == 0 then
+        idx = idx - (count - 1)
+      else
+        local _, _, w = point(sec, count - 1)
+        if r16(w + 0xE) == 0xFFFF then idx = count - 1 else idx, sec = r16(w + 0xE) + idx - count + 1, r16(w + 0xC) end
+      end
+    end
+    tx, tz = point(sec, idx)
+    if (tx - x) ^ 2 + (tz - z) ^ 2 > LOOK ^ 2 then break end
   end
-  local tx, tz = point(sec, idx)
-  return e, tx, tz
+  return tx, tz
 end
 local function steer()
+  local e = entities() + 0xA4 * r32(0x03000060)
+  local x, z = i32(e + 0x0C) // 256, i32(e + 0x14) // 256
+  if last and (x - last[1]) ^ 2 + (z - last[2]) ^ 2 < 4 then stuck = stuck + 1 else stuck = 0 end
+  last = {x, z}
+  if stuck > 60 then back, stuck = 45, 0 end
+  local tx, tz = target(e, x, z)
+  local want = math.floor(math.atan(tx - x, tz - z) / (2 * math.pi) * 16384) & 0x3FFF
+  local diff = ((want - ((r32(e + 0x2C) >> 8) & 0x3FFF) + 8192) & 0x3FFF) - 8192
   if back > 0 then
     back = back - 1
-    return KEY.B
+    return KEY.B | (diff > 0 and KEY.LEFT or KEY.RIGHT)
   end
-  local e, tx, tz = target()
-  local dx, dz = tx - (i32(e + 0x0C) // 256), tz - (i32(e + 0x14) // 256)
-  local want = math.floor(math.atan(dx, dz) / (2 * math.pi) * 16384) & 0x3FFF
-  local diff = ((want - ((r32(e + 0x2C) >> 8) & 0x3FFF) + 8192) & 0x3FFF) - 8192
-  local keys = KEY.A
-  if diff > 200 then keys = keys | KEY.RIGHT elseif diff < -200 then keys = keys | KEY.LEFT end
+  local keys = math.abs(diff) > 4000 and KEY.B or math.abs(diff) > 2000 and 0 or KEY.A
+  if diff > 150 then keys = keys | KEY.RIGHT elseif diff < -150 then keys = keys | KEY.LEFT end
   if emu:currentFrame() % 30 == 0 then
     write("auto", string.format("x=%d z=%d tx=%d tz=%d head=%d want=%d diff=%d keys=%d seg=%d",
-      i32(e + 0x0C) // 256, i32(e + 0x14) // 256, tx, tz, (r32(e + 0x2C) >> 8) & 0x3FFF, want, diff, keys, i16(e + 0x90)))
+      x, z, tx, tz, (r32(e + 0x2C) >> 8) & 0x3FFF, want, diff, keys, i16(e + 0x90)))
   end
   return keys
 end
@@ -317,7 +331,12 @@ callbacks:add("frame", function()
     elseif op == "auto" then back = tonumber(arg:match("back (%d+)")) or 0; auto = true
     elseif op == "every" then every = tonumber(arg)
     elseif op == "log" then out:close(); out = assert(io.open(dir .. "/" .. arg .. ".log", "a"))
-    elseif op == "mark" then write("mark", "text=" .. arg:gsub("%s", "_")) end
+    elseif op == "mark" then write("mark", "text=" .. arg:gsub("%s", "_"))
+    elseif op == "planes" then
+      write("planes_now", "g=" .. globals() .. " sections=" .. hex(r32(WORLD + 0x40), 0x50) .. " points=" ..
+        hex(r32(WORLD + 0x44), 0x1800) .. " planes=" .. hex(r32(0x03005FB4), 0x2000) .. " back=" ..
+        hex(r32(0x03005FB8), 0x400))
+    end
   end
 end)
 

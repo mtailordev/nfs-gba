@@ -637,6 +637,34 @@ pub fn payout_place(order: &[u8]) -> u8 {
     }
 }
 
+/// The ranking `career_race_payout` starts with (`FUN_0812e8e4`, rows swapped by `FUN_0812e860`), on the ranked
+/// results at `0x03005730`: per slot a byte at `+0`, the entity id at `+4`, bytes at `+8` and `+0xC`, and `u32` at
+/// `+0x10` (best lap), `+0x20` (time) and `+0x30` (hunter life). Hunter (mode 2) ranks by life, most first
+/// (unsigned); circuit, elimination and sprint by time, least first (signed). A bubble sort over `opponents + 1`
+/// slots with `opponents + 1` passes; ties keep their order.
+pub fn rank_results(t: &mut [u8; 0x40], opponents: u32, mode: u32) {
+    let key = |t: &[u8; 0x40], k: usize| match mode {
+        2 => i64::from(u32_at(t, 0x30 + 4 * k)),
+        _ => i64::from(u32_at(t, 0x20 + 4 * k) as i32),
+    };
+    if mode > 3 {
+        return;
+    }
+    let n = opponents as usize;
+    for _ in 0..=n {
+        for k in 0..n {
+            let (a, b) = (key(t, k), key(t, k + 1));
+            if if mode == 2 { a < b } else { b < a } {
+                for (at, size) in [(0x10, 4), (0, 1), (4, 1), (0x20, 4), (0xC, 1), (0x30, 4), (8, 1)] {
+                    for i in 0..size {
+                        t.swap(at + size * k + i, at + size * (k + 1) + i);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Race progress used for positions (`FUN_081400ec`): laps done times the lap length plus the distance into the
 /// lap. `laps_left` counts down from `laps` (driver `+0xC5`); sprints (`0x0300608C` = 0) use the distance alone.
 pub fn race_progress(lapped: bool, lap_length: i32, laps: i32, laps_left: i32, distance: i32) -> i32 {
@@ -1710,9 +1738,12 @@ mod tests {
             };
             (race, v[12] as usize)
         }
-        fn cars(&self, tag: &str, race: &Race) -> Vec<Racer> {
-            (0..=race.opponents)
-                .map(|i| self.racer(&format!("{tag}.c{i}")))
+        /// Every captured car: the racers, and for a lap crossing every entity up to the crossing one.
+        fn cars(&self, tag: &str) -> Vec<Racer> {
+            (0..)
+                .map(|i| format!("{tag}.c{i}"))
+                .take_while(|k| self.kv.contains_key(k))
+                .map(|k| self.racer(&k))
                 .collect()
         }
     }
@@ -1759,53 +1790,74 @@ mod tests {
         let mut counts = std::collections::BTreeMap::<String, usize>::new();
         // Per file: the lapped flag the plane table was built with (0 when a file has no build line).
         let mut built: std::collections::HashMap<String, bool> = Default::default();
+        let mut last_sav = std::collections::HashMap::new();
         for t in traces() {
             let at = || format!("{} frame {} {}", t.file, t.frame, t.func);
             let lapped_at_build = *built.get(&t.file).unwrap_or(&false);
             let line_for = |race: &Race, route: usize| RacingLine::new(&rom, route, race.mode == 3).unwrap();
+            // Scenes without a racing line (route 0: an all-zero world copy) have no rules to check.
+            let g = ["g", "pre.g"].into_iter().find(|k| t.kv.contains_key(*k));
+            if let Some(g) = g
+                && RacingLine::new(&rom, t.race(g, "").1, false).is_none()
+            {
+                if t.func == "build_planes" {
+                    assert!(t.bytes("sections").iter().all(|&b| b == 0), "{}", at());
+                }
+                continue;
+            }
             match t.func.as_str() {
-                "build_planes" => {
+                // At the build the line is not measured yet (distances are checked mid-race only), and the build's
+                // lapped flag is known; a mid-race capture must match the build with one of the two flags.
+                "build_planes" | "planes_now" => {
                     let (race, route) = t.race("g", "");
                     let line = line_for(&race, route);
-                    let lapped = t.get("lapped") != "0";
-                    built.insert(t.file.clone(), lapped);
                     let (sections, points) = (t.bytes("sections"), t.bytes("points"));
                     let total: usize = line.sections.iter().map(|s| usize::from(s.count)).sum();
                     for (s, sec) in line.sections.iter().enumerate() {
-                        assert_eq!(
-                            (u16_at(&sections, 8 * s), u32_at(&sections, 8 * s + 4)),
-                            (sec.count, sec.first)
-                        );
+                        let got = (u16_at(&sections, 8 * s), u32_at(&sections, 8 * s + 4));
+                        assert_eq!(got, (sec.count, sec.first), "{} section {s}", at());
                     }
+                    let now = t.func == "planes_now";
                     for (k, p) in line.points[..total].iter().enumerate() {
                         let w = 0x18 * k;
                         let got = (u32_at(&points, w) as i32, u32_at(&points, w + 4) as i32);
                         let links = (u16_at(&points, w + 0xC), u16_at(&points, w + 0xE));
-                        assert_eq!(
-                            ((p.x, p.z), (p.link_section, p.link_index)),
-                            (got, links),
-                            "{} point {k}",
-                            at()
-                        );
+                        let dist = if now {
+                            u32_at(&points, w + 0x10) as i32
+                        } else {
+                            p.distance
+                        };
+                        let want = ((p.x, p.z), (p.link_section, p.link_index), p.distance);
+                        assert_eq!(want, (got, links, dist), "{} point {k}", at());
                     }
-                    let (planes, back) = line.planes(lapped);
                     let (table, back_table) = (t.bytes("planes"), t.bytes("back"));
-                    for (k, row) in planes[..total].iter().enumerate() {
-                        let ram: Plane = std::array::from_fn(|i| u32_at(&table, 0x20 * k + 4 * i) as i32);
-                        assert_eq!(*row, ram, "{} plane {k}", at());
-                    }
-                    assert!(
-                        (0..256).all(|s| back[s] == u32_at(&back_table, 4 * s) as i32),
-                        "{}",
-                        at()
+                    let matches =
+                        |lapped: bool| {
+                            let (planes, back) = line.planes(lapped);
+                            planes[..total].iter().enumerate().all(|(k, row)| {
+                                *row == std::array::from_fn(|i| u32_at(&table, 0x20 * k + 4 * i) as i32)
+                            }) && (0..256).all(|s| back[s] == u32_at(&back_table, 4 * s) as i32)
+                        };
+                    let lapped = if now {
+                        [false, true].into_iter().find(|&l| matches(l))
+                    } else {
+                        Some(t.get("lapped") != "0").filter(|&l| matches(l))
+                    };
+                    built.insert(
+                        t.file.clone(),
+                        lapped.unwrap_or_else(|| panic!("{}: plane table", at())),
                     );
                 }
                 "lap_crossing" => {
                     let (mut race, route) = t.race("pre.g", "pre.res");
-                    let mut cars = t.cars("pre", &race);
-                    line_for(&race, route).lap_crossing(&rom, &mut race, &mut cars, t.get("who").parse().unwrap());
+                    let mut cars = t.cars("pre");
+                    let who: usize = t.get("who").parse().unwrap();
+                    if who >= cars.len() {
+                        continue; // captured before the tracer logged non-racers (the wingman)
+                    }
+                    line_for(&race, route).lap_crossing(&rom, &mut race, &mut cars, who);
                     let (want, _) = t.race("post.g", "post.res");
-                    assert_eq!((race, cars), (want, t.cars("post", &want)), "{}", at());
+                    assert_eq!((race, cars), (want, t.cars("post")), "{}", at());
                 }
                 "ai_advance" if !t.kv.contains_key("ok") => continue, // captured before the tracer logged 0x030060C0
                 "track_player" | "ai_advance" => {
@@ -1842,9 +1894,9 @@ mod tests {
                 }
                 "update_places" => {
                     let (race, route) = t.race("pre.g", "pre.res");
-                    let mut cars = t.cars("pre", &race);
+                    let mut cars = t.cars("pre");
                     line_for(&race, route).update_places(&race, &mut cars);
-                    assert_eq!(cars, t.cars("post", &race), "{}", at());
+                    assert_eq!(cars, t.cars("post"), "{}", at());
                 }
                 "hunter_life_tick" | "hunter_drain_a" | "hunter_drain_b" => {
                     let (race, _) = t.race("g", "");
@@ -1894,6 +1946,12 @@ mod tests {
                     );
                 }
                 "career_race_payout" => {
+                    if t.kv.contains_key("pre.ranked") {
+                        let mut ranked: [u8; 0x40] = t.bytes("pre.ranked").try_into().unwrap();
+                        let (opponents, mode) = (t.get("opponents").parse().unwrap(), t.get("mode").parse().unwrap());
+                        rank_results(&mut ranked, opponents, mode);
+                        assert_eq!(ranked[..], t.bytes("post.ranked")[..], "{} ranking", at());
+                    }
                     if t.get("career") != "1" {
                         continue; // only career events (0x030000A0 = 1) pay
                     }
@@ -1922,35 +1980,61 @@ mod tests {
                     assert_eq!(save.unlocks(&rom)[..], t.bytes("unlocks")[..], "{}", at());
                 }
                 "save_encode" => {
-                    let (heap, out) = (t.bytes("heap"), t.bytes("out"));
-                    let save = Save::parse(out[..].try_into().unwrap()).unwrap();
-                    assert_eq!(save.encode(heap[..].try_into().unwrap())[..], out[..], "{}", at());
-                    // The image holds the profile and globals as they were when the game saved.
+                    // The profile, car records and globals as the game held them when it saved (the image is
+                    // lossy: fields wider than their bits are cut), encoded over the heap bytes the game wrote into.
                     let (p, cars, g) = (t.bytes("profile"), t.bytes("cars"), t.ints("globals"));
-                    assert_eq!(
-                        (&p[..8], u32_at(&p, 0xC), &p[0x205..0x217]),
-                        (&save.name[..], save.cash, &save.events[..]),
-                        "{}",
-                        at()
-                    );
-                    assert!((0..15).all(|i| cars[17 * i..17 * i + 17] == save.cars[i]), "{}", at());
-                    let o = save.options;
-                    let want = [
-                        o.camera,
-                        o.units,
-                        o.hud,
-                        o.transmission,
-                        o.music << 3,
-                        o.sfx << 3,
-                        o.language,
-                        o.catch_up,
-                        o.mode_flags,
-                    ];
-                    assert_eq!(g, want.map(i64::from), "{}", at());
+                    let flag = |o: usize| u32_at(&p, o) as u8 & 1;
+                    let save = Save {
+                        name: p[..8].try_into().unwrap(),
+                        cars: std::array::from_fn(|i| cars[17 * i..17 * i + 17].try_into().unwrap()),
+                        car_bits: u16_at(&p, 0x12),
+                        car_extra: std::array::from_fn(|i| p[0x14 + 15 * i..0x23 + 15 * i].try_into().unwrap()),
+                        cash: u32_at(&p, 0xC),
+                        car: p[0x10],
+                        zone: p[0x1FB],
+                        slot: p[0x1FC],
+                        wingman: p[0x200],
+                        field_254: p[0x254],
+                        field_1f8: p[0x1F8],
+                        field_f5: p[0xF5..0xF9].try_into().unwrap(),
+                        events: p[0x205..0x217].try_into().unwrap(),
+                        best_times: std::array::from_fn(|i| u16_at(&p, 0x218 + 2 * i)),
+                        options: Options {
+                            camera: g[0] as u8,
+                            units: g[1] as u8,
+                            hud: g[2] as u8,
+                            transmission: g[3] as u8,
+                            music: (g[4] >> 3) as u8,
+                            sfx: (g[5] >> 3) as u8,
+                            language: g[6] as u8,
+                            catch_up: g[7] as u8,
+                            mode_flags: g[8] as u8,
+                        },
+                        unlock_flags: [0x47C, 0x480, 0x484, 0x48C, 0x488, 0x478]
+                            .iter()
+                            .enumerate()
+                            .map(|(b, &o)| flag(o) << b)
+                            .sum(),
+                    };
+                    let (heap, out) = (t.bytes("heap"), t.bytes("out"));
+                    assert_eq!(save.encode(heap[..].try_into().unwrap())[..], out[..], "{}", at());
+                    // And a decode of the game's image encodes back to it over the same heap bytes.
+                    let back = Save::parse(out[..].try_into().unwrap()).unwrap();
+                    assert_eq!(back.encode(heap[..].try_into().unwrap())[..], out[..], "{}", at());
+                    // `<log>.sav`, when kept, is the .sav mGBA wrote after the log's last save.
+                    let sav = data_dir()
+                        .join("work/e5298b24/race-rules")
+                        .join(t.file.replace(".log", ".sav"));
+                    if let Ok(sav) = std::fs::read(sav) {
+                        last_sav.insert(t.file.clone(), (eeprom_to_buffer(&sav) == out[..], at()));
+                    }
                 }
                 _ => continue,
             }
             *counts.entry(t.func).or_default() += 1;
+        }
+        for (same, at) in last_sav.values() {
+            assert!(same, "{at}: the .sav mGBA wrote is not this image");
         }
         eprintln!("race-rule trace lines checked: {counts:?}");
     }
