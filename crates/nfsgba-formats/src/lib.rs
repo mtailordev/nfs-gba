@@ -3,6 +3,8 @@
 
 use std::{env, fs, io, path::PathBuf};
 
+pub mod render;
+
 pub const ROM_BASE: u32 = 0x0800_0000;
 /// BN7E level descriptors (0x68-byte records). Every record shares the city and the vehicle model bank.
 pub const LEVEL_TABLE: usize = 0x7F_2B08;
