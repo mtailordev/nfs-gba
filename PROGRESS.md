@@ -16,7 +16,7 @@ Done and committed:
   - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
   - world scale: one unit for cars and city, about 48 per metre.
 - **Rust workspace:**
-  - `crates/nfsgba-sim` has 4 tests (2 trace tests over 9 scenarios); `crates/nfsgba-formats` has 35 real-data tests (modules `atlas`, `career`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10;
+  - `crates/nfsgba-sim` has 4 tests (2 trace tests over 9 scenarios); `crates/nfsgba-formats` has 51 real-data tests (modules `atlas`, `career`, `hud`, `paint`, `render`, `sky` and `ui` from the agents); `crates/nfsgba-audio` has 10; `crates/nfsgba-viewer` has 6;
   - `crates/nfsgba-viewer` (Bevy 0.19.1) renders GBA-style indexed colour with the exact per-frame light tint, the textured city, the skies (K cycles them; default environment 11 = the reference race) and a showroom of all cars in every paint variant.
   - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
   - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
@@ -45,7 +45,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).
 - **viewer-sky-paint:** done and merged. One race palette, the per-line backdrop and the skyline layer in the viewer (R3, R5 closed; R6 leftovers only); level chase camera with focal 150 (part of R11).
 - **car-atlas:** done and merged. `atlas.rs`: the player's atlas (overlay, decal set, wheel rims) and the opponents' choice, pixel-exact at four race starts; R13 closed. The viewer does not use it yet (R23).
-- **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
+- **race-rules:** done and merged. Every race rule exact in `career.rs` (traces plus oracle), lap arming found, hunter life at zero only clamps, `Save::encode` byte-identical; the race-time racing line `career::RacingLine` (D5–D7 closed; D15, D16).
 - **entity-draw:** done and merged. `render/entities.rs`: the car draw is exact, so `draw_world` reproduces whole frames pixel for pixel (17 captures); R12 closed. Matrix-slot building is still an input (R25).
 - **viewer-geometry:** done and merged. The viewer uses the game's chase camera, projection and per-frame visible list; racers from `atlas`; an original-resolution mode equal to s15 on every non-HUD pixel (R8, R15, R19, R22, R23 closed; R10, R11, R14 narrowed; R27 high-res differences).
 - **hud-logic:** done and merged. `hud.rs`: every HUD element, the messages and the minimap, exact over 7,096 traced frames (U1, U2 closed). The HUD arrow is the off-route warning `0x0300601C`.
