@@ -23,7 +23,7 @@ from common import data_dir
 
 STATE = 0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400
 SCENARIOS = {
-    # name: (savestate, arming, game frames, keys).
+    # name: (savestate, arming, game frames, keys[, commands before recording, e.g. RAM pokes]).
     # From the reference race (race.ss): accelerate, steer both ways, brake, accelerate again.
     "drive": ("race", "", 150, ["wait 2", "hold A 200", "hold A,LEFT 40", "hold A 100", "hold A,RIGHT 40",
                                 "hold B 40", "hold A 400"]),
@@ -43,9 +43,14 @@ SCENARIOS = {
     # From the reference race: the camera's other branches. SELECT to the bumper view, DOWN alone looks back,
     # SELECT back to the chase view (the reset behind the car), DOWN in the chase view, then L and R held with A
     # (nitro, if the car has it: the focal length's speed effect and the flames).
-    "views": ("race", "", 600, ["wait 2", "hold A 200", "hold A,SELECT 2", "hold A 200", "hold DOWN 60",
-                                "hold A 150", "hold A,SELECT 2", "hold A 150", "hold DOWN 60", "hold A 100",
+    "views": ("race", "", 600, ["wait 2", "hold A 200", "hold A,SELECT 6", "hold A 200", "hold DOWN 60",
+                                "hold A 150", "hold A,SELECT 6", "hold A 150", "hold DOWN 60", "hold A 100",
                                 "hold A,L 120", "hold A,R 120", "hold A,LEFT 60", "hold A 1200"]),
+    # From the reference race with nitro in the tank (the Quick Play car has none: before recording, one byte of
+    # the player's tank, driver +0x4C8 = 0x0202CAEC, is poked to make it 0x10000; +0x4CC is 0, so it never drains):
+    # A+L (nitro in binding set 0) for the camera's speed effect on the focal length and the nitro flames.
+    "nitro": ("race", "", 300, ["wait 2", "hold A 200", "hold A,L 150", "hold A 100", "hold A,L 60",
+                                "hold A,L,LEFT 40", "hold A,L,RIGHT 40", "hold A 600"], ["poke 0x0202CAEE 1"]),
 }
 
 
@@ -54,9 +59,9 @@ def session():
 
 
 def record(name):
-    state, arming, frames, keys = SCENARIOS[name]
+    state, arming, frames, keys, *pre = SCENARIOS[name]
     work = session()
-    mgba_ctl.main([f"load {state}"])
+    mgba_ctl.main([f"load {state}", *(pre[0] if pre else [])])
     (work / "gtrace.tmp").write_text(f"{name} {frames} {arming}\n")
     (work / "gtrace.tmp").replace(work / "gtrace.txt")
     mgba_ctl.main(keys)

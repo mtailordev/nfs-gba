@@ -58,9 +58,18 @@ fn scratch(m: &Mem) -> Vec<(Range<u32>, &'static str)> {
 }
 
 /// The recorded runs (`tools/game_trace.py`): `drive` (150 frames from the reference race), `live` (700 frames from
-/// the start of a hard circuit with heavy traffic: opponents alongside, braking, a car-to-car contact at frame 387)
-/// and `trail` (700 frames of a sprint behind the opponents through heavy traffic).
-const TRACES: [(&str, &str); 3] = [("game-loop", "drive"), ("live-race", "live"), ("live-race", "trail")];
+/// the start of a hard circuit with heavy traffic: opponents alongside, braking, a car-to-car contact at frame 387),
+/// `trail` (700 frames of a sprint behind the opponents through heavy traffic) and `views` (600 frames from the
+/// reference race: the bumper view, looking back in both views, the switch back behind the car, L and R held) and
+/// `nitro` (300 frames from the reference race with nitro poked into the tank before recording: the camera's speed
+/// effect and the nitro flames).
+const TRACES: [(&str, &str); 5] = [
+    ("game-loop", "drive"),
+    ("live-race", "live"),
+    ("live-race", "trail"),
+    ("live-race", "views"),
+    ("live-race", "nitro"),
+];
 
 /// Car code paths the physics-paths work owns (FIDELITY D9–D11): a frame that reaches one stops with `Unported`,
 /// which the replays accept and report; every frame before it must be exact.
