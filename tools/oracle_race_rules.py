@@ -189,7 +189,7 @@ def set_globals(c, rng, opponents, **fix):
     vals.update(fix)
     addr = {"mode": 0x030056E0, "lapped": 0x0300608C, "laps": 0x030056E4, "opponents": 0x03005784,
             "time": 0x03005800, "finished": 0x030061A4, "view": 0x030057F8, "difficulty": 0x03005608,
-            "state48": 0x03000048}
+            "state48": 0x03000048, "player": 0x03000060}
     for k, v in vals.items():
         c.put(addr[k], "I" if k != "laps" else "i", v)
     return vals
