@@ -116,6 +116,9 @@ def replay(name: str, coverage: bool) -> int:
     states = list(base.ram_states(src, name))
     lines, bad, checked = [], 0, 0
     for i in range(len(states) - 1):
+        if i and i % 100 == 0:
+            # A fresh machine now and then: unicorn 2.1.4 crashes natively after a few thousand runs with hooks.
+            u = base.machine(src, name, rom)
         u.mem_write(0x02000000, states[i][:0x40000].tobytes())
         u.mem_write(0x03000000, states[i][0x40000:].tobytes())
         array = rd(u, base.WORLD + 0x3C, 4)
@@ -127,7 +130,10 @@ def replay(name: str, coverage: bool) -> int:
             handler = rd(u, HANDLERS + 4 * index, 4) & ~1
             own = index in OWN
             before = base.snapshot(u)
-            calls = call(u, handler, e, covered if own else None, entries)
+            try:
+                calls = call(u, handler, e, covered if own else None, entries)
+            except OSError as err:
+                raise RuntimeError(f"{name} step {i} entity {k} handler {index:#x}: unicorn failed ({err})") from err
             writes = base.changes(before, base.snapshot(u))
             lines.append(f"{i};{k};{index:#x};{' '.join(f'{a:08x}={v:02x}' for a, v in writes)};{' '.join(calls)}")
         # The next traced step must show every non-player car as the loop left it.

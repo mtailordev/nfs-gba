@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 9] = [
+const SCENARIOS: [&str; 11] = [
     "start",
     "accel",
     "brake",
@@ -23,6 +23,8 @@ const SCENARIOS: [&str; 9] = [
     "reverse",
     "handbrake",
     "long",
+    "sprint",
+    "circuit",
 ];
 const EWRAM: usize = 0x4_0000;
 /// The IWRAM stack, which the oracle ignores.
@@ -174,7 +176,10 @@ fn each_call_matches_the_game() {
     };
     let (mut total, mut total_stopped) = (0, 0);
     for name in SCENARIOS {
-        let (Some(trace), Some(calls)) = (load(&traces, name), oracle(&oracles, name)) else {
+        let (Some(trace), Some(calls)) = (
+            load(&traces, name).or_else(|| load(&oracles, name)),
+            oracle(&oracles, name),
+        ) else {
             eprintln!("{name}: not recorded; skipped");
             continue;
         };
@@ -306,13 +311,18 @@ fn replay_matches_the_trace() {
         return;
     };
     for name in SCENARIOS {
-        let (Some(trace), Some(calls)) = (load(&traces, name), oracle(&oracles, name)) else {
+        let (Some(trace), Some(calls)) = (
+            load(&traces, name).or_else(|| load(&oracles, name)),
+            oracle(&oracles, name),
+        ) else {
             continue;
         };
         let steps = trace.deltas.len();
         let mut own: std::collections::BTreeMap<u32, Own> = Default::default();
-        let (mut compared, mut timing, mut stopped_at) = (0, 0, None);
-        'steps: for i in 0..steps - 1 {
+        let (mut compared, mut timing, mut stops) = (0, 0, 0);
+        for i in 0..steps - 1 {
+            // Cars that reached unported code this frame: they take the game's result and re-sync from the trace.
+            let mut resynced = BTreeSet::new();
             let mut mem = trace.state(&rom, i);
             let entities = mem.u32(0x0300_00FC);
             // Carry each car's own state over the reference.
@@ -347,8 +357,11 @@ fn replay_matches_the_trace() {
                     }
                     Some(Ok(_)) => mem = sim.mem,
                     Some(Err(err)) if EXPECTED_STOPS.iter().any(|s| err.contains(s)) => {
-                        stopped_at = Some(format!("step {i} entity {}: {err}", c.entity));
-                        break 'steps;
+                        for &(a, v) in &c.writes {
+                            mem.set_u8(a, v);
+                        }
+                        resynced.insert(c.entity);
+                        stops += 1;
                     }
                     Some(Err(err)) => panic!("{name} step {i} entity {}: {err}", c.entity),
                 }
@@ -362,8 +375,8 @@ fn replay_matches_the_trace() {
                 .filter(|c| c.step == i && (c.handler == 0x29 || c.handler == 0x36))
             {
                 let e = entities + c.entity * 0xA4;
-                if next.u16(e + 8) & 1 == 0 {
-                    continue; // removed
+                if next.u16(e + 8) & 1 == 0 || resynced.contains(&c.entity) {
+                    continue; // removed, or re-synced from the trace next frame
                 }
                 let mut bad = differences(&mem, &next, e);
                 let p = mem.u32(e + 0x8C);
@@ -389,8 +402,8 @@ fn replay_matches_the_trace() {
             }
         }
         eprintln!(
-            "{name}: {compared} car states reproduced ({timing} lane timers taken from the trace){}",
-            stopped_at.map_or(String::new(), |s| format!("; stopped at {s}"))
+            "{name}: {compared} car states reproduced ({timing} lane timers taken from the trace, {stops} calls \
+             re-synced after unported code)"
         );
     }
 }

@@ -48,7 +48,7 @@ pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
             m.set_u16(e + 0xA0, 0);
             Ok(())
         }
-        3 => Err(Unported("traffic car knocked away (state 3, FUN_0814658c)")),
+        3 => knocked_away(sim, e, camera),
         2 => {
             if blk != 0 {
                 crate::heap::free(m, blk);
@@ -258,6 +258,101 @@ fn drive(sim: &mut Sim, e: u32, camera: u32, old_sector: u16, blk: u32) -> Resul
         sim.mem.set_u8(e + 0x88, 0xFF);
     }
     Ok(())
+}
+
+/// State 3: knocked away (or run off its route): slide with friction (1/32 per step), bounce off solid walls
+/// and spin down the wobble, until the timer (`+0x56`, up by 600 / (`*0x03005934` / 0x1C) per step) passes
+/// 0x1F4 while unseen, or the car is far from the camera's car; then it is removed.
+fn knocked_away(sim: &mut Sim, e: u32, camera: u32) -> Result<()> {
+    let m = &mut sim.mem;
+    let step = div(600, div(m.i32(0x0300_5934), 0x1C));
+    let t = (m.u16(e + 0x56) as i32).wrapping_add(step);
+    m.set_u16(e + 0x56, t as u16);
+    if t.wrapping_mul(0x1_0000) >= 0x1F4_0001 && m.u16(e + 0xA) & 4 == 0 {
+        m.set_u16(e + 0x4A, 2);
+        return Ok(());
+    }
+    if far(m, camera, e) > 1000 {
+        m.set_u16(e + 0x4A, 2);
+        return Ok(());
+    }
+    if m.i32(e + 0x18).wrapping_abs() >= 2 || m.i32(e + 0x20).wrapping_abs() > 1 {
+        m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
+        bounce_off_walls(m, e);
+    }
+    let (vx, vz) = (m.i32(e + 0x18), m.i32(e + 0x20));
+    m.set_i32(e + 0xC, m.i32(e + 0xC).wrapping_add(vx));
+    m.set_i32(e + 0x14, m.i32(e + 0x14).wrapping_add(vz));
+    let slow = |v: i32| match v - (v >> 5) {
+        -1 => 0,
+        v => v,
+    };
+    m.set_i32(e + 0x18, slow(vx));
+    m.set_i32(e + 0x20, slow(vz));
+    m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
+    m.set_i32(W_QUERY + 4, m.i32(e + 0x10) >> 8);
+    m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
+    m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
+    let wobble = m.i32(e + 0x38);
+    if wobble != 0 {
+        m.set_i16(e + 0x32, m.i16(e + 0x32).wrapping_add(wobble as i16));
+        let w = wobble - (wobble >> 4);
+        m.set_i32(e + 0x38, if w.wrapping_abs() < 0x10 { 0 } else { w });
+    }
+    let old = m.u16(e + 0x78);
+    world::unlink_entity(m, m.u16(e) as u32);
+    m.set_i32(W_QUERY, m.i32(e + 0xC) >> 8);
+    m.set_i32(W_QUERY + 8, m.i32(e + 0x14) >> 8);
+    m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
+    let s = find_sector(m);
+    m.set_u16(e + 0x78, if s == NONE { old } else { s as u16 });
+    world::link_entity(m, m.u16(e) as u32);
+    let floor = world::floor_height(m, m.u16(e + 0x78) as u32, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
+    m.set_i32(e + 0x10, floor);
+    contact(sim, e)?;
+    sim.mem.set_u8(e + 0x88, 0xFF);
+    Ok(())
+}
+
+/// `FUN_0814658c`: bounce the knocked-away car's velocity (`+0x18/+0x20`) off the solid walls of its sector
+/// within 100 units (the same end tests as the car's walls, `walls::walls`): restitution 0x13/0x400 along the
+/// wall normal when moving into it. Returns whether any wall was near.
+fn bounce_off_walls(m: &mut Mem, e: u32) -> bool {
+    let s = m.u32(W_SECTORS) + m.u16(e + 0x78) as u32 * 0x30;
+    let first = m.u32(W_WALLS) + m.u16(s) as u32 * 0x44;
+    let count = m.u16(s + 2) as u32;
+    let (x, z) = (m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
+    let mut near = false;
+    let (mut w, mut next) = (first + count.wrapping_sub(1).wrapping_mul(0x44), first);
+    for _ in 0..count {
+        if m.u16(w + 0x2A) as u32 == NONE && m.u16(w + 0x2E) & 0x1000 != 0 {
+            let (wx, wz) = (m.i32(w), m.i32(w + 4));
+            let (dx, dz) = (x.wrapping_sub(wx), z.wrapping_sub(wz));
+            let (nx, nz) = (m.i16(w + 0x34) as i32, m.i16(w + 0x36) as i32);
+            if dx.wrapping_mul(nx).wrapping_add(dz.wrapping_mul(nz)) >> 12 <= 100 {
+                let (cx, cz) = (m.i32(next), m.i32(next + 4));
+                let d2 = |a: i32, b: i32| a.wrapping_mul(a).wrapping_add(b.wrapping_mul(b));
+                let past = if (cx - wx).wrapping_mul(dx).wrapping_add(dz.wrapping_mul(cz - wz)) < 0 {
+                    d2(dx, dz) > 0x270F
+                } else {
+                    let (ex, ez) = (x.wrapping_sub(cx), z.wrapping_sub(cz));
+                    (wx - cx).wrapping_mul(ex).wrapping_add((wz - cz).wrapping_mul(ez)) < 0 && d2(ex, ez) > 0x270F
+                };
+                if !past {
+                    near = true;
+                    let vn = (m.i32(e + 0x18).wrapping_mul(nx) >> 6) + (m.i32(e + 0x20).wrapping_mul(nz) >> 6);
+                    if vn < 0 {
+                        let j = vn.wrapping_mul(-0x13) >> 10;
+                        m.set_i32(e + 0x18, m.i32(e + 0x18) + (nx.wrapping_mul(j) >> 12));
+                        m.set_i32(e + 0x20, m.i32(e + 0x20) + (j.wrapping_mul(nz) >> 12));
+                    }
+                }
+            }
+        }
+        w = next;
+        next += 0x44;
+    }
+    near
 }
 
 /// The turn towards direction (`nx`, `nz`) over `steps` steps, from the current direction.

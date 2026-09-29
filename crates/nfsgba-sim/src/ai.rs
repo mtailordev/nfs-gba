@@ -366,6 +366,64 @@ fn nearest_on_line(a: [i32; 2], b: [i32; 2], x: i32, z: i32) -> [i32; 2] {
     }
 }
 
+/// `FUN_0813f530` (an opponent stuck for 0x32 steps): put the car on the route segment its sector belongs to,
+/// by the route's side-segment table (per entry: segment, its sectors, -1). On the main route: the side segment
+/// whose sectors include the car's, at its nearer end. On a side segment it has left: back to the main route
+/// where the segment joins it. Like `route::track_segment`, without marking segments visited and without
+/// switching from one side segment to another.
+fn resync_segment(m: &mut Mem, e: u32) {
+    let list = m.u32(0x087F_37D8 + m.u32(0x0300_5720) * 4);
+    if list == 0 {
+        return;
+    }
+    let (sector, cur) = (m.u16(e + 0x78) as u32, m.u16(e + 0x72) as u32);
+    let d2 = |m: &Mem, w: u32| {
+        let dx = ((m.i32(e + 0xC) >> 8) - m.i32(w)) >> 4;
+        let dz = ((m.i32(e + 0x14) >> 8) - m.i32(w + 4)) >> 4;
+        dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz))
+    };
+    let seg_count = |m: &Mem, seg: u32| m.u16(m.u32(W_SEGMENTS) + seg * 8) as i32;
+    let mut at = list + 4;
+    for _ in 0..m.u32(list) {
+        let seg = m.u32(at);
+        at += 4;
+        if cur == 0 {
+            while m.u32(at) != u32::MAX {
+                let s = m.u32(at);
+                at += 4;
+                if s == sector {
+                    m.set_u16(e + 0x72, seg as u16);
+                    let n = seg_count(m, seg);
+                    let near_first = d2(m, route::waypoint(m, seg, 0)) < d2(m, route::waypoint(m, seg, n - 1));
+                    m.set_i16(e + 0x90, if near_first { 0 } else { n - 1 } as i16);
+                    return;
+                }
+            }
+        } else if seg == cur {
+            while m.u32(at) != u32::MAX {
+                if m.u32(at) == sector {
+                    return;
+                }
+                at += 4;
+            }
+            let last = route::waypoint(m, cur, seg_count(m, cur) - 1);
+            let v = if d2(m, route::waypoint(m, cur, 0)) < d2(m, last) {
+                m.u32(m.u32(0x0300_5FB8) + cur * 4) as u16
+            } else {
+                m.u16(last + 0xE)
+            };
+            m.set_u16(e + 0x90, v);
+            m.set_u16(e + 0x72, 0);
+            return;
+        } else {
+            while m.u32(at) != u32::MAX {
+                at += 4;
+            }
+        }
+        at += 4;
+    }
+}
+
 fn xz(m: &Mem, w: u32) -> [i32; 2] {
     [m.i32(w), m.i32(w + 4)]
 }
@@ -383,7 +441,10 @@ fn step(sim: &mut Sim, e: u32) -> Result<i32> {
     let mut a = route::waypoint_at(m, m.u16(e + 0x72) as u32, wp);
     let mut b = route::waypoint_at(m, m.u16(e + 0x72) as u32, wp + 1);
     if m.i32(p + 0x4B0) == 0x32 {
-        return Err(Unported("FUN_0813f530 (opponent stuck for 0x32 steps)"));
+        resync_segment(m, e);
+        wp = m.i16(e + 0x90) as i32;
+        a = route::waypoint_at(m, m.u16(e + 0x72) as u32, wp);
+        b = route::waypoint_at(m, m.u16(e + 0x72) as u32, wp + 1);
     }
     let stuck = m.i32(p + 0x4B0);
     if stuck > 0x96 {
