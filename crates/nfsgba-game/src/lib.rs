@@ -233,6 +233,20 @@ impl Game {
         Ok(())
     }
 
+    /// `snd_stop_all` (`0x08135f38`, the race end): sound slots 0..3 and the music stop, no music is playing.
+    pub fn snd_stop_all(&mut self) {
+        for slot in 0..4 {
+            self.world.audio.stop_sfx(slot);
+        }
+        self.music_stop();
+    }
+
+    /// `music_stop` (`0x0813609c`, the pause): the music stops, no music is playing.
+    pub fn music_stop(&mut self) {
+        self.world.lp.music_id = -1;
+        self.world.audio.stop_music();
+    }
+
     /// `main_frame`'s palette fade (`FADE` `0x03005630` ≠ 0, after the light tint): the sky gradient (towards the
     /// level's, when there is a descriptor), BG and OBJ palette RAM (towards the base palette and the OBJ palette)
     /// move 4 per channel, and the counter 2 towards 0. The fade steps are `menu::fade_in_step`/`fade_out_step`.

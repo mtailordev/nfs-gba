@@ -173,12 +173,18 @@ Play stops at the first unported code path and logs it (the pause menu, the race
 - Entity handlers other than 0..3, 0x29, 0x34 and 0x36.
 - Link play.
 
+**Done at the frame's edges (traces `fadeout` and `fadein`, `tests/edges.rs`):** `main_frame`'s palette fade
+(`FADE` ≠ 0: the sky gradient, BG and OBJ palette RAM by 4 per channel, the counter by 2; the light tint goes to
+the fade's target buffer meanwhile), `flip_page`, `read_keys` (link play stops), the shadow-OAM copy, the engine
+loop restart, `snd_stop_all` and `music_stop` (`Game::snd_stop_all`, `music_stop`; called by the state-5 exit and
+the pause, which are not ported). The gradient fade is tracked for its first 120 entries (the rest of the 0x200
+buffer is never shown).
+
 **Around the race (the race-init handover, open):**
 - game state 4: the rest of the frame after `race_start` (the fade set-up, the debug print `FUN_0815e9e8`, the
   palette copy and light tint);
 - the intro frames (phase 9), the countdown (`race_start_from_table_b` in phases 1 and 9) and the start set-up
   (`0x03005714 == 3`, `FUN_0813a054`…`FUN_0813a108`);
-- the palette fades of `main_frame` (`0x03005630`);
 - the race-end countdown (phases 6–8), the race end (phase 3) and the state-5 exit of `game_state_step` (sound
   stops, `fill_results`, `FUN_081396c4`'s frees, the screen change);
 - the pause (START) and every menu frame (game state 1).

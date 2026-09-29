@@ -289,7 +289,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005730` | ranked results, 0x40 bytes (same arrays as `0x03005650`; `+4` = entity id at each rank) |
 | `0x03005750` | per-car result places tie-broken by distance at the race end (FUN_0812e9e8) (16) |
 | `0x03005778` | smoothed floor height at the camera (`floor_height`): the height limit for flag-0x4000 walls in the camera wall push |
-| `0x0300577C` | pointer to the second base palette buffer (`0x02000E04`) |
+| `0x0300577C` | pointer to the second base palette buffer (`0x02000E04`); while `FADE` `0x03005630` ≠ 0 the light tint writes here instead of palette RAM, and the BG fade moves palette RAM towards it |
 | `0x03005780` | race-over flag (`shade_car_paint` skips while set); in the menus the exit request (7 = leave the menus for the race once the fade is done) |
 | `0x03005784` | opponent count (3) |
 | `0x0300578C` | music option (volume = option × 4, at most 63) |
