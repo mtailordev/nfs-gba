@@ -8,7 +8,12 @@
 //! VCount IRQ advances within a frame), the racers' atlases in the heap, and the frame's outputs (palette RAM but
 //! entry 0, the VCount IRQ's backdrop colour; VRAM; OAM).
 
-use nfsgba_game::{Game, Machine, trace::Trace, world::World};
+use nfsgba_game::{
+    Game, Machine, race_init,
+    race_setup::{Display, Setup},
+    trace::Trace,
+    world::World,
+};
 
 /// The recorded runs (`tools/game_trace.py`): `drive` (150 frames from the reference race), `live` (700 frames from
 /// the start of a hard circuit with heavy traffic: opponents alongside, braking, a car-to-car contact at frame 387),
@@ -18,7 +23,8 @@ use nfsgba_game::{Game, Machine, trace::Trace, world::World};
 /// effect and the nitro flames), `fadeout` and `fadein` (20 and 14 frames from the reference race with `main_frame`'s
 /// palette fade counter poked: the palettes and the sky gradient fade to black, and in from black).
 /// (session, trace, game frames): every frame of every trace must replay.
-const TRACES: [(&str, &str, usize); 7] = [
+const TRACES: [(&str, &str, usize); 8] = [
+    ("live-race", "start", 89),
     ("game-loop", "fadeout", 19),
     ("game-loop", "fadein", 13),
     ("game-loop", "drive", 149),
@@ -27,6 +33,23 @@ const TRACES: [(&str, &str, usize); 7] = [
     ("live-race", "views", 599),
     ("live-race", "nitro", 299),
 ];
+
+/// The game at the entry of traced frame `k`. A trace that begins at the race start (game state 4, frame 0) has
+/// no typed state to load there: the game is built by `race_init::start` from the menus' state, with the seed
+/// timing the recorder marked.
+fn game_at(rom: &[u8], trace: &Trace, k: usize) -> Game {
+    let m = trace.machine(rom, k);
+    if m.mem.iwram[0x5808..0x580C] != 4u32.to_le_bytes() {
+        return Game::new(m);
+    }
+    let display = Display {
+        palette: m.palette.clone(),
+        vram: m.vram.clone(),
+        oam: m.oam.clone(),
+        io: [0; 0x400],
+    };
+    race_init::start(rom.to_vec(), &Setup::load(&m), display, trace.timing[k].seed.unwrap()).unwrap()
+}
 
 fn traces() -> Vec<(&'static str, usize, Trace)> {
     TRACES
@@ -104,7 +127,7 @@ fn frames_match_the_trace() {
         for k in 0..frames {
             checked.tick();
             let want = trace.machine(&rom, k + 1);
-            let mut g = Game::new(trace.machine(&rom, k));
+            let mut g = game_at(&rom, &trace, k);
             if let Err(e) = g.frame(trace.keys(k), &trace.timing[k]) {
                 panic!("{name} frame {k}: {e}");
             }
@@ -128,7 +151,7 @@ fn frames_match_the_trace() {
 fn free_run_matches_the_trace() {
     let Some(rom) = nfsgba_testkit::rom() else { return };
     for (name, frames, trace) in traces() {
-        let mut g = Game::new(trace.machine(&rom, 0));
+        let mut g = game_at(&rom, &trace, 0);
         let mut exact = 0;
         let mut checked = nfsgba_testkit::Expect::new(format!("{name} free run"), frames);
         for k in 0..frames {
@@ -158,7 +181,7 @@ fn one_frame() {
     let name = std::env::var("NFSGBA_TRACE").unwrap();
     let k: usize = std::env::var("NFSGBA_FRAME").unwrap().parse().unwrap();
     let (_, _, trace) = traces().into_iter().find(|(n, _, _)| *n == name).unwrap();
-    let mut g = Game::new(trace.machine(&rom, k));
+    let mut g = game_at(&rom, &trace, k);
     eprintln!("timing {:?}", trace.timing[k]);
     g.frame(trace.keys(k), &trace.timing[k]).unwrap();
     report(&name, k, &differences(&g, &trace.machine(&rom, k + 1)));

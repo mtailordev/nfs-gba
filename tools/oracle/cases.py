@@ -16,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent)]  # the set modules import `oracle` and the tools' `common`/`mgba_ctl`
 
 SETS = {"prove": "prove", "car": "car", "fuzz": "fuzz", "calls": "calls", "suspension": "suspension", "ai": "ai",
-        "rules": "rules", "unlock": "unlock", "synth": "synth", "menus": "menus", "race-init": "race_init", "race-init-inputs": "race_init_inputs", "game-edges": "game_edges"}
+        "rules": "rules", "unlock": "unlock", "synth": "synth", "menus": "menus", "race-init": "race_init", "race-init-inputs": "race_init_inputs", "game-edges": "game_edges", "game-countdown": "game_countdown"}
 
 
 def module(name: str):

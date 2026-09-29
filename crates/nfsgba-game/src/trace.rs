@@ -74,6 +74,9 @@ impl Trace {
                     hud: at(r[4]).unwrap(),
                     timer: at(r[8]),
                     end: num(w[1][2]).unwrap() - start,
+                    start: r.get(14).and_then(|f| at(f)),
+                    seed: r.get(12).and_then(|f| at(f)),
+                    music: r.get(13).and_then(|f| at(f)),
                     lanes: r
                         .get(10)
                         .unwrap_or(&"")

@@ -12,6 +12,8 @@ local dir = os.getenv("NFSGBA_MGBA_DIR")
 local name, left, csv, bin, row = nil, 0, nil, nil, nil
 local inEntities, waitRacing = false, false
 
+-- `NAME FRAMES start`: from the main_frame entry that runs game state 4 (the race start), recorded whole.
+local waitStart = false
 local function racing()
   return emu:read32(0x03005808) == 5 and emu:read32(0x03000048) == 2 and emu:read32(0x03005630) == 0
     and emu:read32(0x03005714) ~= 3
@@ -44,6 +46,11 @@ emu:setBreakpoint(function()
     waitRacing = false
     log("racing from video frame " .. emu:currentFrame())
   end
+  if waitStart then
+    if emu:read32(0x03005808) ~= 4 then return end
+    waitStart = false
+    log("race start from video frame " .. emu:currentFrame())
+  end
   finishRow()
   state()
   if left == 0 then
@@ -54,7 +61,7 @@ emu:setBreakpoint(function()
     return
   end
   left = left - 1
-  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", ""}
+  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", "", "", "", ""}
 end, 0x0812AE64)
 
 emu:setBreakpoint(function()
@@ -116,6 +123,15 @@ emu:setBreakpoint(function()
   end
 end, 0x0813C95C)
 
+-- Marks of the race-start frame (columns 13..15, the VBlank counter at the first hit in a frame): rand_seed
+-- (setup_race_cars' read of the tick counter), snd_play_module (the race music's request), race_start_from_table_b.
+local function mark(col)
+  return function() if row and row[col] == "" then row[col] = vb() end end
+end
+emu:setBreakpoint(mark(13), 0x0815FD1C)
+emu:setBreakpoint(mark(14), 0x08151758)
+emu:setBreakpoint(mark(15), 0x0813AF7C)
+
 callbacks:add("frame", function()
   local f = io.open(dir .. "/gtrace.txt", "r")
   if not f then return end
@@ -124,9 +140,9 @@ callbacks:add("frame", function()
   if not line then return end
   os.remove(dir .. "/gtrace.txt")
   local n, count, cond = line:match("^(%S+)%s+(%d+)%s*(%S*)")
-  name, left, waitRacing = n, tonumber(count), cond == "racing"
+  name, left, waitRacing, waitStart = n, tonumber(count), cond == "racing", cond == "start"
   csv = assert(io.open(dir .. "/" .. name .. ".csv", "w"))
-  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads\n")
+  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads,seed,music,start\n")
   bin = assert(io.open(dir .. "/" .. name .. ".frames.bin", "wb"))
   log("armed " .. line)
 end)

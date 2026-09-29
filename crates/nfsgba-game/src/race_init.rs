@@ -807,11 +807,11 @@ fn moving_pieces_init(m: &Mem, w: &mut World, walls: u32, n_walls: u32) {
     }
 }
 
-/// Game state 5 (the race) after `race_start`, which `game_state_step` runs in state 4. A `Game::frame` on it then
-/// runs `race_frame_update` up to the countdown (the racers' drivers, the camera, the matrix slots, the world drawn)
-/// and stops there with `Unported` (the handover after `race_start` is open, FIDELITY G1): a race start to look at.
+/// Game state 4 (the race start) with `race_start` done: a `Game::frame` on it runs the rest of that frame
+/// (`Game::state4_tail`: the fade in, the first `race_frame_update`) and the race from there, the intro and the
+/// countdown included.
 pub fn enter_race(w: &mut World) {
-    w.lp.game_state = 5;
+    w.lp.game_state = 4;
 }
 
 /// The top-level fields of two worlds that differ, by name, leaving out the heap arena (the tests and `synth_race`
@@ -888,12 +888,7 @@ pub fn start(rom: Vec<u8>, setup: &Setup, mut display: Display, seed_vblanks: u3
     let data = std::sync::Arc::new(GameData::parse(&rom));
     let mut world = race_start(&rom, &data, setup, seed_vblanks, &mut display)?;
     enter_race(&mut world);
-    Ok(crate::Game::with_world(
-        rom,
-        data,
-        world,
-        display.palette,
-        display.vram,
-        display.oam,
-    ))
+    let mut game = crate::Game::with_world(rom, data, world, display.palette, display.vram, display.oam);
+    game.dispcnt = u16::from_le_bytes([display.io[0], display.io[1]]);
+    Ok(game)
 }

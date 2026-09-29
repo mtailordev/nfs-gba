@@ -11,6 +11,7 @@
 #![allow(clippy::precedence)]
 
 pub mod camera;
+mod countdown;
 pub mod menu;
 pub mod oam;
 pub mod race_init;
@@ -58,6 +59,12 @@ pub struct Timing {
     pub end: u32,
     /// When an opponent's AI reads the race time for its lane-change timer (`0x0813C95C`): (entity, count).
     pub lanes: Vec<(usize, u32)>,
+    /// At `race_start_from_table_b`'s entry.
+    pub start: Option<u32>,
+    /// The race-start frame (game state 4) only: at `setup_race_cars`' read of the tick counter (the rand seed:
+    /// `race_init::start`'s `seed_vblanks`) and at the race music's request.
+    pub seed: Option<u32>,
+    pub music: Option<u32>,
 }
 
 impl Timing {
@@ -74,6 +81,9 @@ impl Timing {
             timer: None,
             end: 4,
             lanes: Vec::new(),
+            start: None,
+            seed: None,
+            music: None,
         }
     }
 }
@@ -150,6 +160,9 @@ pub struct Game {
     /// Samples the sound hardware played during the last frame (signed 8-bit, 176 per VBlank, 10,512 Hz).
     pub sound: Vec<u8>,
     pub bank: SpriteBank,
+    /// DISPCNT: `obj_upload_tiles` does nothing without the 1-D mapping (bit 6). Not part of a traced state; the
+    /// race start sets it (`race_init::start` takes it from the display it built).
+    pub dispcnt: u16,
     /// VBlank IRQs run so far in the current frame.
     irqs: u32,
 }
@@ -184,6 +197,7 @@ impl Game {
             oam,
             display_page: 0,
             sound: Vec::new(),
+            dispcnt: 0x1040,
             irqs: 0,
         }
     }
@@ -213,8 +227,18 @@ impl Game {
             g.dt = nfsgba_sim::math::div(25_500, g.frame_ticks).clamp(10, 100);
         }
         self.irqs = 0;
+        if self.world.lp.game_state == 4 {
+            // The race start (`race_init::start` ran `race_start_from_table_a` already): the race music's request
+            // reaches the sound engine when the game made it, after the VBlanks up to then.
+            let request = std::mem::take(&mut self.world.audio.music_request);
+            self.irqs_to(t.music.unwrap_or(0));
+            self.world.audio.music_request = request;
+        }
         self.irqs_to(t.entities);
         self.flip_page();
+        if self.world.lp.game_state == 4 {
+            self.state4_tail();
+        }
         is(
             self.world.lp.game_state != 5,
             "game states other than the race (state machine FUN_0812acec)",
@@ -232,6 +256,23 @@ impl Game {
         self.read_keys(keys)?;
         self.irqs_to(t.end);
         Ok(())
+    }
+
+    /// `game_state_step`'s state 4 after `race_start_from_table_a`: state 5, the race-over flag cleared, the
+    /// palette fade in (16), the frame counters restarted, and with a route the fade's target palette = the base
+    /// palette, tinted. The frame goes on as a race frame. (The debug print `FUN_0815e9e8` is left out: it writes
+    /// only the text console.)
+    fn state4_tail(&mut self) {
+        let w = &mut self.world;
+        w.lp.game_state = 5;
+        w.g.race_over = 0;
+        w.g.fade = 0x10;
+        w.g.input[4] = 0x10; // 0x030057E0, which the game sets with the fade and nothing reads
+        (w.g.race_frames, w.g.steps) = (0, 0);
+        if w.g.u_5388 != 0 {
+            w.palette_fade = w.palette_base.clone();
+            self.tint();
+        }
     }
 
     /// `snd_stop_all` (`0x08135f38`, the race end): sound slots 0..3 and the music stop, no music is playing.
@@ -450,14 +491,8 @@ impl Game {
         self.draw_world(&mut vis, page);
         let w = &self.world;
         let (phase, fade) = (w.g.phase as u32, w.g.fade);
-        is(
-            (phase == 1 || phase == 9) && fade == 0,
-            "the race countdown (race_start_from_table_b)",
-        )?;
-        is(
-            w.lp.start_state == 3,
-            "the race start set-up (FUN_0813a054..FUN_0813a108)",
-        )?;
+        self.irqs_to(t.start.unwrap_or(0));
+        self.race_start_from_table_b()?;
         self.irqs_to(t.timer.unwrap_or(t.hud));
         self.hud();
         let over = self.world.g.race_over;
@@ -506,7 +541,7 @@ impl Game {
                         self.world.new_car(&self.rom, i);
                     }
                     if matches!(state, 2 | 0x100) {
-                        self.world.rim_redraw(&self.rom, &self.data, i)?;
+                        self.world.rim_redraw(&self.rom, &self.data, i, false)?;
                     }
                     // The step reads the race time (route_gap, lap crossing) with the IRQs before route_gap
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
@@ -521,6 +556,8 @@ impl Game {
                     // The player's decal, unpacked into its rim buffer: NOT 1:1 (R24), in the heap arena.
                     if state == 0 && i as u32 == self.world.g.player {
                         self.world.on_arena(&self.rom, i, nfsgba_sim::decal::unpack_decal);
+                        // Its last call, draw_decal_on_atlas at the wheel angle.
+                        self.world.rim_redraw(&self.rom, &self.data, i, true)?;
                     }
                     // route_gap reads the race time again after its division (split = rt₂ − x·rt₁ / y); the sim
                     // reads it once, so an IRQ in between adds its tick afterwards.

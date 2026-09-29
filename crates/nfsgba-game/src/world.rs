@@ -473,7 +473,7 @@ impl World {
     }
 
     /// `car_racing_step`'s rim redraw for entity `i` (the player's wheel rims in the atlas).
-    pub fn rim_redraw(&mut self, rom: &[u8], data: &GameData, i: usize) -> nfsgba_sim::Result<()> {
+    pub fn rim_redraw(&mut self, rom: &[u8], data: &GameData, i: usize, always: bool) -> nfsgba_sim::Result<()> {
         let s = &self.slots[i];
         let index = s.e.index as usize;
         let atlas = match index {
@@ -501,7 +501,7 @@ impl World {
             }
         }
         self.heap = m.ewram;
-        rim_redraw(rom, data, &f, &mut self.heap)
+        rim_redraw(rom, data, &f, &mut self.heap, always)
     }
 
     /// What `camera_update` reads and writes.

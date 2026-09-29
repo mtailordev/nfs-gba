@@ -686,13 +686,15 @@ pub struct RimFrame {
 /// wheel angle. The rotated read can reach up to 63 bytes around the rim's buffer on the game's heap; here it
 /// reads the real `heap`, so it is exact (FIDELITY R24), unless that window overlaps the atlas it writes, which
 /// this refuses.
-pub fn rim_redraw(rom: &[u8], data: &GameData, f: &RimFrame, heap: &mut [u8]) -> Result<()> {
+///
+/// `always`: `unpack_decal`'s own call of `draw_decal_on_atlas`, without the side-view tests.
+pub fn rim_redraw(rom: &[u8], data: &GameData, f: &RimFrame, heap: &mut [u8], always: bool) -> Result<()> {
     let e = &f.entity;
-    if f.phase == 0 || f.phase == 1 || f.phase == 4 || e.index as u32 != f.player || f.view == 0 {
+    if !always && (f.phase == 0 || f.phase == 1 || f.phase == 4 || e.index as u32 != f.player || f.view == 0) {
         return Ok(());
     }
     let d = angle_diff(((e.heading as u32 & 0x3F_FFFF) >> 8) as i32, 0x4000 - f.matrix_yaw).abs();
-    if d < 0x400 || (0x1C00 < d && d < 0x2400) {
+    if !always && (d < 0x400 || (0x1C00 < d && d < 0x2400)) {
         return Ok(());
     }
     if f.atlas == 0 {

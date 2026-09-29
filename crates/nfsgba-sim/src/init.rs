@@ -382,4 +382,6 @@ pub(crate) fn race_start_setup(w: &mut CarWorld, i: usize) {
 /// go to `g.scales`).
 fn route_distances(w: &mut CarWorld) {
     w.route.line.measure(w.g.circuit != 0);
+    // `route_gap` reads the scale from the globals' copy.
+    w.g.scales[..w.route.line.scales.len()].copy_from_slice(&w.route.line.scales);
 }
