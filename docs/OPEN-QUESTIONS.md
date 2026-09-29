@@ -8,7 +8,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
    - the "other data" blocks: `0x000000–0x02C000`, `0x1BC000–0x1C8000`, `0x460000–0x478000`;
    - somewhere in the raw pixel region `0x404000–0x794000`.
 
-   Plan: trace the renderer's ROM reads in mGBA, or follow the ARM code at `0x350000` in Ghidra.
+   Ruled out: `0x3E51A0–0x3F7D9C`, right after the car atlases, is 8bpp pixels, not meshes. Plan: trace the renderer's ROM reads in mGBA, or follow the ARM code at `0x350000` in Ghidra.
 2. **How does the raw 8bpp region `0x404000–0x794000` split into images** (widths, headers)? Car sprites seem to be at `0x420000` and street/building textures at `0x500000` (both seen at a guessed width).
 3. **Palettes:** where they are and how images reference them. BGR555 palettes were seen at `0x33EF14` and `0x36C75C`.
 4. **How does code locate LZ77 blobs?** Hypothesis: offsets from bank bases such as `0x16C244` (referenced 29 times). There is also the "size is 8 too large" quirk.
