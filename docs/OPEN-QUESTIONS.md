@@ -45,7 +45,7 @@ Check each against the ROM during coverage:
 
 ## From external research (2026-09-30; notes in `data/reference/research.md`, not in git)
 
-Coverage targets to confirm from the ROM (text table, career tables, route and car tables):
+Guidance only (blog and review sources, not confirmed): the ROM is the source of truth. Things to look for in the ROM (text table, career tables, route and car tables):
 - **66 career events** in five crew sections (Lucky 7's, Eastsiders, Syrens, Corps, Krimson Crew) plus The Gauntlet (races in sequence); two bosses per section.
 - **15 player cars** and **4 traffic models**; car prices in points.
 - **30 named routes:** 12 circuits and 18 sprints (the ROM has more route records: which are the others?).
