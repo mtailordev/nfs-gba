@@ -199,7 +199,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
             h.call(CARBON_PLAY_SOUND, &[0x27, 1]);
             return 1;
         }
-        st.g.u_5658 = [0; 4];
+        st.g.results.knocked = [0; 4];
         career_event_to_globals(st, h.rom());
         if hint_due(st, h.rom(), 0x2D, event) != 0 {
             h.call(CARBON_PLAY_SOUND, &[2, 1]);

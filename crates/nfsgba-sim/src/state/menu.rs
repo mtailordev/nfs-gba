@@ -41,10 +41,11 @@ layout! {
         0x0300_5630 fade: i32,
         0x0300_563C palette_dirty: u32,
         0x0300_5640 frame_time: u32,
-        0x0300_5658 u_5658: [u8; 4],
-        0x0300_5660 u_5660: [u32; 4],
-        0x0300_5670 u_5670: [u32; 4],
-        0x0300_5680 u_5680: [u32; 4],
+        /// The race results and their ranked copy (the standings).
+        0x0300_5650 results: RaceResults,
+        0x0300_5730 ranked: RaceResults,
+        /// Opponents in the race (the results have this + 1 slots).
+        0x0300_5784 opponents: u32,
         0x0300_5698 hud_on: u32,
         0x0300_56EC profile: Ptr<MenuProfile>,
         0x0300_56F0 u_56f0: u32,
@@ -80,8 +81,24 @@ layout! {
         0x0300_64C8 rand_index: u32,
     }
 
+    /// The race results, 4 slots (`results`; the ranked copy has the same layout).
+    pub struct RaceResults: 0x40 {
+        0x00 head: [u8; 4],
+        /// Entity id per slot.
+        0x04 ids: [u8; 4],
+        /// 8: knocked out.
+        0x08 knocked: [u8; 4],
+        /// The position (ranking key 2).
+        0x0C position: [u8; 4],
+        0x10 best_lap: [u32; 4],
+        /// Finish time (ranking key 1).
+        0x20 finish: [u32; 4],
+        /// Hunter life (ranking key 4).
+        0x30 life: [u32; 4],
+    }
+
     /// The profile fields the menu flow touches (the struct lives in EWRAM, `MenuGlobals::profile`).
-    pub struct MenuProfile: 0x460 {
+    pub struct MenuProfile: 0x4C8 {
         /// The car in Quick Play (`+0x11`) and career (`+0x10`).
         0x10 career_car: i8,
         0x11 car: i8,
@@ -102,6 +119,12 @@ layout! {
         0x218 records: [u16; 30],
         /// The event cursor per zone.
         0x388 event_cursors: [u8; 6],
+        /// Race end: a new record was set (`+0x3B4`), the payout (`+0x3B8`).
+        0x3B4 record_flag: u32,
+        0x3B8 payout: u32,
+        /// A new track record (`+0x4A8`) and the unlock message keys (`+0x4AA`, 0-terminated).
+        0x4A8 new_record: u16,
+        0x4AA unlock_messages: [u16; 14],
         0x2EE music: i8,
         0x2F6 u_2f6: u16,
         0x2F8 u_2f8: u32,
@@ -117,6 +140,36 @@ layout! {
         /// Unlock bits by id.
         0x42D unlocks: [u8; 32],
         0x44D unlocks_more: [u8; 16],
+    }
+}
+
+impl RaceResults {
+    /// The table as the game's byte image (what `career::rank_results` sorts).
+    pub fn to_bytes(&self) -> [u8; 0x40] {
+        let mut b = [0; 0x40];
+        b[..4].copy_from_slice(&self.head);
+        b[4..8].copy_from_slice(&self.ids);
+        b[8..12].copy_from_slice(&self.knocked);
+        b[12..16].copy_from_slice(&self.position);
+        for (at, words) in [(0x10, &self.best_lap), (0x20, &self.finish), (0x30, &self.life)] {
+            for (k, w) in words.iter().enumerate() {
+                b[at + 4 * k..][..4].copy_from_slice(&w.to_le_bytes());
+            }
+        }
+        b
+    }
+
+    pub fn from_bytes(b: &[u8; 0x40]) -> Self {
+        let words = |at: usize| std::array::from_fn(|k| u32::from_le_bytes(b[at + 4 * k..][..4].try_into().unwrap()));
+        RaceResults {
+            head: b[..4].try_into().unwrap(),
+            ids: b[4..8].try_into().unwrap(),
+            knocked: b[8..12].try_into().unwrap(),
+            position: b[12..16].try_into().unwrap(),
+            best_lap: words(0x10),
+            finish: words(0x20),
+            life: words(0x30),
+        }
     }
 }
 

@@ -5,7 +5,7 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, map, update_kind};
+use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, map, results, update_kind};
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
@@ -115,6 +115,32 @@ pub fn draw_screen(st: &mut MenuState, h: &mut impl Host, full: u32) {
     }
 }
 
+/// Back stack slot `top` (profile `+0x344 + top`) written. Slot −1 is the last key-repeat byte (`+0x343`); past
+/// the 12 slots the game writes into the List cursors.
+pub fn poke_back(st: &mut MenuState, top: i8, v: u8) {
+    let i = top as i32;
+    if i == -1 {
+        st.profile.repeats[7] = v as i8;
+    } else if let Ok(i) = usize::try_from(i) {
+        match i.checked_sub(st.profile.back.len()) {
+            None => st.profile.back[i] = v,
+            Some(j) => {
+                if let Some(c) = st.profile.cursors.get_mut(j) {
+                    *c = v;
+                }
+            }
+        }
+    }
+}
+
+/// Back stack slot `i` (profile `+0x344 + i`) read; past the 12 slots it reads the List cursors.
+pub fn peek_back(st: &MenuState, i: usize) -> u8 {
+    match i.checked_sub(st.profile.back.len()) {
+        None => st.profile.back[i],
+        Some(j) => st.profile.cursors.get(j).copied().unwrap_or(0),
+    }
+}
+
 /// `goto_screen` (`0x0812BB5C`). Screens up to 0x7F are pushed: the old screen onto the back stack, and List
 /// screens (but 9 and 28) clear their cursor slot, then `enter_screen`. Above: the keys are swallowed; 0x81 (Quick
 /// Play) records the exit screen; 0x82 resumes a paused race.
@@ -122,17 +148,7 @@ pub fn goto_screen(st: &mut MenuState, h: &mut impl Host, s: i32) {
     if s <= 0x7F {
         let top = (st.g.back_top as u8).wrapping_add(1);
         st.g.back_top = top as i8;
-        let old = st.g.screen as u8;
-        match top as i8 {
-            // Stack top -2 pushes to slot -1, which is the last key-repeat byte (profile +0x343).
-            -1 => st.profile.repeats[7] = old as i8,
-            t if t >= 0 => {
-                if let Some(e) = st.profile.back.get_mut(t as usize) {
-                    *e = old;
-                }
-            }
-            _ => {}
-        }
+        poke_back(st, top as i8, st.g.screen as u8);
         st.g.screen = s as u32;
         if matches!(s, 0..=6 | 27 | 29 | 30 | 35 | 36 | 45 | 46) {
             let slot = list_slot(st.g.screen, st.profile.u_12);
@@ -177,7 +193,7 @@ pub fn menu_back(st: &mut MenuState, h: &mut impl Host) {
     let top = st.g.back_top;
     if top >= 0 {
         st.g.back_top = top.wrapping_sub(1);
-        st.g.screen = st.profile.back.get(top as usize).copied().unwrap_or(0) as u32;
+        st.g.screen = peek_back(st, top as usize) as u32;
         enter_screen(st, h);
     }
 }
@@ -319,10 +335,10 @@ fn leave_for_race(st: &mut MenuState, rom: &[u8]) {
         g.route = number as u32;
         g.race_car = car as u8;
         g.back_top_saved = g.back_top as u8;
-        g.u_5658 = [0; 4];
-        g.u_5660 = [0; 4];
-        g.u_5670 = [0; 4];
-        g.u_5680 = [0; 4];
+        g.results.knocked = [0; 4];
+        g.results.best_lap = [0; 4];
+        g.results.finish = [0; 4];
+        g.results.life = [0; 4];
         let rec = (0x087F_2588 + 12 * g.route) & 0x1FF_FFFF;
         g.environment = rom[rec as usize] as u32;
         g.route_flag = rom[rec as usize + 1] as u32;
@@ -424,7 +440,7 @@ pub fn main_frame(st: &mut MenuState, h: &mut impl Host) {
 
 /// Whether a kind's handler runs on typed state ([`run_typed`]); the others still run on the RAM image.
 pub fn is_typed(kind: Kind, phase: usize) -> bool {
-    matches!((kind, phase), (Kind::Kind7 | Kind::Event, 0..=2))
+    matches!((kind, phase), (Kind::Kind7 | Kind::Event | Kind::Career, 0..=2))
 }
 
 /// A typed handler (see [`is_typed`]).
@@ -436,6 +452,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Event, 0) => event::enter(st, h),
         (Kind::Event, 1) => event::update(st, h),
         (Kind::Event, 2) => event::draw(st, h),
+        (Kind::Career, 0) => results::enter(st, h),
+        (Kind::Career, 1) => results::update(st, h),
+        (Kind::Career, 2) => results::draw(st, h),
         _ => unreachable!("{kind:?} phase {phase} is not typed"),
     }
 }

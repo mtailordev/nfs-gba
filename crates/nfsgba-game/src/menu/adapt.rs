@@ -136,13 +136,6 @@ pub(super) fn thousands(g: &Gba, s: &mut Vec<u8>, n: i32) {
     text::thousands(g.u32(LANGUAGE), s, n);
 }
 
-pub(super) fn time_text(g: &mut Gba, cs: i32) -> Vec<u8> {
-    let language = g.u32(LANGUAGE);
-    with_remainder(g, |rem| text::time_text(rem, language, cs))
-}
-
-pub(super) use text::frames_to_centiseconds;
-
 pub(super) fn hint_due(g: &mut Gba, screen: i32, event: i32) -> u32 {
     let mut st = load_state(g);
     let r = event::hint_due(&mut st, &g.rom, screen, event);
