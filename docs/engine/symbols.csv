@@ -568,3 +568,5 @@ address,name,kind,comment
 0x0812d7d4,unlock_table_index,function,row of an unlock id in the 0x7E4DE4 (id; price) table or -1; ported in nfsgba-formats unlock.rs
 0x0812d7f4,unlock_id_adjust,function,(id; car index at 0x03005718) ids 0xA1..0xA3 shifted by the sum of the first car-index slot bytes at 0x7F0626 minus the index; ported in unlock.rs
 0x0812d730,unlock_group,function,1..10 for the group-leader ids 0xC 0x19 0x26 0x33 0x40 0x4D 0x5A 0x67 0x70 0x78 else 0; ported in unlock.rs
+0x0813a4c0,vcount_irq_on,function,sets the sky gradient start 0x030056E8 = *0x030053B8 and DISPSTAT bit 5 (VCount IRQ) on; the counterpart of vcount_irq_off (0x0813a4e0); called at the end of race_menu_palette_setup outside race game state 5
+0x08139b7c,menu_scene_free,function,frees the scene's heap blocks (0x03005FB4/0x03005FB8 and world +0x1C +0x18 +0x48 +0x0C +0x68 +0x64 +0x6C +0x60 +0xFC +0x44 +0x40 ...) the same list as race_cleanup; menu_scene_teardown (0x081372d8) is a thin wrapper

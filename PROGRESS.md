@@ -54,7 +54,13 @@ Left, in order:
 
 ### 3. Milestones after that
 
-1. **Playable reference:** boot → menus → race entirely in our code at 240×160 (menus drawing: U7; garage screens: U3; the race-start handover, intro, countdown, fades, race end, pause: G1).
+1. **Playable reference:** boot → menus → race entirely in our code at 240×160 (menus drawing: U7; garage screens: U3; the race-start handover, intro, countdown, fades, race end, pause: G1). Surveyed 2026-09-29; batches of ~100 agent turns, oracle first, on typed state (after the flip):
+   1. G1a, frame edges: `main_frame`'s fade block and the four fade steps (`menus/fades.jsonl`), keys, page flip, timers, shadow-OAM copy, `snd_stop_all`/`music_stop`, `restart_engine_sound`, the state-4 tail (the debug console `debug_print_heap` is invisible: skip it).
+   2. G1b, countdown and start: `race_start_from_table_b` (`0x0813af7c`), `effect_sprite_alloc`, `countdown_tiles_a..d`; `Game::frame` for phases 1/9 and `0x03005714 == 3`. Record the intro to GO headless first (`tools/retro.py` from power-on through Quick Play).
+   3. G1c, race end and pause: phases 6–8 and 3, `fill_results` + `results_tiebreak`, `race_cleanup` (frees become typed drops), the state-5 exit, the pause block, `race_menu_palette_setup`; the menu ↔ race handover on typed state. A career finish needs a headless capture (laps set to 1).
+   4. U7a, drawing: `fill_rect8` (odd-byte BG VRAM stores: check against a headless mGBA frame), `menu_blit_material`, `text_menu`/`text_menu_7`/`text_box`/`text_menu_wrapped_colour`, `menu_button_prompts`, `message_box_draw`, drawing into `Game`'s typed page buffers with the `ui.rs` primitives.
+   5. U7b, scenes and sprites: `load_menu_descriptor`, `unpack_to_buffer`, `sprite_screen_select`/`update`, `intro_page_setup`, `health_screen_image`, `menu_scene_free`, `copy_palette_to_ram`; check a headless power-on-to-title run frame by frame.
+   6. U7c/U3: boot and save (`profile_reset`, `save_load_profile`, `save_write_profile`), `map_zone_palettes`/`map_draw`, Kind18 (garage) with a new headless key-driven capture.
 2. **Deterministic timing model** for live play (T1, T2).
 3. **Coverage:** every car, route and mode, the garage, a career win, AI hunter mode, cops if they exist (D4); the 415 functions never reached.
 4. **High-resolution engine** on typed state: painter's order (R10), the speed effect (R11), model index 0 (R14), framerate interpolation, an HUD blend (G2), automated comparison against the 240×160 reference (R27).
