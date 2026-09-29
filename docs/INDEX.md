@@ -11,5 +11,6 @@
 | [formats/text-table.md](formats/text-table.md) | Text table at `0x7E86A0`: 977 keys × 5 languages, plus the music-module list |
 | [formats/lz77-images.md](formats/lz77-images.md) | BIOS-LZ77 image bank: 294 blobs, full-screen bitmaps, car texture atlases, textures |
 | [formats/vehicle-models.md](formats/vehicle-models.md) | 3D vehicle model bank: 102 models (cars in 3 LODs, spoilers, traffic), decoded from the renderer |
+| [formats/city-sectors.md](formats/city-sectors.md) | The city: a 2.5D portal/sector engine, with 1,113 sectors and 4,423 walls |
 
 `engine/` (one file per engine area) starts when the first subsystem is understood.

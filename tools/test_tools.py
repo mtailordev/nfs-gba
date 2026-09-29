@@ -8,6 +8,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import city
 import first_look
 import models
 import vault
@@ -129,6 +130,21 @@ class RealVaultTest(unittest.TestCase):
             self.assertTrue(vault.parse_header(rom)["header_checksum_ok"])
         canon = next(r for r in m["roms"] if r["sha1"] == m["canonical_target"])
         self.assertEqual(canon["header"]["game_code"], "BN7E")
+
+    def test_city_sectors_are_contiguous_and_portals_match(self):
+        m = json.loads((data_dir() / "vault" / "manifest.json").read_text(encoding="utf-8"))
+        canon = next(r for r in m["roms"] if r["sha1"] == m["canonical_target"])
+        sectors = city.parse((data_dir() / canon["vault_file"]).read_bytes())
+        self.assertEqual(len(sectors), 1113)
+        for a, b in zip(sectors, sectors[1:]):
+            self.assertEqual(a["first"] + len(a["walls"]), b["first"])  # wall ranges tile the wall array
+        portals = matched = 0
+        for s in sectors:
+            for w, p, q in city.segments(s):
+                if w["link"] >= 0:
+                    portals += 1
+                    matched += (q, p) in [(pp, qq) for _, pp, qq in city.segments(sectors[w["link"]])]
+        self.assertGreater(matched / portals, 0.99)  # a portal's edge exists reversed in the sector it links to
 
     def test_vehicle_models_fill_their_arrays_exactly(self):
         m = json.loads((data_dir() / "vault" / "manifest.json").read_text(encoding="utf-8"))

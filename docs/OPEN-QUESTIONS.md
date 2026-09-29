@@ -4,10 +4,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Data
 
-1. **Where is the city geometry?** The vehicle models are found ([formats/vehicle-models.md](formats/vehicle-models.md)); the city is not in that bank.
-   - **Candidate renderers:** `FUN_030013ac` and `FUN_03000b44`, called from the scene routine `FUN_0300224c`.
-   - **Candidate data:** the level-descriptor words `+0x00…+0x30`: `0x71F1E8`, `0x47BC6C`, `0x730E84`, `0x723DD4`, `0x720DE8`, `0x45F5C0`, `0x722DD4`, and the per-map table used by `FUN_08139454` (`DAT_08139598`, 0x14-byte entries).
-   - **Ruled out:** `0x3E51A0–0x3F7D9C` (pixels).
+1. **City textures and road surface:** materials, the texel format at `0x47BC6C`, palettes, and the floor renderer (`FUN_03000b44`, `FUN_03002da0`). See the open items in [formats/city-sectors.md](formats/city-sectors.md).
 2. **How does the raw 8bpp region `0x404000–0x794000` split into images** (widths, headers)? Car sprites seem to be at `0x420000` and street/building textures at `0x500000` (both seen at a guessed width).
 3. **Palettes:** where they are and how images reference them. BGR555 palettes were seen at `0x33EF14` and `0x36C75C`.
 4. **How does code locate LZ77 blobs?** Hypothesis: offsets from bank bases such as `0x16C244` (referenced 29 times). There is also the "size is 8 too large" quirk.
@@ -40,5 +37,6 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 - ~~What are the high-entropy regions `0x16C000–0x33C000`?~~ **The LZ77 image bank**, see [formats/lz77-images.md](formats/lz77-images.md).
 - ~~Is `0x000000–0x0A0000` fixed-point geometry?~~ **No:** it's PCM-like audio (quiet samples look like small negative int16s).
 - ~~Is data also referenced by relative offsets?~~ **Yes:** the LZ77 blobs aren't pointer-referenced.
+- ~~Where is the city geometry?~~ **It's a 2.5D portal/sector world:** 1,113 sectors at `0x723DD4` and 4,423 walls at `0x730E84`, see [formats/city-sectors.md](formats/city-sectors.md).
 - ~~Where are the car meshes?~~ **In the vehicle model bank at `0x460A6C`**, see [formats/vehicle-models.md](formats/vehicle-models.md).
 - ~~How is the 3D scene drawn?~~ **Video mode 4** (8bpp framebuffer), with an ARM software renderer copied into IWRAM. The entry points so far: `FUN_0300224c` (scene), `FUN_03001cf0` (vehicles), `FUN_03004018` (transform), `FUN_03004190` (polygon loop), `FUN_03003808` (rasteriser).
