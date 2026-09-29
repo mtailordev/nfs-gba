@@ -173,7 +173,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03006078`, `0x03006084`, `0x03006088`, `0x03006028`, `0x03006090`, `0x03006158`, `0x03006190` | race-start globals (`race_start_setup`) |
 | `0x030060A4` | the player's final drive |
 | `0x030060C0` | 16 words: route segments visited |
-| `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step |
+| `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step; non-zero lets `build_entity_matrix` take the physics orientation (entity `+0x0A` bit 5) |
 | `0x03006120` | per route segment: distance scale (0x100 for the main route) |
 | `0x03006150`, `0x0300614C` | nitro full-tank flag; grip-doubling flag |
 | `0x03006154` | time limit (0x4650; 0x2328 in career) |
@@ -226,12 +226,19 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005FA4` | camera height offset (8.8) |
 | `0x03006148` | when set, the camera sits `0x82` above the player instead of 16 |
 | `0x030057A0` | camera matrix in the race |
-| `0x03006920` | 32 bytes cleared each frame by `draw_visible_sectors` |
+| `0x03006920` | entity visited bitmap, 32 bytes, cleared each frame by `draw_visible_sectors` |
 | `0x03005390` / `0x03005392` | s16 screen shake x / y, added to the screen centre (always 0 in play) |
 | `0x030056B8` | horizon shift in rows (bumper view: car pitch, ±32; 0 otherwise) |
 | `0x030055F8` | camera view (0 bumper, 2 chase; per-view tables `0x7F39BC`/`0x7F39D4`/`0x7F39EC`) |
 | `0x030053A0` | extra projection-centre y offset (8.8) |
-| `0x030053D0` | view rect x0, y0, x1, y1 |
+| `0x030053D0` | view rect (left, top, right, bottom, i32; view `+0x04`): `draw_sector` sets it from the list entry, `draw_sector_entities` rewrites left/right per entity |
+| `0x030053F0` | projected model vertices (world `+0xA0`), x/y halfwords |
+| `0x03005394` | matrix slot counter (≥ 0x40 → `0xFF`) |
+| `0x03006940` / `0x03006900` | draw-list head / greatest sort key of the sector being drawn |
+| `0x030068F0…0x0300694C` | polygon rasteriser state (edges, spans, u/v steps; renderer.md) |
+| `0x03006390` / `0x030063B0` | clipped UVs (x pass / y pass) |
+| `0x03006440` / `0x03006460` | clipped screen corners (x pass / y pass) |
+| `0x03006430` | identity index table 0…7 for clipped polygons |
 | `0x03006410` | frame buffer struct: s16 stride / width, height; `+0x0C`/`+0x10` page pointers |
 | `0x03000164` | race sprite screen (world `+0xA4`): `+0x00` materials, `+0x04` texels, `+0x0C` elements, `+0x10` screens, `+0x14` objects, `+0x18` u16 screen |
 | `0x030057F0` | pointer to the unpack buffer |
@@ -280,7 +287,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 |---|---|
 | `+0x00` | city texel base |
 | `+0x04` | vehicle texel base |
-| `+0x0C` | u16 per sector: sector → entity list head (`0xFFFF` = none) |
+| `+0x0C` | u16 per sector: head of its entity list (`0xFFFF` = none) |
 | `+0x10` / `+0x14` | walls / sectors |
 | `+0x18` | moving wall pieces, 0x20 bytes, by wall `+0x2A`: dx, dz, ceiling dy, floor dy, top dy, bottom dy, material offset, flags |
 | `+0x1C` | sector offsets, 0x14 bytes, by sector `+0x0A`: `+4` ceiling dy, `+6` floor dy, `+8` flags replacing sector `+0x12` (`0x40` = hidden) |
@@ -297,9 +304,9 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x60` | visible-sector list |
 | `+0x64` | sector map |
 | `+0x6C` | flat vertex buffer (0x18 per vertex: x, floor y, ceiling y, recip, u/z, v/z) |
-| `+0x78` | entity handler table (`FUN_03001ae4` calls `[+0x78][entity +0x4E]`) |
+| `+0x78` | entity handler table (`0x7F38B8`; the sort calls `[+0x78][entity +0x4E]`) |
 | `+0x7C…+0x9C` | vehicle model bank arrays |
-| `+0xA0` | projected vertex buffer (x, y shorts) |
+| `+0xA0` | projected model vertices (`0x030053F0`) |
 | `+0xD8`, `+0xDA`, `+0xDC` | counts: materials, sectors, walls |
 | `+0xC0` / `+0xC8` | point searched by `find_camera_sector`; scratch shared by the camera and entity code |
 | `+0xE2…+0xE8` | current portal span (left, right, top, bottom); the race clip rect is (0, 240, 0, 159), so row 159 is never drawn |
@@ -309,29 +316,32 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0xF2` / `+0xF4` | flat outline / clipped outline lengths |
 | `+0xF8`, `+0xFA` | first entity and entity count for the update loop and `free_entity` (race: 4 and 0x20) |
 | `+0xF6` | sky visible |
-| `+0xFC` | vehicle matrix buffer (0x30 per slot: rotation, translation) |
+| `+0xFC` | matrix slots, 0x30 each, 64 slots: entity rotation × camera rotation (2.14) + camera-space position |
 
 ### Entity (0xA4 bytes, world `+0x3C`)
 
+Renderer fields confirmed from the code and 17 captured frames (engine/renderer.md "Entities").
+
 | Offset | What |
 |---|---|
-| `+0x00` | index |
-| `+0x02` | next in the sector's list |
-| `+0x04` | next in the frame's sorted draw list (`0xFFFF` ends it) |
-| `+0x08` | flags? |
-| `+0x0A` | flags (bit 0: use world `+0x58/+0x5A`; bit 1: LOD depth forced to 0; bit 2: drawn this frame; bits 3, 4, 6: LOD and texture) |
+| `+0x00` | own index (the draw order links through it) |
+| `+0x02` | next entity in its sector's list (heads: world `+0x0C`, u16 per sector) |
+| `+0x04` | next entity in the sector's draw order (written by the sort; `0xFFFF` ends it) |
+| `+0x08` | state: bit 0 runs the handler `world+0x78[+0x4E]` during the sort unless bit 1; bit 2 takes part in the sort; `update_entities` runs entities with `& 3 == 3` |
+| `+0x0A` | flags: bit 0 clip to the whole screen (world `+0x58/+0x5A`); bit 1 depth taken as 0 for LOD and the far cut (near model always; opponents `0x22`, markers `0x02`); bit 2 passed the screen cull this frame; bit 3 texture in RAM (`+0x84`); bit 4 draw sector `+0x36` instead of a model; bit 5 matrix from the driver's physics orientation; bit 6 beyond depth 0x1000 draw the far model instead of nothing. Player `0x0D` |
 | `+0x0C/+0x10/+0x14` | position x, y, z in 8.8 fixed point, city units |
-| `+0x28` | depth-sort key (distance squared) |
-| `+0x2C` | heading, 8.8 fixed point (`>> 8`: 0x4000 per turn) |
-| `+0x2C` | (template entities) start heading, 8.8 (`0x100000` = 0x1000 for route 23) |
-| `+0x36` | close model + 1 (car table `+0x14` + 1); the next model is drawn beyond depth 0x1FF |
-| `+0x4E` | handler index (world `+0x78`): 0 player, 0x29 opponents, 0xE empty slots |
-| `+0x44/+0x46/+0x48` | material selection (`+0x48` = atlas: player = car table `+0x0C` + record `[3]`; opponents 140–142 in the race) |
-| `+0x64` | second model piece (`0x7F0636[car·0x10 + rec[0]]`, clamped at 0; 12 for the player), drawn with matrix slot `+0x88 + 1`; negative swaps the order |
+| `+0x28` | sort key `(x'² + d²) >> 8`, camera space |
+| `+0x2C` | heading, 8.8 (`>> 8`: 0x4000 per turn); template entities: start heading (`0x100000` for route 23) |
+| `+0x30` / `+0x32` | angles for `build_entity_matrix`'s two rotations (axes not checked) |
+| `+0x36` | **far model** (depth ≥ 0x200); near = `+0x36 − 1`. Cars: the low model, so races draw medium near and low far, never high. Bit 4: a sector index |
+| `+0x44` (high byte) / `+0x46` | material steps added to `+0x48` (0 in every capture) |
+| `+0x48` | vehicle material (the atlas); player = car table `+0x0C` + record `[3]`; opponents from `0x7EEA44`; 0 = not drawn |
+| `+0x4E` | handler index (`0x7F38B8`): 0 player, 0x29 opponents, 0xE empty slots, 0x36 AI/traffic |
+| `+0x64` | second model on matrix slot `+0x88 + 1` (spoiler: 12 Cobalt, 4 car 0; from `0x7F0636[car·0x10 + rec[0]]`, clamped at 0); negative: drawn before as model `−n` |
 | `+0x70` | 0x640 at setup |
 | `+0x74` | start sector (template entities) |
-| `+0x84` | RAM pointer to the unpacked atlas (`0x03006164[racer]`) |
-| `+0x88` | matrix slot (`0xFF` = none: not drawn by `draw_sector_entities`) |
+| `+0x84` | RAM address of the unpacked atlas (`0x03006164[racer]`, bit 3) |
+| `+0x88` | matrix slot (world `+0xFC`); `0xFF` = not drawn |
 | `+0x89` | car id (index into the 0x11-byte car records) |
 | `+0x8C` | pointer to the driver struct (below; race: `0x0202C624` player, then `0x0202D168` + 0x500·k) |
 | `+0x90` | racing-line segment |

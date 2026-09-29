@@ -18,16 +18,16 @@ address,name,kind,comment
 0x03000978,transform_walls,function,rotates wall points by the camera matrix and fills the wall draw buffer
 0x03000b44,clip_flat_outline,function,clips the floor/ceiling outline to the portal's columns
 0x030013ac,setup_wall_spans,function,projects wall ends and heights; wall u0/u1 and v setup
-0x03001ae4,sort_sector_entities,function,depth-sorts a sector's entity list
-0x03001cf0,draw_sector_entities,function,draws entities (vehicles) of a sector: LOD and material selection
+0x03001ae4,sort_sector_entities,function,sorts a sector's entities farthest first by (x'^2+d^2)>>8 into +0x04; runs handlers
+0x03001cf0,draw_sector_entities,function,per entity: clip span, depth/row culls, LOD +0x36-1 / +0x36, 0x1000 cut (bit 6), material, texture, body + spoiler
 0x03002084,draw_sector_walls,function,draws the sector's walls; defers span-flag-2 walls (8-bit mask)
 0x0300224c,draw_sector,function,scene: draws a sector (walls, floor, ceiling, entities) and recurses containers
 0x03002da0,draw_flat_textured,function,floor/ceiling textured pass
 0x03003180,draw_flat_fill,function,floor/ceiling solid-colour pass
-0x03003808,raster_polygon,function,textured polygon rasteriser for models
-0x03004018,transform_model_vertices,function,rotates/translates model vertices and projects them (reciprocal table)
-0x03004190,draw_model_polygons,function,per polygon: size byte, indices, backface cull, raster_polygon
-0x03004e24,collect_sector_entities,function,gathers entities of a sector for drawing
+0x03003808,raster_polygon,function,outcode, clip, edges from the top corner, spans
+0x03004018,transform_model_vertices,function,projects a model's vertices; drops the model if a vertex depth > 0x6000
+0x03004190,draw_model_polygons,function,back-face cull (cross >= 0 drawn) then raster_polygon per polygon
+0x03004e24,collect_sector_entities,function,resets the draw list and sorts the sector's (or a container's children's) entities
 0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)
 0x0816a708,__divsi3,function,libgcc signed divide (truncating; x/0 = 0)
 0x0816a7e4,__modsi3,function,libgcc signed remainder
@@ -72,7 +72,7 @@ address,name,kind,comment
 0x081378cc,camera_init,function,camera init: view 4/5, shake = 0, yaw from player
 0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre; fixed camera looking at the player (focal 150)
 0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre; chase camera: matrix, focal effect, screen centre, start sector, list entry 0
-0x0814bc30,draw_vehicle,function,(name tentative) vehicle draw; sets the horizon shift from the player's pitch in views < 2
+0x0814bc30,build_player_matrices,function,player car: builds its matrix slots (body and spoiler) each frame; sets the horizon shift from the player's pitch in views < 2
 0x08149b94,save_probe_profile,function,boot: read EEPROM slot, checksum+version 9, copy name and language
 0x08149d84,save_load_profile,function,read EEPROM, checksum, decode (save_decode) and rebuild unlocks
 0x08149fd8,save_write_profile,function,encode (save_encode) and write 64 EEPROM blocks
@@ -313,3 +313,15 @@ address,name,kind,comment
 0x08137534,free_entity,function,first entity from world +0xF8 (+0xFA of them) whose flag bit 0 is clear
 0x03004470,atan2_fast,function,IWRAM ARM: atan2 via recip_div_16 (divisor clamped to 0x7FFE)
 0x03000220,iwram_divmod,function,IWRAM ARM: signed divide storing a remainder; negative divisors divide by -|a|
+0x0300514c,polygon_outcode,function,model polygon outcode: 4 if no corner inside in x or none in y; bit 0/1 outside in x/y
+0x03003d70,clip_polygon,function,Sutherland-Hodgman of a model polygon against the view rect (x then y), halfword results
+0x03003acc,clip_polygon_edge,function,clips one edge to lo..=hi on x or y with u/v; 1 visible, 2 start clipped, 4 end clipped
+0x03005320,polygon_top_corner,function,first corner with the least y
+0x03003464,polygon_edge_back,function,next polygon edge walking corners backwards: 16.16 x, u/v steps per row
+0x03003634,polygon_edge_forward,function,next polygon edge walking corners forwards
+0x030051f4,draw_polygon_span,function,textured model span: texel pointer stepped by du/dv with 8-bit fraction carries, no wrap
+0x0814eba0,assign_entity_slot,function,gives an entity drawn last frame a matrix slot (counter 0x03005394) and builds it; clears +0x0A bit 2
+0x0814da68,build_entity_matrix,function,slot matrix: rot(+0x30) * camera * rot(+0x32) (or physics matrix, bit 5) + camera-space position; only if +0x0A bit 1 or depth <= 0xDAC
+0x0814ec0c,assign_billboard_slot,function,(name tentative) slot with the camera rotation and the camera-space position
+0x0814e628,opponent_effects,function,(name tentative) rear effect sprites of a car via FUN_0814e414
+0x0814e7b0,spawn_effect_sprite,function,(name tentative) projects a point and allocates a scaled sprite object (FUN_08162048)
