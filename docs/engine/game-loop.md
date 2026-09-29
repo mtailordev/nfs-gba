@@ -11,8 +11,8 @@ SHA-1 `e5298b24…`.
 effect sprites and the spark entities all run in `Game::frame`. Five traces hold 2,445 frames, all exact in the typed
 state (the gameplay state, the sound engine, the atlases) and in VRAM, palette and OAM, both from each traced state
 and as free runs that carry their own state. Only the frame timing (T1) and the keys come from the trace. The viewer drives it live
-(`NFSGBA_PLAY=1`) and plays its sound. The race start, countdown, fades, race end and pause are not in the loop yet
-([Not ported](#not-ported)).
+(`NFSGBA_PLAY=1`) and plays its sound. The race start (state 4), the intro, the countdown and GO run in the loop (`start` trace, 89 frames; `countdown.rs`);
+the race end, pause and menus are not in it yet ([Not ported](#not-ported)).
 
 ## No frame pacing: timing is an input
 
@@ -109,6 +109,7 @@ and as free runs that carry their own state. Only the frame timing (T1) and the 
   | `live` | 700 | `circuitinfo.ss`, racing | LONGPOINT circuit, hard, three opponents, heavy traffic: bumping the neighbours on the grid, braking (brake smoke), swerves, a car-to-car contact in frame 387 |
   | `trail` | 700 | `sprintinfo.ss`, racing | a sprint behind the opponents through heavy traffic: braking, handbrake turns |
   | `views` | 600 | `race.ss` | SELECT to the bumper view and back, DOWN to look back in both views, L and R |
+  | `start` | 89 | `sprintinfo.ss`, from the state-4 frame | the race start of JUNKPOINT: the fade in, the intro, the countdown, GO, the first racing frames (no keys held); frame 0 is `race_init::start` from the menus' state |
   | `nitro` | 300 | `race.ss` | nitro poked into the tank (`poke 0x0202CAEE 1`: the Quick Play car has none): the focal-length speed effect and the nitro flames |
 
 - **Recorder columns** (`NAME.csv`), each an IRQ count unless noted:
@@ -180,11 +181,14 @@ loop restart, `snd_stop_all` and `music_stop` (`Game::snd_stop_all`, `music_stop
 the pause, which are not ported). The gradient fade is tracked for its first 120 entries (the rest of the 0x200
 buffer is never shown).
 
+**Done around the race start (trace `start`, `tests/edges.rs` `countdown_matches_the_game`):** game state 4 after
+`race_start` (`race_init::start` leaves the game in state 4; `Game::state4_tail`: state 5, fade `0x10`, the frame
+counters 0, with a route the base palette into the fade's target and the light tint; the debug print is left out),
+then the frame as a race frame; the intro (phase 9); the countdown and GO (`race_start_from_table_b`, `effect_sprite_alloc`,
+the digit tiles); the racing HUD tiles one frame later (`0x03005714 == 3`, `countdown_tiles_a..d`). The recorder marks
+the IRQ counts at `rand_seed`, the music request and `race_start_from_table_b` (`Timing::seed`, `music`, `start`).
+
 **Around the race (the race-init handover, open):**
-- game state 4: the rest of the frame after `race_start` (the fade set-up, the debug print `FUN_0815e9e8`, the
-  palette copy and light tint);
-- the intro frames (phase 9), the countdown (`race_start_from_table_b` in phases 1 and 9) and the start set-up
-  (`0x03005714 == 3`, `FUN_0813a054`…`FUN_0813a108`);
 - the race-end countdown (phases 6–8), the race end (phase 3) and the state-5 exit of `game_state_step` (sound
   stops, `fill_results`, `FUN_081396c4`'s frees, the screen change);
 - the pause (START) and every menu frame (game state 1).
@@ -195,27 +199,8 @@ The plan for this is under [Open: the race-init handover](#open-the-race-init-ha
 
 (the coordinator's added scope, not started, paused for the review). The plan, from
 the decompiled code:
-- **State 4 in `Game::frame`**, after `race_init::race_start`:
-  - `MENU_EXIT` 0, state 5, fade `0x10`, `0x030057E0` `0x10`, the frame counters 0;
-  - the debug console print `FUN_0815e9e8`. It writes RAM: the text console `0x030064B0` (via `FUN_0815e850`),
-    with the free heap from `FUN_08160e74` (itoa `FUN_081633cc`);
-  - with a route, the base palette copied into the second buffer and `apply_sector_light_to_palette`;
-  - then the first `race_frame_update`.
-- **IRQs in the state-4 frame:** they commute with `race_start` except for two reads.
-  - The tick counter is the rand seed: record the IRQ count at `setup_race_cars`' read and pass
-    `seed_vblanks = 0` after running them.
-  - The music request (engine `+0x1478`): record the count at `carbon_play_music` and apply the request to the
-    engine there.
-
-  So the recorder needs a `marks` column: seed, music, `race_start_from_table_b` (phase 2 starts the race time
-  mid-frame on the GO frame), the pause block entry and the store to `0x03005398`.
-- **`Game` changes:**
-  - an `io` field, because `race_start` and `obj_upload_tiles` read DISPCNT's 1-D bit;
-  - the sprite bank rebuilt after `race_start`: `Game::new` must not assume a level descriptor at state 4.
-- **`race_start_from_table_b`**, with fade 0:
-  - in phases 1/9: an effect sprite, and `0x030000AC += 50000 / frame time`;
-  - every `0x4000`: `0x03005714` += 1 (phase 2 at 3), or the next countdown digit's tiles uploaded;
-  - at 3: the four tile uploads `FUN_0813a054`…`a0e0`, then 4.
+- **The pause block and the marks:** the recorder still needs marks for the pause block's entry and the store to
+  `0x03005398`. (State 4, the seed and music marks and the countdown are done, above.)
 - **Race end:**
   - phases 6–8 count `0x030000AC` down by the frame ticks, then `0x03005780 = 1` and fade `−0x10`;
   - phase 3 sets fade `+0x10`;

@@ -6,7 +6,9 @@ use nfsgba_sim::Unported;
 
 use crate::Game;
 
-/// The HUD materials the game reads at fixed ROM offsets (not chosen by the level).
+/// The HUD materials the game reads at fixed ROM offsets (not chosen by the level): entries of the 0x24-byte table
+/// at `0x36CF5C` (`TILES_A` is entry 0, read at `+0x2C..`, i.e. entry 1; `DIGITS` 23, `TILES_B` 11, `TILES_C` 26,
+/// `TILES_D` 279, the traffic rear lights). Entry fields: `+8` texel offset, `+0xC` width, `+0xE` height, `+0x20` palette.
 const DIGITS: usize = 0x36_D298;
 const TILES_A: usize = 0x36_CF5C;
 const TILES_B: usize = 0x36_D0E8;

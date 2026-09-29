@@ -297,7 +297,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030057A0` | camera matrix in the race |
 | `0x030057D0` | index of the car whose finish ended the race (car_handler at phase 3) (4) |
 | `0x030057D8` | u16 control word per entity (`0xFC00 \| keys` for the player) |
-| `0x030057E0` | set to 0x10 at race start (with the fade) (u32) |
+| `0x030057E0` | set to 0x10 at race start (with the fade); it is `input[4]` of the control-word array at `0x030057D8` (u32) |
 | `0x030057E8` | cleared by race_init (4) |
 | `0x030057EC` | AI car count (opponents, + 1 with a wingman) |
 | `0x030057F0` | pointer to the unpack buffer |

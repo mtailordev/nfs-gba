@@ -10,7 +10,7 @@ address,name,kind,comment
 0x08139454,race_load_level,function,copies level descriptor pointers into the world struct and allocates buffers
 0x081397d8,race_init,function,race start: load level/route, spawn entities, palettes
 0x08139e34,race_start_from_table_a,function,calls race_init path with record index*0x68 + 0x7F2B08
-0x0813af7c,race_start_from_table_b,function,calls level setup with record index*0x68 + 0x7F2B08
+0x0813af7c,race_start_from_table_b,function,the intro and countdown of the race start (phases 1/9: digit sprite + accumulator 0x030000AC; count 3 -> phase 2); with 0x03005714 == 3 the racing tiles (countdown_tiles_a..d); called by race_frame_update every frame
 0x0813a514,apply_sector_light_to_palette,function,interpolates wall light (+0x3C..+0x3E) at the player position and tints palette 1-143 and 149-255
 0x081387e4,shade_car_paint,function,car paint colour from paint table * heading-dependent shade into palette slot 192+
 0x0813b190,draw_model_param_block,function,packs model bank pointers into a draw parameter block
