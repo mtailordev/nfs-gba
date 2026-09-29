@@ -3539,6 +3539,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nfsgba-game"
+version = "0.1.0"
+dependencies = [
+ "nfsgba-audio",
+ "nfsgba-formats",
+ "nfsgba-sim",
+]
+
+[[package]]
 name = "nfsgba-sim"
 version = "0.1.0"
 dependencies = [
