@@ -25,3 +25,9 @@ address,name,kind,comment
 0x08161754,scale_obj_palette,function,(source; r; g; b; first; n) OBJ palette entries = source channels x factor / 256 capped at 31
 0x081372d8,menu_scene_teardown,function,every menu kind's exit handler: FUN_08139B7C(world)
 0x0812d564,garage_copy_car_record,function,copies the car record of 0x03005718: bytes 0..6 to 0x03005700 and 7..16 to 0x03005707
+0x0812c81c,unlock_state,function,(tentative; stub in menu.rs) (unlock id) 1 owned; 2 locked; 0 or 3 not affordable: drives the car-select and crew prompts
+0x0812c8a8,buy_unlock,function,(tentative; stub) (unlock id) buys a car after the confirmed message box
+0x0812c5c4,unlock_owned,function,(tentative; stub) (unlock id) nonzero when owned (car select shows no price)
+0x081300e0,list_item_new,function,(tentative; stub) (screen; item) nonzero: the item gets a "new" mark
+0x081302c4,upgrades_changed,function,(tentative; stub) (not the performance page) nonzero when the upgrades changed (0x03005954; save question 0x376)
+0x08133d30,car_stats_draw,function,(tentative; stub) (car; x; y; 0) the car-select stat bars

@@ -442,6 +442,22 @@ mode's first race, others a screen (9 also resets every car record and sets the 
 or out. Between hints: 0x28 saves the hints seen, 0x29 shows "hint n" until the wait, 0x2A clears both frame buffers
 (`fill32`) and returns to 0x26.
 
+### Lists (0–6, 9, 27–30, 35, 36, 45, 46)
+
+Pages `0x7E544C` by `list_slot` (items 8 bytes: text, two pictures, action); cursor per slot at profile `+0x350`.
+Three items are drawn (previous, next, current at `0x797CD8`/`0x797CE0`), the crew pages with lock state, portrait
+(palette `0x7E786C`), role and level; car select (9) shows the turning car (L/R on `0x030064C4`), its name, stats,
+price, cash and buy/pick prompts. Left/right move (2-item pages toggle); on car select the car record is copied
+(`garage_copy_car_record`) and the car reloaded. A: the crew pages pick the wingman (`+0x200`, side `+0x204`) and the
+opponent count (3, or 2 with a wingman), then return by the back stack; career (3) and events (0xD) may show a hint;
+0x1F–0x22 open the upgrade pages (`+0x364`/`+0x365`); RACE TYPE (1) sets up a free race (Quick Play car, 2
+opponents, 2 laps or 1 in a sprint, `rand % 3 + 1` and `rand % 20` looks); QUICK PLAY's first item draws a race mode
+from `0x797D0A` and a random track; actions from 0x85: pick or buy the car, the profile pages, the options, the
+hints-done step, a career race's setup, the upgrades save. A confirmed message box resumes the paused race (5),
+starts a new profile (2), buys the car (9), or saves the upgrades (0x8B, `upgrades_changed` into `0x03005954`).
+Stubbed below the handler: `unlock_state`, `unlock_owned`, `buy_unlock`, `unlock_price`, `upgrades_changed`,
+`list_item_new`, `car_stats_draw`, `quick_race_random`, the garage car loaders and `garage_draw_car`.
+
 ### Verification (menus-2)
 
 Each kind's handlers are called directly on random menu states over the five menu snapshots, with every unported
@@ -455,6 +471,7 @@ picks. Every changed RAM byte (VRAM and palette RAM included) and the update han
 | `race_results_match_the_game` (career) | 1,600 | 9 of 10 (the tenth is equivalent) |
 | `settings_screens_match_the_game` (setup) | 1,600 | 14 of 14 |
 | `hint_pages_match_the_game` (kind38) | 1,600 | 12 of 12 |
+| `list_screens_match_the_game` (lists) | 2,400 | 14 of 15 (the fifteenth is equivalent); a coverage gap: a back-stack top of 9 on the crew page |
 | `top_level_matches_the_game`, `intro_screens_match_the_game` (regenerated) | 2,400 each | — |
 
 Stub arguments that point into the game's stack (the number and time texts, the rectangle of `fill_rect8`) are
@@ -753,48 +770,50 @@ conflicts) and `docs/engine/notes/addresses.menus.csv`.
 
 ## Integration notes (menus-2)
 
-Symbols and addresses: `docs/engine/notes/symbols.menus-2.csv` (26 rows; checked against `symbols.csv`: no
-duplicates) and `docs/engine/notes/addresses.menus-2.csv`. Run `tools/notes_merge.py` on them.
+**Done (exact, oracle-verified; `menu.rs`):** the map screens (Kind7), the career event (13), the race results (11,
+12), the settings screens (10, 15, 16), the hint and story pages (38–43), the List screens (0–6, 9, 27–30, 35, 36,
+45, 46), the menu scene setup (every screen's background and palette), every exit handler, the career race's
+opponent picks and the tutorial race setup. **Open:** Kind18 (0x12–0x14, the garage's car pages: enter 121, update
+214, draw 396 decompiled lines, not started), the message-box draw (`0x0813550C`), and the helpers stubbed below
+the handlers (listed per kind in "Menus, continued").
+
+Symbols and addresses: `docs/engine/notes/symbols.menus-2.csv` (32 rows, 6 of them tentative stub names; checked
+against `symbols.csv`: no duplicates) and `docs/engine/notes/addresses.menus-2.csv`. Run `tools/notes_merge.py`.
 
 ### Renames of existing `symbols.csv` rows (the merge tool only appends)
 
 - `0x0812b320` `setup_screen_15_prepare` → **`career_race_opponents`**: "entering screen 15: the career race's three
   opponents (distinct rand&7 picks of the zone's eight; the boss on boss events; the wingman last)".
-- `0x0813550c` `message_box_draw`: drop "(tentative)"; comment "the open message box: frame (material 6), text
-  `0x030059F8` in a box, the argument `0x030059EC` as a number, A / B prompts by type".
-- The handlers keep their names; `menu.rs` ports `kind7_*`, `career_event_*`, `career_zone_*` (the race results),
-  `setup_screen_*` and `kind38_*`. Suggested comment updates: `career_zone_*` "race results (0xB record/unlocks, 0xC
-  standings)", `kind7_*` "map screens (7, 8 SELECT TRACK; 0xE SELECT ZONE; 0x11 TRACK RECORDS)", `kind38_*` "hint and
-  story pages (0x26–0x2B)".
+- Suggested comment updates: `career_zone_*` "race results (0xB record/unlocks, 0xC standings)"; `kind7_*` "map
+  screens (7, 8 SELECT TRACK; 0xE SELECT ZONE; 0x11 TRACK RECORDS)"; `kind38_*` "hint and story pages (0x26–0x2B)";
+  `list_*` "List screens: menus, car select, garage lists, crew".
 
 ### FIDELITY.md
 
-- **U3 (menu screens): narrow it.** Now exact and oracle-verified (`menu.rs`): besides the intro kind, the map
-  screens (Kind7), the career event (13), the race results (11, 12), the settings screens (10, 15, 16) and the hint
-  and story pages (38–43) with their page-script interpreter, the menu scene setup, every exit handler, the career
-  race's opponent picks and the tutorial race setup (8,000 new cases, 53 of 54 mutations caught, the last one
-  equivalent). **Open:** the List kind (0–6, 9, 27–30, 35, 36, 45, 46: the main menus, car select, garage, crew) and
-  Kind18 (0x12–0x14, the garage's car pages); the message-box draw; below the handlers, the map's zone palette and
-  map draw (`0x08143284`, `0x081435C4`), `career_race_payout` (modelled by `career::race_payout` on a `Save`, not yet
-  on RAM), the garage car loaders and drawer, and the drawing primitives (U7).
-- **U4 (menu palettes): answered for every screen** except Kind18's: the table in "Menus, continued" (background
-  material and menu palette from each page record, loaded by `menu_scene_setup`).
-- **U7:** add "`fill_rect8` (`0x08164BEC`) writes the odd edges of a rectangle with byte stores; on hardware a byte
-  store to BG VRAM writes both bytes of its halfword, which the function oracle (unicorn) does not model. Porting it
-  onto VRAM needs that rule in `Gba` and a hardware check (mGBA), not the oracle."
-- **D3 (career):** "Where career races choose their opponents" is answered (`career_race_opponents`, above); the
-  event's AI skill goes to `0x030000BC` with the difficulty `skill / 35` (`career_event_to_globals`).
-- **New (unreachable, noted):** an unknown page-script command makes the game loop forever (the port panics);
-  `thousands_separator` above 999,999 uses a stale register (never reached: rewards stay below 46,000).
+- **U3 (menu screens): narrow it** to: "Open: Kind18 (0x12–0x14, the garage's car pages), the message-box draw, and
+  helpers stubbed below the handlers (map zone palette and map draw, `career_race_payout` on RAM, the garage's
+  unlock/buy/price/stats helpers, `quick_race_random`, the garage car loaders and drawer). Exact and oracle-verified
+  (`menu.rs`): `main_frame`, `game_state_step`, `menu_frame`, the screen machine, the fades, the menu scene setup,
+  and the intro, map, career event, race results, settings, hint-page and List kinds (5,400 + 10,400 cases; 67 of
+  69 mutations caught, 2 equivalent)."
+- **U4 (menu palettes): answered for every screen but Kind18** (table in "Menus, continued").
+- **U7:** add "`fill_rect8` (`0x08164BEC`) writes a rectangle's odd edges with byte stores; on hardware a byte store to
+  BG VRAM writes both bytes of its halfword, which the function oracle (unicorn) does not model. Porting it onto VRAM
+  needs that rule in `Gba` and a hardware (mGBA) check."
+- **D3 (career):** where career races choose their opponents is answered (`career_race_opponents`); the event's AI
+  skill goes to `0x030000BC`, its difficulty `skill / 35` to `0x03005608` (`career_event_to_globals`).
+- **New (noted):** `thousands_separator` above 999,999 uses a stale register as the separator position (the port
+  returns unchanged). Rewards stay below 46,000, but the profile's cash is shown with it too; whether the cash can
+  exceed 999,999 is open. An unknown page-script command makes the game loop forever (the port panics).
 
 ### OPEN-QUESTIONS.md
 
-- Answered: "which screen id is which menu" for every kind but Kind18 (table above); where screen 0x25 is reached is
-  still open.
-- New: what the four menu kinds' per-frame `rand_table` draw decorates (nothing visible uses the number).
+- Answered: which screen id is which menu for every kind but Kind18 (table in "Menus, continued").
+- New: can the profile's cash exceed 999,999 (the separator's stale-register path)? What does the per-frame
+  `rand_table` draw of four menu kinds decorate? Where is screen 0x25 reached (still open)?
 
 ### TOOLS.md
 
-- `tools/ui_menu_oracle.py all` regenerates every case set under `$NFSGBA_DATA/work/<sha8>/menus2/`; per kind:
-  `kind7`, `event`, `career`, `setup`, `kind38`. Stub arguments that point into the game's stack are recorded by
-  content (`STACK_TEXT`, `STRUCT_ARGS`).
+- `tools/ui_menu_oracle.py all` regenerates every case set under `$NFSGBA_DATA/work/<sha8>/menus2/` (`menus/` keeps the
+  first port's sets for main's tests until this merges); per kind: `kind7`, `event`, `career`, `setup`, `kind38`,
+  `lists`. Stub arguments that point into the game's stack are recorded by content (`STACK_TEXT`, `STRUCT_ARGS`).
