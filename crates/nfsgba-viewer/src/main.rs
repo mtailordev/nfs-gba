@@ -872,7 +872,7 @@ struct Poses {
 /// at the display rate while the game steps at its own. The camera is blended as the game's render frame (the yaw
 /// and the eye), and the visible-sector list and the wall spans are computed for that blended frame, so the walls
 /// clip to their portals exactly as they would if the game had stepped there.
-/// NOT 1:1 (presentation, by contract): the picture lags the simulation by up to one game frame; a jump larger
+/// Presentation, allowed by the contract (interpolation between game frames): the picture lags the simulation by up to one game frame; a jump larger
 /// than `TELEPORT` (a respawn, a new race) is not interpolated.
 #[derive(Resource, Default)]
 struct Smooth {

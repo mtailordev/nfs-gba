@@ -387,7 +387,7 @@ fn screen_of(cam: &Transform, p: Vec3) -> Option<Vec2> {
 /// for its own frame's cars. While the display shows the cars between two game frames, each pool sprite that lies
 /// within `NEAR` pixels of a car's projected origin moves with that car: by how far the car's screen position
 /// changed from the game frame to the blended view.
-/// NOT 1:1 (presentation): the sprites are matched to cars by screen distance, not by the effect's owner.
+/// NOT 1:1 (R30): the sprites are matched to cars by screen distance, not by the effect's owner.
 fn lock_effects(oam: &mut [u8], play: &Play, race: &Race, smooth: &crate::Smooth) {
     const NEAR: f32 = 30.0;
     let (Some(fc), Some((fb, _))) = (&smooth.curr.frame, &race.frame) else {
