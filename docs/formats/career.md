@@ -306,28 +306,28 @@ Two sources, one replay test (`race_rules_match_the_traces` in `career.rs`), whi
    - payout, style rating, unlock rebuild and `save_encode` (with the heap bytes it overwrote);
    - the plane build.
 
-   An autopilot (`auto on`) steers along the racing line. Captured: the story races (routes 1 and 3, wingmen), a career event, three game-written saves (plus the `.sav` mGBA wrote).
+   An autopilot (`auto on`) steers along the racing line. Captured: the story races (routes 1 and 3, wingmen), a career event (lost, place 3), five game-written saves (two with the `.sav` mGBA wrote).
 2. **Oracle cases** (`tools/oracle_race_rules.py`, `oracle-*.jsonl`, the same keys). They run each function in the function oracle (`tools/oracle`, `docs/engine/harness.md`) on generated inputs over the reference race's RAM:
    - random and edge values for places, laps, flags, times, lives, impulses, statuses and records;
    - the racing line of all 43 routes, circuit and sprint, with both build flags, through the real load functions.
 
 | Rule | Traced calls | Oracle cases |
 |---|---|---|
-| `lap_crossing` (incl. elimination, finish, wingman) | 1,027 | 2,000 |
-| player tracker `FUN_0813edd8` | 539 | 2,000 |
-| AI advance (`FUN_0814d078` block) | 22,201 | — |
-| `race_progress` | 806 | 2,000 |
-| positions `FUN_0813ea04` | 160 | 2,000 |
+| `lap_crossing` (incl. elimination, finish, wingman) | 1,663 | 2,000 |
+| player tracker `FUN_0813edd8` | 814 | 2,000 |
+| AI advance (`FUN_0814d078` block) | 39,548 | — |
+| `race_progress` | 1,430 | 2,000 |
+| positions `FUN_0813ea04` | 258 | 2,000 |
 | finish estimate | — | 2,000 |
 | hunter tick / hit / drains | — | 2,000 each |
 | ranking `FUN_0812e8e4` | (in payout) | 2,000 |
-| `career_race_payout` | 3 | 3,000 |
-| `style_rating` | 179 | 2,000 |
-| `rebuild_unlocks` | 6 | 2,000 |
-| `save_encode` | 3 (+ `.sav`) | 2,000 |
-| racing line, planes, distances | 2 builds | 43 routes × 2 × 2 |
+| `career_race_payout` | 4 (one career event, flag 1) | 3,000 (652 wins, 690 second places paid) |
+| `style_rating` | 336 | 2,000 |
+| `rebuild_unlocks` | 8 | 2,000 |
+| `save_encode` | 5 (+ 2 `.sav`) | 2,000 |
+| racing line, planes, distances | 3 builds, 1 mid-race | 43 routes × 2 × 2 |
 
-Every line matches. The AI advance block can't be called on its own, so it is checked only on traces (22,201 calls, including branch choices).
+Every line matches. The AI advance block can't be called on its own, so it is checked only on traces (39,548 calls, including branch choices). Not captured: a career **win** in the emulator (the autopilot is about 30% slower per lap than the skill-0 AI); the paying payout paths and saves with won events are covered by the oracle cases only.
 
 ## Save (EEPROM)
 
@@ -400,7 +400,7 @@ Checked: the reference `.sav` (profile "A", created before the Quick Play race) 
 - **Heap buffer.** The game encodes into a fresh `malloc(0x200)` (`save_write_profile`), so the unused bits above come from `heap`.
 - **Lossy image.** Fields wider than their bits are cut: the car records' 5-, 6- and 7-bit fields, camera bit 0, and bit 0 of each unlock flag word. Decoding a save therefore need not give back the RAM that was saved.
 - **Checks:**
-  - three game-written saves, encoded from the RAM at `save_encode`'s entry over the heap bytes it overwrote, are byte-identical, and so is the `.sav` mGBA wrote (`eeprom_to_buffer`, its own inverse);
+  - five game-written saves (after the story races and the career event), encoded from the RAM at `save_encode`'s entry over the heap bytes it overwrote, are byte-identical, and so are the two `.sav` files mGBA wrote (`eeprom_to_buffer`, its own inverse);
   - 2,000 oracle cases with random profiles, car records, flag words and globals match;
   - decode then encode round-trips the reference `.sav`.
 
@@ -539,14 +539,14 @@ Checked: the reference `.sav` (profile "A", created before the Quick Play race) 
 
 **FIDELITY:**
 - **D5 closed.** Every race rule is a state model in `career.rs` (`Racer`, `Race`) and matches the game. Checked on:
-  - mGBA traces: story races and a career event, 1,027 lap crossings, 22,201 AI advances;
+  - mGBA traces: story races and a career event, 1,663 lap crossings, 39,548 AI advances;
   - function-oracle cases on generated inputs (2,000–3,000 per function; table in "Race-rule checks").
 
   The functions: `lap_crossing` (elimination, finish, non-racers), both racing-line trackers, `race_progress`, `update_places`, `finish_estimate`, the hunter tick, hit and both drains, the results ranking, `career_race_payout`, `style_rating` and `rebuild_unlocks`.
 - **D6 closed.**
   - **Lap arming:** the player's `FUN_0813edd8` (lap segments 1–9 and branches) and the AI's advance inside `FUN_0814d078` (segments 1–7, shortcuts). Both are ported and checked.
   - **Hunter life at zero:** nothing happens beyond the clamp. The car keeps racing, and hunter results rank by life. Every reader is listed in "Hunter life".
-- **D7 closed.** `Save::encode` is byte-identical to three game-written saves (and their `.sav`) and to 2,000 oracle cases.
+- **D7 closed.** `Save::encode` is byte-identical to five game-written saves (two `.sav` files too) and to 2,000 oracle cases.
 - **D1 follow-up:** `routes()` (lib.rs) returns the ROM line. The race's own line differs (`career::RacingLine`):
   - sprints get two extra points;
   - links are rebuilt;
