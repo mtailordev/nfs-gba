@@ -87,7 +87,7 @@ KIND_SCREENS = {  # kind name -> (index in KIND_HANDLERS, screens)
     "intro": (6, [21, 22, 23, 24, 25, 26, 37, 47, 48]), "kind38": (7, [38, 39, 40, 41, 42, 43]),
 }
 # Ported handlers: every exit (each is only `FUN_081372D8(world)`), the intro kind and those listed per kind.
-PORTED_KINDS = ["intro", "kind7", "event", "career", "setup"]
+PORTED_KINDS = ["intro", "kind7", "event", "career", "setup", "kind38"]
 PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
@@ -105,8 +105,10 @@ STUBS.update({
     0x08143284: 0, 0x081435C4: 0,  # map screens: zone colours, map draw
     0x08141C88: 7,  # text box (font, key or pointer, x, y, width, lines, colour)
     0x0812EFE8: 0,  # career_race_payout
+    0x08136028: 1, 0x0815240C: 0, 0x08164BEC: 4,  # stop sound, stop music, fill rectangle (rect on the stack)
 })
 STACK_TEXT = (0x0300_7000, 0x0300_7C00)  # stub pointer arguments in here are the game's stack strings
+STRUCT_ARGS = {0x08164BEC: (0, 16)}  # stub: (argument, bytes) passed by pointer to a stack struct
 MENU_FRAME, GAME_STATE_STEP, MAIN_FRAME, GOTO_SCREEN = 0x0812B5F0, 0x0812ACEC, 0x0812AE64, 0x0812BB5C
 DRAW_SCREEN = 0x0812D334
 PROFILE_AT = 0x0200_0808
@@ -125,7 +127,11 @@ def run(gba, fn, mem, ret, regs=None):
             sp = uc.reg_read(REGS["sp"])
             stack = [int.from_bytes(uc.mem_read(sp + 4 * i, 4), "little") for i in range(max(0, n - 4))]
             args = [_r(uc, i) for i in range(min(n, 4))] + stack
-            calls.append([addr, [cstring(uc, a) if STACK_TEXT[0] <= a < STACK_TEXT[1] else a for a in args]])
+            args = [cstring(uc, a) if STACK_TEXT[0] <= a < STACK_TEXT[1] else a for a in args]
+            if addr in STRUCT_ARGS:
+                k, size = STRUCT_ARGS[addr]
+                args[k] = ["s", bytes(uc.mem_read(_r(uc, k), size)).hex()]
+            calls.append([addr, args])
             _w(uc, 0, ret.get(addr, 0))
         return f
 
@@ -324,6 +330,19 @@ def kind_extra(rng, kind):
             (0x030053A4, word(pick([0, 8, 0x10, 0x3F]))), (0x03000050, word(pick([0, 1]))),
             (0x030064C0, struct.pack("<H", pick([0, 1, 1, 1, 0x10, 0x20, 0x40, 0x80, 0x200, 0x30]))),
         ]
+    if kind == "kind38":
+        hint = pick([0, 1, 2, 3, 2])
+        page = pick([0, 1, 2, 3])
+        return [
+            (PROFILE_AT + 0x1F8, bytes([hint, pick([0, 0, 1, 2]), page, rng.randrange(6)])),
+            (PROFILE_AT + 0x254, struct.pack("<hH", pick(list(range(12)) + [-1, 0x10]), pick([0, 1]))),
+            (PROFILE_AT + 0x200, word(pick([0, 1, 2, 5, 12]))),
+            (0x030056E0, word(rng.randrange(4))),
+            (0x03000070, word(rng.randrange(1 << 32))),
+            (0x030053B4, word(1000)), (0x030059E8, word(pick([0, 900, 1000, 1001, 1200]))),
+            (0x03005630, word(pick([0, 0, 0, 16]))),
+            (0x030064C0, struct.pack("<H", pick([0, 1, 1, 2, 2, 0x10, 0x20, 0x40, 0x80]))),
+        ]
     if kind == "career":
         keys = [pick([0x31A, 0x194, 0x39A, 0xC6, 0x3CF, 0xA3, 0x3C1, 0x100, 0x2AB]) for _ in range(pick([0, 1, 2, 4]))]
         stack = bytes(pick([0xC, 0xC, 6, 5, 0xB, rng.randrange(0x31)]) for _ in range(8))
@@ -402,6 +421,10 @@ def career(_gba, rng, n=1600):
 
 def setup(_gba, rng, n=1600):
     return kind_cases(rng, "setup", n)
+
+
+def kind38(_gba, rng, n=1600):
+    return kind_cases(rng, "kind38", n)
 
 
 def main(which):

@@ -278,6 +278,9 @@ pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
         (Kind::Setup, 0) => setup_enter(g),
         (Kind::Setup, 1) => setup_update(g),
         (Kind::Setup, 2) => setup_draw(g, full),
+        (Kind::Kind38, 0) => kind38_enter(g),
+        (Kind::Kind38, 1) => kind38_update(g),
+        (Kind::Kind38, 2) => kind38_draw(g, full),
         // Every kind's exit handler (`0x08132780`, `0x0812E850`, …) is only this call: the menu scene's teardown.
         (_, 3) => g.unported(SCENE_EXIT, &[WORLD]),
         _ => g.unported(kind.handlers()[phase], args),
@@ -300,7 +303,13 @@ const MENU_PALETTES: u32 = 0x0833_EF14;
 /// screen (`0xFFFF`: none). `_a` first waits a VBlank, blacks out BG palette RAM, clears `MENU_EXIT` and loads
 /// the menu descriptor. This is where each screen's palette comes from (FIDELITY U4).
 pub fn menu_scene_setup(g: &mut Gba, material: u32, palette: u32, sprite: u32) {
-    if g.u32(SCREEN_ENTERED) == 0 {
+    let first = g.u32(SCREEN_ENTERED) == 0;
+    menu_scene_setup_ab(g, first, material, palette, sprite);
+}
+
+/// `menu_scene_setup_a` (`first`) or `_b`, chosen by the caller.
+pub fn menu_scene_setup_ab(g: &mut Gba, first: bool, material: u32, palette: u32, sprite: u32) {
+    if first {
         g.unported(VBLANK_INTR_WAIT, &[]);
         fill_bg_palette(g, 0, 0, 0x100);
         g.set_u32(MENU_EXIT, 0);
@@ -2309,6 +2318,407 @@ fn career_opponents(g: &mut Gba) {
     }
 }
 
+// The hint and story pages (Kind38: 0x26 hints, 0x27 the wingman's introduction, 0x2B mode hints; 0x28 save,
+// 0x29 wait, 0x2A clear the frame buffers). Page records (0xC bytes: `+0` enter script, `+4` draw script, `+8`
+// entries of 10 bytes: `+0`/`+2` background, `+4` line, `+6` text, `+8` action).
+const PAGE_WAIT: u32 = 0x0300_59E8; // frame counter value the wait page (0x29) and script sounds wait for
+const CARBON_STOP_SOUND: u32 = 0x0813_6028; // (id)
+const CARBON_PLAY_MUSIC: u32 = 0x0813_6054; // (id)
+const SND_STOP_MUSIC: u32 = 0x0815_240C; // ()
+const FILL_RECT: u32 = 0x0816_4BEC; // (rect on the stack: x0, y0, x1, y1; page, pitch, colour × 0x01010101)
+
+fn hint_record(g: &Gba) -> u32 {
+    match g.u32(SCREEN) {
+        0x26 => 0x087E_8570 + 0xC * g.u8(g.u32(PROFILE) + 0x1F8) as u32,
+        0x27 => 0x087E_8534,
+        _ => 0x087E_8540_u32.wrapping_add(g.u32(RACE_MODE).wrapping_mul(0xC)),
+    }
+}
+
+/// `fill32` (IWRAM `0x030002C0`, through `*0x0300649C`): `n >> 5` blocks of 32 bytes of `value`.
+fn fill32(g: &mut Gba, dst: u32, value: u32, n: u32) {
+    for i in 0..(n >> 5) * 8 {
+        g.set_u32(dst + 4 * i, value);
+    }
+}
+
+/// The screen size (`0x03006410`: width, height) for the frame-buffer fills.
+fn screen_bytes(g: &Gba) -> u32 {
+    (g.u16(0x0300_6410) as i16 as i32 * g.u16(0x0300_6412) as i16 as i32) as u32
+}
+
+/// `FUN_0813609C`: no music (`0x0300003C` −1).
+fn stop_music(g: &mut Gba) {
+    g.set_u32(0x0300_003C, u32::MAX);
+    g.unported(SND_STOP_MUSIC, &[]);
+}
+
+/// `kind38_enter` (`0x08134DF0`): the entry's background (hints: entry `+0x1FA`) and the record's enter script.
+pub fn kind38_enter(g: &mut Gba) -> u32 {
+    let rec = hint_record(g);
+    let mut entry = g.u32(rec + 8);
+    if g.u32(SCREEN) == 0x26 {
+        entry += 10 * g.u8(g.u32(PROFILE) + 0x1FA) as u32;
+    }
+    let first = g.u32(SCREEN_ENTERED) == 0 && g.u32(SCREEN) != 5;
+    let (m, p) = (g.u16(entry) as i16 as i32 as u32, g.u16(entry + 2) as i16 as i32 as u32);
+    menu_scene_setup_ab(g, first, m, p, 0xFFFF);
+    page_script(g, g.u32(rec));
+    1
+}
+
+/// `FUN_081348E8` (script): runs the section of a page script whose id is the current entry (hints: profile
+/// `+0x1FA`; 0x27: 0; else the race mode). A script is u16 sections `[id, commands…, 0xFFFF]`; commands:
+/// 0xFFF5 stop sound; 0xFFF6 wait and play a sound; 0xFFF7 play a sound; 0xFFF8 stop a sound once the wait is over;
+/// 0xFFF9 stop the music; 0xFFFA play music; 0xFFFB a flash (palette entries 0xC0.. and a filled rectangle); 0xFFFC
+/// a picture on the map grid (profile `+0x254`); 0xFFFD a portrait and its 64-colour palette.
+fn page_script(g: &mut Gba, script: u32) {
+    let w = |g: &Gba, i: u32| g.u16(script + 2 * i) as u32;
+    let profile = g.u32(PROFILE);
+    let second = g.u32(SECOND_PALETTE);
+    let mut src = g.u32(WORLD + 0x30);
+    let sel = match g.u32(SCREEN) {
+        0x26 => g.u8(profile + 0x1FA) as u32,
+        0x27 => 0,
+        _ => g.u32(RACE_MODE),
+    };
+    let (mut i, mut at) = (1u32, 0u32); // `at`: the section header being looked at
+    while (w(g, at) as i32) < sel as i32 {
+        i += 1;
+        let mut end = at + 2;
+        if w(g, at + 1) != 0xFFFF {
+            let mut k = i;
+            loop {
+                let v = w(g, k);
+                k += 1;
+                end += 1;
+                i += 1;
+                if v == 0xFFFF {
+                    break;
+                }
+            }
+        }
+        i += 1;
+        at = end;
+    }
+    if w(g, i - 1) != sel {
+        return;
+    }
+    let mut c = w(g, i);
+    while c != 0xFFFF {
+        match c.wrapping_sub(0xFFF5) {
+            0 => {
+                g.unported(CARBON_STOP_SOUND, &[w(g, i + 1)]);
+                i += 2;
+            }
+            1 | 2 => {
+                if c == 0xFFF6 {
+                    g.set_u32(PAGE_WAIT, w(g, i + 1).wrapping_add(g.u32(FLASH)));
+                    i += 1;
+                }
+                g.unported(CARBON_PLAY_SOUND, &[w(g, i + 1), 1]);
+                i += 2;
+            }
+            3 => {
+                if g.u32(PAGE_WAIT) != 0 && g.i32(PAGE_WAIT) < g.i32(FLASH) {
+                    g.set_u32(PAGE_WAIT, 0);
+                    g.unported(CARBON_STOP_SOUND, &[w(g, i + 1)]);
+                }
+                i += 2;
+            }
+            4 => {
+                stop_music(g);
+                g.unported(VBLANK_INTR_WAIT, &[]);
+                i += 1;
+            }
+            5 => {
+                g.unported(CARBON_PLAY_MUSIC, &[w(g, i + 1)]);
+                g.unported(VBLANK_INTR_WAIT, &[]);
+                g.unported(VBLANK_INTR_WAIT, &[]);
+                i += 2;
+            }
+            6 => {
+                copy_mem(g, second, src, 0x180, 0x10);
+                copy_mem(g, second + 0x180, 0x087E_6ED4, 0x18, 0x10);
+                g.set_u32(PALETTE_DIRTY, 1);
+                let (x, y) = (w(g, i + 2), w(g, i + 3));
+                let rect = [x, y, x + 0x22, y + 0x16]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect();
+                let rect = g.text_arg(rect);
+                let page = g.u32(g.u32(WORLD + 0x50));
+                g.unported(FILL_RECT, &[rect, page, 0xF0, w(g, i + 1).wrapping_mul(0x0101_0101)]);
+                i += 4;
+            }
+            7 => {
+                let grid = g.u16(profile + 0x254);
+                let x = (grid as u32 & 3) * 0x28 + w(g, i + 2);
+                let y = ((grid as i16 as i32 >> 2) * 0x1E) as u32 + w(g, i + 3);
+                g.unported(MENU_BLIT_MATERIAL, &[WORLD, w(g, i + 1), x, y]);
+                i += 4;
+            }
+            8 => {
+                copy_mem(g, second, src, 0x180, 0x10);
+                let mut m = w(g, i + 1);
+                if g.u32(SCREEN) == 0x27 {
+                    m = g.u16(0x087E_78A0_u32.wrapping_add(g.u32(g.u32(PROFILE) + 0x200).wrapping_mul(2))) as u32;
+                }
+                // Portrait palettes: 0x40..=0x4C in order from 0x7E6EEC, then an irregular order.
+                if let Some(p) = match m {
+                    0x40..=0x4C => Some(0x087E_6EEC + 0x80 * (m - 0x40)),
+                    0x4D => Some(0x087E_776C),
+                    0x4E => Some(0x087E_77EC),
+                    0x4F => Some(0x087E_75EC),
+                    0x50 => Some(0x087E_76EC),
+                    0x51 => Some(0x087E_766C),
+                    0x52 => Some(0x087E_756C),
+                    _ => None,
+                } {
+                    src = p;
+                }
+                copy_mem(g, second + 0x180, src, 0x80, 0x10);
+                g.set_u32(PALETTE_DIRTY, 1);
+                g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 0xA8, 0xC]);
+                g.unported(MENU_BLIT_MATERIAL, &[WORLD, 0xDB, 0xA0, 2]);
+                i += 2;
+            }
+            // NOT 1:1 (unreachable): an unknown command makes the game loop forever.
+            _ => panic!("page script {script:#x}: unknown command {c:#x}"),
+        }
+        c = w(g, i);
+    }
+}
+
+/// `FUN_08134CC0` (tutorial): sets up one of the three tutorial races (two-player career mode 2, the Cobalt with
+/// fixed upgrades, route 1 or 3), picks its opponents and counts the hint.
+fn tutorial_race(g: &mut Gba, which: u32) {
+    g.set_u32(CAREER, 2);
+    g.set_u32(0x0300_00BC, 0x50);
+    g.set_u32(0x0300_5608, 1);
+    g.set_u32(0x0300_5604, 0);
+    g.set_u32(REVERSE, 0);
+    g.set_u8(g.u32(PROFILE) + 0x10, 5);
+    let records = g.u32(0x0300_539C);
+    for i in 0..10 {
+        g.set_u8(records + 0x5C + i, 0x7F);
+    }
+    for i in 0..5 {
+        g.set_u8(g.u32(0x0300_539C) + 0x55 + i, 2);
+    }
+    g.set_u8(records + 0x5B, 9);
+    let at = 0x0300_538Cu32.wrapping_add(g.u32(0x0300_0060));
+    g.set_u8(at, g.u32(0x0300_53BC) as u8);
+    let setup = match which {
+        0 => Some((1, 0, 1, 1)),
+        1 => Some((1, 1, 2, 2)),
+        2 => Some((3, 2, 2, 3)),
+        _ => None,
+    };
+    if let Some((route, wingman, opponents, laps)) = setup {
+        g.set_u32(RACE_MODE, 0);
+        g.set_u32(ROUTE, route);
+        g.set_u32(g.u32(PROFILE) + 0x200, wingman);
+        g.set_u32(OPPONENTS, opponents);
+        g.set_u32(0x0300_56E4, laps);
+    }
+    career_opponents(g);
+    let c = g.u32(PROFILE) + 0x1F9;
+    g.set_u8(c, g.u8(c).wrapping_add(1));
+}
+
+/// `kind38_update` (`0x08134EB8`): the save/wait/clear transitions, the map grid (profile `+0x254`) on the zone-3
+/// hint, A runs the entry's action (0x40 next page, 0x41 finish the hints: next zone, save, screen 3; 0x42 back;
+/// 0x81 a tutorial race or a mode's first race; else a screen, 9 also resetting the cars and cash), B the page
+/// before or back out.
+pub fn kind38_update(g: &mut Gba) -> u32 {
+    let p = g.u32(PROFILE);
+    let rec = hint_record(g);
+    let entry = g.u32(rec + 8) + 10 * g.u8(g.u32(PROFILE) + 0x1FA) as u32;
+    match g.u32(SCREEN) {
+        0x2A => {
+            if g.u32(FADE) == 0 {
+                let n = screen_bytes(g);
+                fill32(g, g.u32(0x0300_641C), 0x0101_0101, n);
+                let n = screen_bytes(g);
+                fill32(g, g.u32(0x0300_6420), 0x0101_0101, n);
+                g.set_u32(SCREEN, 0x26);
+                g.set_u32(FADE, 0x10);
+                kind38_enter(g);
+            }
+            return 1;
+        }
+        0x29 => {
+            if g.i32(PAGE_WAIT) < g.i32(FLASH) {
+                g.set_u32(SCREEN, 0x2A);
+                g.set_u32(FADE, -0x10i32 as u32);
+            }
+            return 1;
+        }
+        0x28 => {
+            if g.u32(FADE) == 0 {
+                if g.u8(p + 0x1F9) != 0 {
+                    g.set_u8(p + 0x1F8, g.u8(p + 0x1F9).wrapping_add(g.u8(p + 0x1F8)));
+                    g.set_u8(g.u32(PROFILE) + 0x1F9, 0);
+                    let save = g.u32(SAVE_BUFFER);
+                    g.unported(SAVE_WRITE_PROFILE, &[save]);
+                }
+                stop_music(g);
+                g.set_u32(SCREEN, 0x29);
+                g.set_u32(PAGE_WAIT, g.u32(FLASH).wrapping_add(0x78));
+                if g.u8(g.u32(PROFILE) + 0x1F8) == 0 {
+                    menu_scene_setup_ab(g, false, 5, 5, 0xFFFF);
+                } else {
+                    menu_scene_setup_ab(g, false, 0xE2, 8, 0xFFFF);
+                }
+            }
+            return 1;
+        }
+        _ => {}
+    }
+    if g.u32(p + 0x1F8) & 0x00FF_00FF == 0x0003_0002 {
+        let grid = p + 0x254;
+        if g.u16(KEYS) & 0x20 != 0 {
+            if g.u16(grid) == 0 {
+                g.set_u16(grid, 0xC);
+            }
+            g.set_u16(grid, g.u16(grid).wrapping_sub(1));
+        }
+        if g.u16(KEYS) & 0x10 != 0 {
+            let v = g.u16(grid).wrapping_add(1);
+            g.set_u16(grid, if v as i16 > 0xB { 0 } else { v });
+        }
+        if g.u16(KEYS) & 0x40 != 0 {
+            let old = g.u16(grid);
+            let v = old.wrapping_sub(4);
+            g.set_u16(grid, if (v as i16) < 0 { old.wrapping_add(8) } else { v });
+        }
+        if g.u16(KEYS) & 0x80 != 0 {
+            let old = g.u16(grid);
+            let v = old.wrapping_add(4);
+            g.set_u16(grid, if v as i16 > 0xB { old.wrapping_sub(8) } else { v });
+        }
+        if g.u16(KEYS) & 0xF0 != 0 {
+            g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+            mark_screen_changed(g);
+        }
+    }
+    if g.u16(KEYS) == 1 {
+        g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+        let action = g.u16(entry + 8) as i16 as i32;
+        let other = |g: &mut Gba| {
+            g.unported(CARBON_PLAY_MUSIC, &[0]);
+            if g.u16(entry + 8) as i16 == 9 {
+                for car in 0..15 {
+                    let rec = g.u32(0x0300_539C) + car * 0x11;
+                    for k in 0..10 {
+                        g.set_u8(rec + 7 + k, 0);
+                    }
+                    for k in 0..5 {
+                        g.set_u8(g.u32(0x0300_539C) + car * 0x11 + k, 0);
+                    }
+                }
+                g.set_u32(p + 0xC, 1000);
+            }
+            g.set_u8(p + 0x1F9, g.u8(p + 0x1F9).wrapping_add(1));
+            g.set_u8(BACK_TOP, g.u8(BACK_TOP).wrapping_sub(1));
+            g.set_u32(SCREEN, 0xD);
+            goto_screen(g, g.u16(entry + 8) as i16 as i32);
+        };
+        match action {
+            0x41 => {
+                let q = g.u32(PROFILE);
+                g.set_u8(q + 0x1F8, g.u8(q + 0x1F8).wrapping_add(1).wrapping_add(g.u8(q + 0x1F9)));
+                g.set_u8(g.u32(PROFILE) + 0x1F9, 0);
+                if g.u16(g.u32(PROFILE) + 0x256) != 0 {
+                    let z = g.u32(PROFILE) + ZONE;
+                    if g.u8(z) < 5 {
+                        g.set_u8(z, g.u8(z) + 1);
+                    }
+                    g.set_u16(g.u32(PROFILE) + 0x256, 0);
+                }
+                let save = g.u32(SAVE_BUFFER);
+                g.unported(SAVE_WRITE_PROFILE, &[save]);
+                g.unported(CARBON_PLAY_MUSIC, &[0]);
+                g.set_u8(g.u32(PROFILE) + 0x344, 0);
+                g.set_u32(SCREEN, 3);
+                g.set_u8(BACK_TOP, 0);
+                enter_screen(g);
+            }
+            0x40 => {
+                g.set_u8(p + 0x1FA, g.u8(p + 0x1FA).wrapping_add(1));
+                enter_screen(g);
+            }
+            0x42 => menu_back(g),
+            0x81 => {
+                if g.u32(SCREEN) == 0x26 {
+                    tutorial_race(g, g.u8(p + 0x1F8) as u32);
+                } else {
+                    g.set_u8(BACK_TOP, 1);
+                    let bit = 1u32.checked_shl(g.u32(RACE_MODE) & 0xFF).unwrap_or(0);
+                    g.set_u32(0x0300_0070, g.u32(0x0300_0070) | bit);
+                }
+                goto_screen(g, g.u16(entry + 8) as i16 as i32);
+            }
+            _ => other(g),
+        }
+        mark_screen_changed(g);
+    }
+    if g.u16(KEYS) == 2 {
+        let c = p + 0x1FA;
+        if g.u8(c) == 0 {
+            g.unported(CARBON_STOP_SOUND, &[3]);
+            g.unported(VBLANK_INTR_WAIT, &[]);
+            g.unported(CARBON_PLAY_SOUND, &[3, 1]);
+            for _ in 0..8 {
+                g.unported(VBLANK_INTR_WAIT, &[]);
+            }
+            g.unported(CARBON_PLAY_MUSIC, &[0]);
+            g.set_u16(KEYS, 0);
+            g.set_u8(g.u32(PROFILE) + 0x341, 3);
+            menu_back(g);
+        } else {
+            g.unported(CARBON_PLAY_SOUND, &[3, 1]);
+            g.set_u8(c, g.u8(c).wrapping_sub(1));
+            enter_screen(g);
+        }
+        mark_screen_changed(g);
+    }
+    1
+}
+
+/// `kind38_draw` (`0x08135340`): 0x29 clears the page (or keeps the menu picture before the first hint) and says
+/// "hint n"; the others run the record's draw script, the entry's text (0x27: the wingman's) and the prompts.
+pub fn kind38_draw(g: &mut Gba, _full: u32) -> u32 {
+    let rec = hint_record(g);
+    let entry = g.u32(rec + 8) + 10 * g.u8(g.u32(PROFILE) + 0x1FA) as u32;
+    if g.u32(SCREEN) == 0x29 {
+        if g.u8(g.u32(PROFILE) + 0x1F8) == 0 {
+            g.unported(INTRO_PAGE_SETUP, &[g.u32(0x0300_57F0)]);
+        } else {
+            let (page, n) = (g.u32(g.u32(WORLD + 0x50)), screen_bytes(g));
+            fill32(g, page, 0x0101_0101, n);
+        }
+        let key = g.u8(g.u32(PROFILE) + 0x1F8) as u32 + 0x1D9;
+        g.unported(TEXT_MENU, &[0xE, key, 0x78, 0x46, 1, 0]);
+        return 0;
+    }
+    g.unported(INTRO_PAGE_SETUP, &[g.u32(0x0300_57F0)]);
+    page_script(g, g.u32(rec + 4));
+    let text = g.u16(entry + 6) as i16 as i32;
+    if text != -1 {
+        if g.u32(SCREEN) == 0x27 {
+            let key = (text as u32).wrapping_add(g.u32(g.u32(PROFILE) + 0x200));
+            g.unported(TEXT_BOX, &[0xE, key, 0x51, 4, 0xA6, 0x10, 8]);
+        } else {
+            let y = (g.u16(entry + 4) as i16 as i32 * -0xB + 0x8E) as u32;
+            g.unported(TEXT_BOX, &[0xE, text as u32, 0x78, y, 0xF0, 0x10, 8]);
+        }
+    }
+    g.unported(MENU_BUTTON_PROMPTS, &[0x8D, 0x92, u32::MAX]);
+    0
+}
+
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
     let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
@@ -2763,6 +3173,12 @@ mod tests {
     #[test]
     fn settings_screens_match_the_game() {
         replay("setup");
+    }
+
+    /// The hint and story pages (38..=43): `tools/ui_menu_oracle.py kind38`.
+    #[test]
+    fn hint_pages_match_the_game() {
+        replay("kind38");
     }
 
     const KINDS: [Kind; 8] = [
