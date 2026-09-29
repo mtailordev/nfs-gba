@@ -4,12 +4,12 @@
 //! main route a little ahead of or behind the player, in a random lane, unless it would land near a racer or
 //! another traffic car (the 8 slots at 0x03006270).
 
+use crate::Result;
 use crate::heap;
 use crate::math::{div, isqrt, mul64, shr64};
 use crate::mem::Mem;
 use crate::route::CIRCUIT;
 use crate::world::{self, NONE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
-use crate::{Result, Unported};
 
 /// The live traffic cars (entity addresses, 0 = free).
 const SLOTS: u32 = 0x0300_6270;
@@ -98,7 +98,10 @@ pub fn spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
         Ok(NONE)
     };
     if kind != 1 {
-        return Err(Unported("FUN_08143d48 spawn kinds 0 and 2 (at the route start)"));
+        if (kind == 0 || kind == 2) && !at_section_start(m, near, t, block, kind) {
+            return give_up(m);
+        }
+        return Ok(finish(m, t, slot, block));
     }
     let seg = m.u16(near + 0x72) as u32;
     let segs = m.u32(W_SEGMENTS);
@@ -222,6 +225,54 @@ pub fn spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
     m.set_i32(block + 4, m.i32(to + 4) - (ox >> 8));
     m.set_u32(block + 0x24, lane);
     m.set_u16(t + 0x72, m.u16(near + 0x72));
+    Ok(finish(m, t, slot, block))
+}
+
+/// Kinds 0 and 2 (the spawner handlers `FUN_08143ba8` and `FUN_08143c78`, table entries 0x2D/0x2E and 0x2A): the
+/// car starts at the first waypoint of `near`'s racing-line section, heading for the second, at full (kind 2) or
+/// half (kind 0) unit speed. `false` when the section has no record (the car is given up).
+fn at_section_start(m: &mut Mem, near: u32, t: u32, block: u32, kind: u32) -> bool {
+    m.set_u16(t + 0x9C, 1);
+    let rec = m.u32(W_SEGMENTS).wrapping_add(m.u16(near + 0x72) as u32 * 8);
+    if rec == 0 {
+        return false;
+    }
+    let w = m.u32(W_WAYPOINTS).wrapping_add(m.i32(rec + 4) as u32 * 0x18);
+    m.set_u16(t + 4, 0xFFFF);
+    m.set_u16(t + 8, 7);
+    m.set_u16(t + 0xA, 2);
+    m.set_u16(t + 0x46, 0);
+    m.set_u16(t + 2, 0xFFFF);
+    m.set_u16(t + 0x44, 0);
+    m.set_u16(t + 0x78, m.i32(w + 0x14) as u16);
+    m.set_u16(t + 0x4A, 0);
+    m.set_u32(t + 0x1C, 0);
+    m.set_u16(t + 0x30, 0);
+    m.set_u32(t + 0x24, 1);
+    m.set_u16(t + 0x52, 0);
+    m.set_u16(t + 0x4E, 0x36);
+    // (The game first sets +0x32/+0x2C from the next waypoint's +0x0A; both are overwritten below.)
+    let (x, z) = (m.i32(w), m.i32(w + 4));
+    let (dx, dz) = (m.i32(w + 0x18) - x, m.i32(w + 0x1C) - z);
+    let len = isqrt(dist2(dx, dz) as u32);
+    m.set_u16(t + 0x32, atan2_fast(m, dx, dz) as u16);
+    let unit = if kind == 2 { 0x1000 } else { 0x800 };
+    m.set_i32(t + 0x18, div(dx.wrapping_mul(unit), len));
+    m.set_i32(t + 0x20, div(dz.wrapping_mul(unit), len));
+    m.set_i32(t + 0x2C, m.i16(t + 0x32) as i32);
+    m.set_i32(block, m.i32(w + 0x18));
+    m.set_i32(block + 4, m.i32(w + 0x1C));
+    m.set_i32(t + 0xC, x << 8);
+    m.set_i32(t + 0x10, m.i32(near + 0x10));
+    m.set_i32(t + 0x14, z << 8);
+    m.set_u16(t + 0x72, m.u16(near + 0x72));
+    m.set_u32(block + 0x18, 0);
+    true
+}
+
+/// The part of `FUN_08143d48` all kinds share: the traffic type, the sector list, a live-traffic slot, and the
+/// car's block (`+0x10/+0x14` the unit direction).
+fn finish(m: &mut Mem, t: u32, slot: u32, block: u32) -> u32 {
     // Traffic type from the race's frame counter.
     let types = m.u32(0x0300_625C);
     let mut r = crate::math::umod(m.u32(0x0300_5628), types);
@@ -241,5 +292,5 @@ pub fn spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
     }
     m.set_i32(block + 0x10, m.i32(t + 0x18));
     m.set_i32(block + 0x14, m.i32(t + 0x20));
-    Ok(slot)
+    slot
 }

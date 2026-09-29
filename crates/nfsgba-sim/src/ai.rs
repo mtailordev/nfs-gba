@@ -451,7 +451,8 @@ fn step(sim: &mut Sim, e: u32) -> Result<i32> {
     if stuck > 0x96 {
         let player_wp = m.i16(m.u32(PLAYER_ENTITY) + 0x90) as i32;
         if stuck > 0xFA || (m.u16(e + 0xA) & 4 == 0 && player_wp != wp && player_wp != wp + 1) {
-            return Err(Unported("FUN_0814efa8 (put the opponent back on the road)"));
+            m.set_i32(p + 0x4B0, 0);
+            crate::car::put_back_on_road(m, e, b);
         }
     }
     if m.u16(e + 0x4A) == 2 {
@@ -600,7 +601,9 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     let mut accelerate = false;
     let dt = recip(m, frame_time << 8).min(0xC00);
     if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
-        return Err(Unported("FUN_0814efa8 (put the opponent back on the road)"));
+        let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
+        crate::car::put_back_on_road(m, e, w);
+        m.set_i16(p + 0x4E4, 0);
     }
     for k in 0..4 {
         let w = p + WHEELS + WHEEL_SIZE * k;
@@ -879,10 +882,17 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.i32(b + body::MOMENTUM + 4) + (dt * (m.i32(0x0300_6030).wrapping_mul(m.i32(b)) >> 12) >> 11),
     );
     if m.i32(p + 0x138) < 0xF21 {
-        return Err(Unported("FUN_081484f0 (opponent tipped over / airborne)"));
+        crate::contact::tipped(sim, e, dt);
+        let m = &mut sim.mem;
+        for k in 0..4u32 {
+            m.set_i32(p + crate::contact::WHEELS + crate::contact::WHEEL_SIZE * k + 0x64, 0);
+        }
+        m.set_i16(p + 0x4E4, m.i16(p + 0x4E4).wrapping_add(1));
+    } else {
+        wheels(m, e, dt);
+        m.set_u16(p + 0x4E4, 0);
     }
-    wheels(m, e, dt);
-    m.set_u16(p + 0x4E4, 0);
+    let m = &mut sim.mem;
     m.set_u32(p + 0x448, 0);
     let (x, z) = (
         m.i32(e + 0xC).wrapping_add(m.i32(p + 0x140) * 3) >> 8,
@@ -891,13 +901,12 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     let (y, sector) = (m.i32(e + 0x10) >> 8, m.u16(e + 0x78) as u32);
     crate::walls::walls(sim, e, x, z, y, sector, false)?;
     let m = &mut sim.mem;
+    let start = m.vec3(e + 0xC);
     body::integrate(m, b, dt << 1);
     let rot: [i32; 9] = std::array::from_fn(|k| m.i32(p + 0x128 + 4 * k as u32));
     let offset = mat_mul([0, m.i32(p + 0x43C), m.i32(p + 0x440)], &rot);
     m.set_vec3(e + 0xC, sub(m.vec3(p + 0xD0), offset));
     m.set_u16(W_QUERY_SECTOR, m.u16(e + 0x78));
-    // With no sector found the game halves the move up to 6 times (the push-back loop); `find_sector` stops first
-    // (`find_sector_far` is not ported), so that loop is never reached here.
     let s = world::find_sector(
         m,
         m.u16(e + 0x78) as u32,
@@ -906,6 +915,28 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.i32(e + 0x14),
     )?;
     m.set_u16(e + 0x78, s as u16);
+    if s & 0xFFFF == NONE {
+        // Out of every sector: halve the move up to 6 times, searching from the sector the step started in; if all
+        // fail, back to that sector. Unlike the player's step there is no pull-back. The body position follows.
+        let mut mv = sub(m.vec3(e + 0xC), start);
+        let mut found = false;
+        for _ in 0..6 {
+            mv = crate::math::scale(mv, 0x800);
+            m.set_u16(W_QUERY_SECTOR, old_sector);
+            m.set_u16(e + 0x78, old_sector);
+            m.set_vec3(e + 0xC, crate::math::add(mv, start));
+            let s = world::find_sector(m, old_sector as u32, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
+            m.set_u16(e + 0x78, s as u16);
+            if s & 0xFFFF != NONE {
+                found = true;
+                break;
+            }
+        }
+        if !found && m.u16(e + 0x78) as u32 == NONE {
+            m.set_u16(e + 0x78, old_sector);
+        }
+        m.set_vec3(p + 0xD0, crate::math::add(m.vec3(e + 0xC), offset));
+    }
     if m.u16(e + 8) & 4 != 0 {
         crate::walls::racers(sim, e, dt)?;
     }

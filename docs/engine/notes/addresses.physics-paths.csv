@@ -1,0 +1,18 @@
+region,address,size,what,doc
+rom,0x7F2528,8 × 12,tipped-over body corners (x y z in car axes) that car_tipped_dynamics rests the car on,engine/physics
+ram,0x030061E8,4,wingman command running (set by wingman_command),engine/physics
+ram,0x030061D8,4,wingman command cooldown (0x1E000 after a command),engine/physics
+ram,0x0300618C,4,wingman command given in the drafter role (0x030061F8 set),engine/physics
+ram,0x030061E4,4,wingman bar value: refilled to full scale (0x03006188) by each wingman command,engine/physics
+ram,0x030061FC,4,cleared by the wingman command (attacker role),engine/physics
+ram,0x03006258,4,traffic spawner range squared (camera car to spawner),engine/physics
+ram,0x03006250,4,set when a traffic spawner has the camera car in range,engine/physics
+driver,+0x08,4 × 4,suspension step: vertical speed per point (FUN_0814de40),engine/physics
+driver,+0x48,4,suspension step: points on the floor (its return value; 4 at car init),engine/physics
+driver,+0x4C,4 × 4,suspension step: spring position per point,engine/physics
+driver,+0x5C,4 × 4,suspension step: spring rate per point (damped to 160/256 each step),engine/physics
+driver,+0x6C,4 × 4,suspension step: height per point (floor-clamped); entity y = the mean of the four,engine/physics
+driver,+0x4E4,2,steps tipped over (car_tipped_dynamics); over 100 with a corner down and slow: car_put_back_on_road,engine/physics
+driver,+0x4E6,2,tipped steps with no corner down (airborne); landing sound 0x16 or 0x19 after more than 4,engine/physics
+entity,+0x9C,2,traffic: waypoint index (1 for spawns at a section start),engine/physics
+entity,+0x9E,2,traffic: spawn kind (0 section start half speed; 1 near the player; 2 section start full speed),engine/physics

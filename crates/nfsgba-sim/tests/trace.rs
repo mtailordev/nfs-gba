@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 9] = [
+const SCENARIOS: [&str; 16] = [
     "accel",
     "brake",
     "steer",
@@ -22,6 +22,13 @@ const SCENARIOS: [&str; 9] = [
     "handbrake",
     "long",
     "start",
+    "hunter",
+    "tipped",
+    "stuck",
+    "sprint",
+    "circuit",
+    "wingman",
+    "shortcut",
 ];
 const EWRAM: usize = 0x4_0000;
 /// Bits other game code maintains between car steps, as (offset, mask): the entity's sector-list link
@@ -141,6 +148,13 @@ fn check(sim: &Sim, e: u32, want: &(Vec<u8>, Vec<u8>)) -> Vec<String> {
 /// A step's RAM writes (address, new byte) and sound commands.
 type Effects = (Vec<(u32, u8)>, Vec<String>);
 
+/// The oracle's record of a step: its effects, and whether other code changed the car before the next step
+/// (a traffic car's collision response), so that the next traced state is not this step's result.
+struct Expected {
+    effects: Effects,
+    external: bool,
+}
+
 /// What one step wrote to RAM and the sound commands it issued, in the format of `<name>.oracle.txt`.
 fn effects(before: &Mem, after: &Sim) -> Effects {
     let mut writes = Vec::new();
@@ -168,7 +182,7 @@ fn effects(before: &Mem, after: &Sim) -> Effects {
     (writes, sounds)
 }
 
-fn oracle(dir: &Path, name: &str) -> Vec<Effects> {
+fn oracle(dir: &Path, name: &str) -> Vec<Expected> {
     let text = fs::read_to_string(dir.join(format!("{name}.oracle.txt"))).expect("run tools/trace_oracle.py");
     text.lines()
         .map(|l| {
@@ -180,7 +194,10 @@ fn oracle(dir: &Path, name: &str) -> Vec<Effects> {
                     (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
                 })
                 .collect();
-            (writes, f[2].split_whitespace().map(str::to_owned).collect())
+            Expected {
+                effects: (writes, f[2].split_whitespace().map(str::to_owned).collect()),
+                external: f.get(3) == Some(&"external"),
+            }
         })
         .collect()
 }
@@ -200,7 +217,8 @@ fn each_step_matches_the_trace() {
         };
         let expected = oracle(&dir, name);
         let mut failures = Vec::new();
-        for (i, (want_writes, want_sounds)) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+        for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+            let (want_writes, want_sounds) = &want.effects;
             let mut sim = Sim::new(trace.state(i));
             let e = sim.mem.u32(W_ENTITIES);
             let before = sim.mem.clone();
@@ -208,14 +226,18 @@ fn each_step_matches_the_trace() {
                 failures.push(format!("{name} step {i}: {err}"));
                 continue;
             }
-            let mut bad = check(&sim, e, &trace.cars[i + 1]);
+            let mut bad = if want.external {
+                Vec::new()
+            } else {
+                check(&sim, e, &trace.cars[i + 1])
+            };
             let (writes, sounds) = effects(&before, &sim);
             let extra: Vec<_> = writes.iter().filter(|w| !want_writes.contains(w)).take(8).collect();
             let missing: Vec<_> = want_writes.iter().filter(|w| !writes.contains(w)).take(8).collect();
             if !extra.is_empty() || !missing.is_empty() {
                 bad.push(format!("RAM writes differ: extra {extra:x?}, missing {missing:x?}"));
             }
-            if sounds != *want_sounds {
+            if sounds != **want_sounds {
                 bad.push(format!("sounds {sounds:?} want {want_sounds:?}"));
             }
             if !bad.is_empty() {
@@ -246,11 +268,12 @@ fn replay_matches_the_trace() {
         let Some(trace) = load(&dir, name) else {
             continue;
         };
+        let expected = oracle(&dir, name);
         let mut own: Option<(Vec<u8>, Vec<u8>)> = None;
         let mut sim = Sim::new(trace.state(0));
         let e = sim.mem.u32(W_ENTITIES);
         let start = sim.mem.vec3(e + 0xC);
-        for i in 0..trace.cars.len() - 1 {
+        for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
             let mut mem = trace.state(i);
             if let Some((entity, physics)) = &own {
                 let merged: Vec<u8> = (0..0xA4)
@@ -267,6 +290,11 @@ fn replay_matches_the_trace() {
             }
             sim = Sim::new(mem);
             car::handler(&mut sim, e).unwrap_or_else(|err| panic!("{name} step {i}: {err}"));
+            if want.external {
+                // Other code changed the car before the next step: carry on from the game's state.
+                own = Some(trace.cars[i + 1].clone());
+                continue;
+            }
             let bad = check(&sim, e, &trace.cars[i + 1]);
             assert!(bad.is_empty(), "{name} step {i}: {}", bad.join(", "));
             let p = sim.mem.u32(e + 0x8C);
@@ -279,4 +307,167 @@ fn replay_matches_the_trace() {
             trace.cars.len() - 1
         );
     }
+}
+
+/// Real steps with the car given extreme speeds (`tools/trace_fuzz.py`): the game's own step, run in the function
+/// oracle, reaches paths no recording does (`find_sector_far`, the push-back when the car leaves every sector). The
+/// port must write the same RAM bytes and make the same sound calls.
+#[test]
+fn perturbed_steps_match_the_oracle() {
+    let Some(dir) = trace_dir() else {
+        eprintln!("traces not found; skipped");
+        return;
+    };
+    let Ok(text) = fs::read_to_string(dir.join("fuzz.jsonl")) else {
+        eprintln!("fuzz cases not found (tools/trace_fuzz.py); skipped");
+        return;
+    };
+    let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let mut traces: HashMap<String, Trace> = HashMap::new();
+    let (mut failures, mut paths) = (Vec::new(), HashMap::<String, usize>::new());
+    for (n, c) in cases.iter().enumerate() {
+        let name = c["trace"].as_str().unwrap();
+        let trace = traces
+            .entry(name.to_owned())
+            .or_insert_with(|| load(&dir, name).expect("trace"));
+        let mut mem = trace.state(c["step"].as_u64().unwrap() as usize);
+        for p in c["patch"].as_array().unwrap() {
+            mem.set_bytes(p[0].as_u64().unwrap() as u32, &hex(p[1].as_str().unwrap()));
+        }
+        let mut sim = Sim::new(mem);
+        let index = c["entity"].as_u64().unwrap_or(0) as u32;
+        let e = sim.mem.u32(W_ENTITIES) + 0xA4 * index;
+        let before = sim.mem.clone();
+        // The player's car handler (also for car-init cases on other racer slots), or the opponent handler (0x29)
+        // with its 2D-effects call.
+        let result = if index == 0 || c["car"].as_bool() == Some(true) {
+            car::handler(&mut sim, e).map(|()| None)
+        } else {
+            nfsgba_sim::ai::handler(&mut sim, e)
+                .map(|fx| fx.map(|f| format!("effects({},{},{},{})", f.entity, f.heading, f.view, f.size)))
+        };
+        let fx = match result {
+            Ok(fx) => fx,
+            Err(err) => {
+                failures.push(format!("case {n}: {err}"));
+                continue;
+            }
+        };
+        let (writes, mut sounds) = effects(&before, &sim);
+        sounds.extend(fx);
+        let want: Vec<(u32, u8)> = c["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                let (a, v) = w.as_str().unwrap().split_once('=').unwrap();
+                (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
+            })
+            .collect();
+        let want_sounds: Vec<String> = c["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect();
+        let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
+        let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
+        if !extra.is_empty() || !missing.is_empty() || sounds != want_sounds {
+            failures.push(format!(
+                "case {n} ({name} step {}, paths {:?}): extra {extra:x?} missing {missing:x?} sounds {sounds:?} want {want_sounds:?}",
+                c["step"], c["paths"]
+            ));
+        }
+        for path in c["paths"].as_array().unwrap() {
+            *paths.entry(path.as_str().unwrap().to_owned()).or_default() += 1;
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures[..failures.len().min(10)].join("\n")
+    );
+    eprintln!(
+        "perturbed steps: {} oracle cases exact; paths reached {paths:?}",
+        cases.len()
+    );
+}
+
+/// Functions called directly on real trace states in the function oracle (`tools/trace_calls.py`), for branches no
+/// recording reaches: `traffic_spawn` (`FUN_08143d48`) in all three kinds (0 and 2 only come from spawner entities
+/// no Carbon race has), and the wingman command (`FUN_0814078c`) in both roles. Same RAM writes (and return value,
+/// for the spawn).
+#[test]
+fn calls_match_the_oracle() {
+    let Some(dir) = trace_dir() else {
+        eprintln!("traces not found; skipped");
+        return;
+    };
+    let Ok(text) = fs::read_to_string(dir.join("calls.jsonl")) else {
+        eprintln!("call cases not found (tools/trace_calls.py); skipped");
+        return;
+    };
+    let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let mut traces: HashMap<String, Trace> = HashMap::new();
+    let mut failures = Vec::new();
+    for (n, c) in cases.iter().enumerate() {
+        let name = c["trace"].as_str().unwrap();
+        let trace = traces
+            .entry(name.to_owned())
+            .or_insert_with(|| load(&dir, name).expect("trace"));
+        let mut mem = trace.state(c["step"].as_u64().unwrap() as usize);
+        for p in c["patch"].as_array().unwrap() {
+            mem.set_bytes(p[0].as_u64().unwrap() as u32, &hex(p[1].as_str().unwrap()));
+        }
+        let before = mem.clone();
+        let fun = c["fn"].as_str().unwrap();
+        let result = match fun {
+            "spawn" => {
+                let near = mem.u32(W_ENTITIES) + 0xA4 * c["near"].as_u64().unwrap() as u32;
+                nfsgba_sim::traffic::spawn(&mut mem, near, c["kind"].as_u64().unwrap() as u32).map(Some)
+            }
+            "wingman" => nfsgba_sim::route::wingman_command(&mut mem).map(|()| None),
+            "lap" => {
+                let e = mem.u32(W_ENTITIES) + 0xA4 * c["who"].as_u64().unwrap() as u32;
+                nfsgba_sim::route::lap(&mut mem, e).map(|()| None)
+            }
+            other => panic!("unknown function {other}"),
+        };
+        let got = match result {
+            Ok(v) => v,
+            Err(err) => {
+                failures.push(format!("case {n}: {err}"));
+                continue;
+            }
+        };
+        let (writes, _) = effects(&before, &Sim::new(mem));
+        let want: Vec<(u32, u8)> = c["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                let (a, v) = w.as_str().unwrap().split_once('=').unwrap();
+                (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
+            })
+            .collect();
+        let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
+        let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
+        let ret_differs = got.is_some_and(|v| v as u64 != c["ret"].as_u64().unwrap());
+        if ret_differs || !extra.is_empty() || !missing.is_empty() {
+            failures.push(format!(
+                "case {n} ({fun}): returned {got:x?} want {:#x}, extra {extra:x?} missing {missing:x?}",
+                c["ret"].as_u64().unwrap()
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures[..failures.len().min(10)].join("\n")
+    );
+    eprintln!("direct calls: {} oracle cases exact", cases.len());
 }

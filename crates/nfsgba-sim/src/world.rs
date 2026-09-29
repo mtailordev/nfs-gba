@@ -1,8 +1,8 @@
 //! The world struct, the globals the car step uses, sector lookup, floor height and the control bindings.
 
+use crate::Result;
 use crate::math::{mul64, shr64};
 use crate::mem::Mem;
-use crate::{Result, Unported};
 
 /// The world struct (IWRAM). Fields used here:
 /// `+0x0C` sector entity-list heads (u16 per sector), `+0x10` walls (0x44 bytes), `+0x14` sectors (0x30 bytes),
@@ -136,10 +136,47 @@ pub fn find_sector(mem: &mut Mem, sector: u32, x: i32, y: i32, z: i32) -> Result
     mem.set_i32(W_QUERY + 4, y >> 8);
     mem.set_i32(W_QUERY + 8, z >> 8);
     mem.set_u16(W_QUERY_SECTOR, sector as u16);
-    match find_sector_near_query(mem) {
-        NONE => Err(Unported("FUN_0814dbbc (sector search two portals away)")),
-        s => Ok(s),
+    Ok(match find_sector_near_query(mem) {
+        NONE => find_sector_far(mem),
+        s => s,
+    })
+}
+
+/// `FUN_0814dbbc`: the query point's sector two portals away from the query sector: behind each open portal
+/// (link `+0x32`, flag 0x1000 clear), the sectors behind that sector's open portals, tested in wall order with
+/// `point_in_sector`. A found sector without a floor gives its floor sector (`+0x20`). 0xFFFF if none.
+pub fn find_sector_far(mem: &Mem) -> u32 {
+    let (x, z) = (mem.i32(W_QUERY), mem.i32(W_QUERY + 8));
+    let open = |w: u32| {
+        let link = mem.u16(w + 0x32) as u32;
+        (link != NONE && wall_flags(mem, w) & 0x1000 == 0).then_some(link)
+    };
+    let s = sector_addr(mem, mem.u16(W_QUERY_SECTOR) as u32);
+    let mut w = wall_addr(mem, mem.u16(s) as u32);
+    for _ in 0..mem.u16(s + 2) {
+        if let Some(near) = open(w) {
+            let t = sector_addr(mem, near);
+            let mut v = wall_addr(mem, mem.u16(t) as u32);
+            for _ in 0..mem.u16(t + 2) {
+                if let Some(far) = open(v) {
+                    let u = sector_addr(mem, far);
+                    let found = inside(mem, x, z, wall_addr(mem, mem.u16(u) as u32), mem.u16(u + 2) as u32, far);
+                    if found != NONE {
+                        let f = sector_addr(mem, found);
+                        let floor = mem.u16(f + 0x20) as u32;
+                        return if mem.i16(f + 8) != 0 || floor == NONE {
+                            found
+                        } else {
+                            floor
+                        };
+                    }
+                }
+                v += 0x44;
+            }
+        }
+        w += 0x44;
     }
+    NONE
 }
 
 /// `FUN_0814f4a8`: a sector's record, or the record of the sector it defers its floor to (`+0x20`) when it has no

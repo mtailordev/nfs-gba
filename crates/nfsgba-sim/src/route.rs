@@ -6,10 +6,11 @@
 //! distance). Segment 0 is the main route; the others are side branches. The per-waypoint lines at `*0x03005FB4`
 //! (0x20 bytes) and the join table at `*0x03005FB8` are built at race start.
 
+use crate::Result;
 use crate::math::{cos, div, dot, sin};
 use crate::mem::Mem;
-use crate::world::{NONE, PLAYER, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS};
-use crate::{Result, Unported};
+use crate::world::{NONE, PLAYER, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, entity};
+use nfsgba_formats::career::{RacingLine, Section};
 
 /// Non-zero for a circuit (waypoint indices wrap around segment 0).
 pub const CIRCUIT: u32 = 0x0300_608C;
@@ -264,26 +265,31 @@ pub fn track_waypoint(mem: &mut Mem, e: u32) -> Result<()> {
     lap(mem, e)
 }
 
-/// `FUN_0813f098`: crossing the start line on segment 0 with flag 2 set completes a lap: best lap (`+0xB4`),
-/// lap start (`+0xB8`), laps left (`+0xC5`).
-pub(crate) fn lap(mem: &mut Mem, e: u32) -> Result<()> {
-    let p = mem.u32(e + 0x8C);
-    let last = if mem.i32(CIRCUIT) == 0 { -2 } else { -1 };
-    let wp = mem.i16(e + 0x90) as i32;
-    let main_count = mem.u16(mem.u32(W_SEGMENTS)) as i32;
-    if !(mem.i16(e + 0x72) == 0 && (wp == main_count + last || wp == 0) && mem.u16(p + 0x4D8) & 2 != 0) {
-        return Ok(());
+/// `FUN_0813f098` (`lap_crossing`): `nfsgba_formats::career::RacingLine::lap_crossing` on the race's RAM: an armed
+/// car crossing the line completes a lap (times, laps left), knocks out the last car in elimination, and finishes
+/// when no laps are left or in a sprint. The lap's section count is the race's own (world `+0x40`), which in
+/// sprints is two points longer than the ROM's.
+pub fn lap(mem: &mut Mem, e: u32) -> Result<()> {
+    let line = RacingLine {
+        sections: vec![Section {
+            count: mem.u16(mem.u32(W_SEGMENTS)),
+            flags: 0,
+            first: 0,
+        }],
+        points: Vec::new(),
+        scales: Vec::new(),
+    };
+    let mut race = crate::car::race(mem);
+    // The racers, and the car crossing (a wingman's car has an id above the opponents).
+    let who = mem.u16(e) as u32;
+    let n = (race.player + race.opponents + 1).max(who + 1);
+    let mut cars: Vec<_> = (0..n).map(|i| crate::car::racer(mem, entity(mem, i))).collect();
+    line.lap_crossing(&mem.rom, &mut race, &mut cars, who as usize);
+    for (i, c) in cars.iter().enumerate() {
+        crate::car::store_racer(mem, entity(mem, i as u32), c);
     }
-    mem.set_u16(p + 0x4D8, mem.u16(p + 0x4D8) & 0xFFFD);
-    let time = mem.u32(RACE_TIME);
-    let lap_time = time.wrapping_sub(mem.u32(p + 0xB8));
-    let best = mem.u32(p + 0xB4);
-    if lap_time < best || best == 0 {
-        mem.set_u32(p + 0xB4, lap_time);
-    }
-    mem.set_u32(p + 0xB8, time);
-    mem.set_u8(p + 0xC5, mem.u8(p + 0xC5).wrapping_sub(1));
-    Err(Unported("FUN_0813f098 lap completion (race order, finish)"))
+    crate::car::store_race(mem, &race);
+    Ok(())
 }
 
 /// `FUN_0813ebac`: the time gap to the car one place ahead (or, for the leader, behind), into 0x0300615C.
@@ -385,13 +391,44 @@ pub fn traffic_countdown(mem: &mut Mem) -> Result<()> {
     Ok(())
 }
 
-/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (0x03006104 = 1..=12).
+/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (0x03006104 = 1..=12), commands
+/// left (0x030061DC), none running (0x030061E8) and the cooldown (0x030061D8) over. The attacker (0x030061F8 = 0)
+/// targets the best-placed racer other than 0x0300619C (the wingman's car); otherwise the command flag 0x0300618C
+/// is set. A given command costs one of 0x030061DC and starts the cooldown 0x1E000.
 pub fn wingman_command(mem: &mut Mem) -> Result<()> {
     if mem.i32(0x0300_6104).wrapping_sub(1) as u32 >= 0xC {
         return Ok(());
     }
-    if mem.i32(0x0300_61DC) != 0 && mem.i32(0x0300_61E8) == 0 && mem.i32(0x0300_61D8) == 0 {
-        return Err(Unported("FUN_0814078c (wingman command)"));
+    if mem.i32(0x0300_61DC) == 0 || mem.i32(0x0300_61E8) != 0 || mem.i32(0x0300_61D8) != 0 {
+        return Ok(());
+    }
+    let given = if mem.i32(0x0300_61F8) == 0 {
+        let racers = mem.u32(OPPONENTS);
+        let (mut target, mut place) = (0u32, 100);
+        if racers != u32::MAX {
+            let mut e = mem.u32(W_ENTITIES);
+            for _ in 0..=racers {
+                let p = mem.i32(mem.u32(e + 0x8C) + 0xA8);
+                if e != mem.u32(0x0300_619C) && mem.u16(e) as u32 <= racers && p < place {
+                    (target, place) = (e, p);
+                }
+                e += 0xA4;
+            }
+        }
+        mem.set_u32(0x0300_61E4, mem.u32(0x0300_6188));
+        mem.set_u32(0x0300_6178, target);
+        mem.set_u32(0x0300_61FC, 0);
+        mem.set_u32(0x0300_61F0, 0);
+        (target.wrapping_neg() | target) >> 31 != 0
+    } else {
+        mem.set_u32(0x0300_618C, 1);
+        mem.set_u32(0x0300_61E4, mem.u32(0x0300_6188));
+        true
+    };
+    if given {
+        mem.set_i32(0x0300_61DC, mem.i32(0x0300_61DC) - 1);
+        mem.set_u32(0x0300_61E8, 1);
+        mem.set_u32(0x0300_61D8, 0x1_E000);
     }
     Ok(())
 }

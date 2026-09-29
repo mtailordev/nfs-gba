@@ -15,7 +15,8 @@ use crate::route;
 use crate::sound::Command;
 use crate::walls;
 use crate::world::{self, AUTOMATIC, DT, INPUT, NONE, PLAYER, PROFILE, RACE_PHASE, W_SEGMENTS, WORLD, control, entity};
-use crate::{Result, Sim, Unported};
+use crate::{Result, Sim};
+use nfsgba_formats::career::{self, Race, Racer};
 
 /// Handling records (0x158 bytes), one per car: `+0x54` top gear, `+0x68` idle rpm, `+0x11C` drag,
 /// `+0x148` yaw damping (`docs/engine/physics.md`).
@@ -87,9 +88,17 @@ fn racing_step(sim: &mut Sim, e: u32) -> Result<()> {
     if m.i32(0x0300_610C) != 0 {
         return Ok(());
     }
-    Err(Unported(
-        "FUN_0814de40 (suspension step; skipped while 0x0300610C is set)",
-    ))
+    // Unreachable in Carbon: `race_init` and every dynamics step set 0x0300610C to 1 (no trace step has it 0).
+    // Four points around the car; their y is uninitialised stack in the game, but always overwritten with the
+    // floor height (the sector query falls back to the car's sector, never 0xFFFF at a car step).
+    let mut pts = [[-0x20, 0, 0x55], [0x20, 0, 0x55], [-0x20, 0, -0x2A], [0x20, 0, -0x2A]];
+    let hits = contact::suspension(m, e, &mut pts, &mut [0; 4], dt);
+    let p = m.u32(e + 0x8C);
+    m.set_i32(p + 0x48, hits);
+    let front = m.i32(p + 0x6C).wrapping_add(m.i32(p + 0x70)) >> 1;
+    let rear = m.i32(p + 0x74).wrapping_add(m.i32(p + 0x78)) >> 1;
+    m.set_i32(e + 0x10, front.wrapping_add(rear) >> 1);
+    Ok(())
 }
 
 /// `FUN_0814b098`: drain the nitro tank (`+0x4C8`) while nitro is on (`+0x4D1`).
@@ -231,7 +240,10 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         route::wingman_command(m)?;
     }
     if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
-        return Err(Unported("FUN_0814efa8 (put the car back on the road)"));
+        // Tipped over for more than 100 steps with a corner down, and slow: back onto the racing line.
+        let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
+        put_back_on_road(m, e, w);
+        m.set_i16(p + 0x4E4, 0);
     }
     route::track_segment(m, e);
     if m.u32(0x0300_53AC) == e {
@@ -531,12 +543,20 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         m.i32(p + 0xFC) + (dt * (m.i32(0x0300_6030) * m.i32(b) >> 12) >> 11),
     );
 
-    // Ground contact (or the airborne step when the car is tipped over).
-    if m.i32(p + 0x138) < 0xF21 {
-        return Err(Unported("FUN_081484f0 (car tipped over / airborne)"));
-    }
-    let grounded = contact::wheels(sim, e, dt)?;
-    sim.mem.set_i16(p + 0x4E4, 0);
+    // Ground contact, or the body corners when the car is tipped over (then the wheels stop and +0x4E4 counts).
+    let grounded = if m.i32(p + 0x138) < 0xF21 {
+        contact::tipped(sim, e, dt);
+        let m = &mut sim.mem;
+        for k in 0..4u32 {
+            m.set_i32(p + contact::WHEELS + contact::WHEEL_SIZE * k + 0x64, 0);
+        }
+        m.set_i16(p + 0x4E4, m.i16(p + 0x4E4).wrapping_add(1));
+        0
+    } else {
+        let n = contact::wheels(sim, e, dt)?;
+        sim.mem.set_i16(p + 0x4E4, 0);
+        n
+    };
     walls::racers(sim, e, dt)?;
     let m = &mut sim.mem;
     if speed_len < 0xA0
@@ -557,6 +577,7 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     m.set_u32(p + 0x448, m.u32(p + 0x448) & 8);
     walls::collide(sim, e)?;
     let m = &mut sim.mem;
+    let start = m.vec3(e + 0xC);
     body::integrate(m, b, dt);
     body::integrate(m, b, dt);
 
@@ -570,7 +591,26 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let s = world::find_sector(m, sector, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
     m.set_u16(e + 0x78, s as u16);
     if s as u16 as u32 == NONE {
-        return Err(Unported("car outside every sector: the push-back loop at 0x0813DF98"));
+        // Out of every sector (0x0813DF98): halve the step's move up to 6 times, searching from the sector the
+        // step started in, then pull the car back 0x6400 along the move and rebuild the body position.
+        let mut mv = sub(m.vec3(e + 0xC), start);
+        for _ in 0..6 {
+            mv = scale(mv, 0x800);
+            m.set_u16(WORLD + 0xEA, old_sector);
+            m.set_u16(e + 0x78, old_sector);
+            m.set_vec3(e + 0xC, crate::math::add(mv, start));
+            let s = world::find_sector(m, old_sector as u32, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
+            m.set_u16(e + 0x78, s as u16);
+            if s as u16 as u32 != NONE {
+                break;
+            }
+        }
+        normalize(m, &mut mv);
+        m.set_vec3(e + 0xC, sub(m.vec3(e + 0xC), scale(mv, 0x6400)));
+        m.set_vec3(p + 0xD0, crate::math::add(m.vec3(e + 0xC), offset));
+        if m.u16(e + 0x78) as u32 == NONE {
+            m.set_u16(e + 0x78, old_sector);
+        }
     }
 
     // "Drag": the game scales the vector in the stack slot that held the normalised velocity, but by now
@@ -651,9 +691,117 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let lane = nearest_lane_of(m, e);
     m.set_u16(p + 0xC0, lane as u16);
     if m.i32(0x0300_56E0) == 2 {
-        return Err(Unported("FUN_08140f78 (hunter_life_tick, hunter races)"));
+        // `FUN_08140f78` (`hunter_life_tick`).
+        let mut r = racer(m, e);
+        career::hunter_life_tick(&race(m), &mut r);
+        store_racer(m, e, &r);
     }
     Ok(())
+}
+
+/// The race globals of `nfsgba_formats::career::Race` from RAM.
+pub fn race(m: &Mem) -> Race {
+    let mut results = [0; 0x40];
+    results.copy_from_slice(m.bytes(0x0300_5650, 0x40));
+    Race {
+        mode: m.u32(0x0300_56E0),
+        lapped: m.i32(route::CIRCUIT) != 0,
+        laps: m.i32(0x0300_56E4),
+        opponents: m.u32(route::OPPONENTS),
+        time: m.u32(0x0300_5800),
+        finished: m.i32(0x0300_61A4) != 0,
+        view: m.u32(0x0300_57F8),
+        player: m.u32(PLAYER),
+        difficulty: m.u32(0x0300_5608),
+        state48: m.u32(RACE_PHASE),
+        rand: m.u32(0x0300_64C8),
+        wrong_way: m.i32(0x0300_5384) != 0,
+        results,
+    }
+}
+
+/// Writes back what the race rules change: someone finished (0x030061A4), the result bytes (0x03005650..), the
+/// rand_table index.
+pub fn store_race(m: &mut Mem, r: &Race) {
+    if r.finished != (m.i32(0x0300_61A4) != 0) {
+        m.set_i32(0x0300_61A4, r.finished as i32);
+    }
+    m.set_bytes(0x0300_5650, &r.results);
+    m.set_u32(0x0300_64C8, r.rand);
+}
+
+/// Car `e` as `nfsgba_formats::career::Racer`: entity `+0x00` id, `+0x08` flags, `+0x0C/+0x14` position, `+0x4A`
+/// state, `+0x72` section, `+0x90` segment; driver `+0xA8` place, `+0xAC` distance, `+0xB4/+0xB8/+0xBC` best lap,
+/// lap start, finish, `+0xC5` laps left, `+0xF8..` knock-out words, `+0x444` side, `+0x4D6` section changed,
+/// `+0x4D8` flags, `+0x4E8` life, `+0x4EC/+0x4EE/+0x4F0` wrong-way, wall and hit counters.
+pub fn racer(m: &Mem, e: u32) -> Racer {
+    let p = m.u32(e + 0x8C);
+    Racer {
+        id: m.u16(e),
+        section: m.u16(e + 0x72),
+        segment: m.i16(e + 0x90),
+        state: m.u16(e + 0x4A),
+        entity_flags: m.u16(e + 8),
+        x: m.i32(e + 0xC),
+        z: m.i32(e + 0x14),
+        place: m.i32(p + 0xA8),
+        distance: m.i32(p + 0xAC),
+        best_lap: m.u32(p + 0xB4),
+        lap_start: m.u32(p + 0xB8),
+        finish: m.u32(p + 0xBC),
+        laps_left: m.i8(p + 0xC5),
+        flags: m.u16(p + 0x4D8),
+        life: m.i32(p + 0x4E8),
+        wrong_way: m.i16(p + 0x4EC),
+        wall: m.i16(p + 0x4EE),
+        hit: m.i16(p + 0x4F0),
+        knockout: [m.u32(p + 0xF8), m.u32(p + 0xFC), m.u32(p + 0x100)],
+        side: m.i32(p + 0x444),
+        section_changed: m.u16(p + 0x4D6),
+    }
+}
+
+/// Writes car `e`'s `Racer` fields back (unchanged ones rewrite the same bytes).
+pub fn store_racer(m: &mut Mem, e: u32, r: &Racer) {
+    let p = m.u32(e + 0x8C);
+    m.set_u16(e + 0x72, r.section);
+    m.set_i16(e + 0x90, r.segment);
+    m.set_u16(e + 0x4A, r.state);
+    m.set_u16(e + 8, r.entity_flags);
+    m.set_i32(p + 0xA8, r.place);
+    m.set_i32(p + 0xAC, r.distance);
+    m.set_u32(p + 0xB4, r.best_lap);
+    m.set_u32(p + 0xB8, r.lap_start);
+    m.set_u32(p + 0xBC, r.finish);
+    m.set_u8(p + 0xC5, r.laps_left as u8);
+    m.set_u16(p + 0x4D8, r.flags);
+    m.set_i32(p + 0x4E8, r.life);
+    m.set_i16(p + 0x4EC, r.wrong_way);
+    m.set_i16(p + 0x4EE, r.wall);
+    m.set_i16(p + 0x4F0, r.hit);
+    m.set_vec3(p + 0xF8, r.knockout.map(|v| v as i32));
+    m.set_i32(p + 0x444, r.side);
+    m.set_u16(p + 0x4D6, r.section_changed);
+}
+
+/// `FUN_0814efa8`: put car `e` back on the road at waypoint `w` (24 bytes: x, z, `+0x0A` u16 heading, `+0x14`
+/// sector): the entity on the floor there with heading `+0x0A` as is, the body 0x1900 above it, upright along the
+/// waypoint's line (`*0x03005FB4`, 0x20 bytes per line). Momenta and velocities are kept.
+pub(crate) fn put_back_on_road(m: &mut Mem, e: u32, w: u32) {
+    let p = m.u32(e + 0x8C);
+    let (index, seg) = route::advance(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
+    let first = m.i32(m.u32(W_SEGMENTS) + seg * 8 + 4);
+    let (x, z) = (m.i32(w) << 8, m.i32(w + 4) << 8);
+    m.set_i32(e + 0xC, x);
+    m.set_i32(e + 0x14, z);
+    m.set_u32(e + 0x2C, m.u16(w + 10) as u32);
+    m.set_u16(e + 0x78, m.i32(w + 0x14) as u16);
+    let y = world::floor_height(m, m.u16(e + 0x78) as u32, x >> 8, z >> 8);
+    m.set_i32(e + 0x10, y);
+    m.set_vec3(p + 0xD0, [x, y.wrapping_sub(0x1900), z]);
+    let line = m.u32(0x0300_5FB4).wrapping_add((index + first) as u32 * 0x20);
+    let heading = atan2(m.i32(line), m.i32(line + 4));
+    crate::init::orient(m, p + 0xC8, heading);
 }
 
 fn release_accelerator(m: &mut Mem, player: bool, stats: u32) {
