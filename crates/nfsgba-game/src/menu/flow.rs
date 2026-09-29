@@ -5,7 +5,7 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, list, map, results, update_kind};
+use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, list, map, results, setup, update_kind};
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
@@ -22,8 +22,6 @@ pub trait Host {
     fn text_arg(&mut self, s: Vec<u8>) -> u32;
     /// A kind's handler (`phase`: 0 enter, 1 update, 2 draw, 3 exit). It reads and writes `st`.
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32;
-    /// `career_opponents` (screen 15's entry).
-    fn career_opponents(&mut self, st: &mut MenuState);
     /// `menu_scene_setup` (material, palette, sprite screen): the screen's background, palettes and sprite screen.
     fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32);
     /// `menu_scene_setup_a` (`first`) or `_b`, chosen by the caller.
@@ -78,7 +76,7 @@ pub fn enter_screen(st: &mut MenuState, h: &mut impl Host) {
             st.g.reverse = 0;
             st.profile.map_mode = 0;
         }
-        15 => h.career_opponents(st),
+        15 => setup::career_opponents(st, h),
         40 => st.g.fade = -0x10,
         _ => {}
     }
@@ -465,7 +463,10 @@ pub fn main_frame(st: &mut MenuState, h: &mut impl Host) {
 pub fn is_typed(kind: Kind, phase: usize) -> bool {
     matches!(
         (kind, phase),
-        (Kind::Kind7 | Kind::Event | Kind::Career | Kind::List, 0..=2)
+        (
+            Kind::Kind7 | Kind::Event | Kind::Career | Kind::List | Kind::Setup,
+            0..=2
+        )
     )
 }
 
@@ -481,6 +482,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Career, 0) => results::enter(st, h),
         (Kind::Career, 1) => results::update(st, h),
         (Kind::Career, 2) => results::draw(st, h),
+        (Kind::Setup, 0) => setup::enter(st, h),
+        (Kind::Setup, 1) => setup::update(st, h),
+        (Kind::Setup, 2) => setup::draw(st, h),
         (Kind::List, 0) => list::enter(st, h),
         (Kind::List, 1) => list::update(st, h),
         (Kind::List, 2) => list::draw(st, h),

@@ -58,9 +58,6 @@ impl flow::Host for GbaHost<'_> {
         }
         self.on_ram(st, |g| run_handler(g, kind, phase, args))
     }
-    fn career_opponents(&mut self, st: &mut MenuState) {
-        self.on_ram(st, career_opponents);
-    }
     fn scene_setup(&mut self, st: &mut MenuState, material: u32, palette: u32, sprite: u32) {
         self.on_ram(st, |g| menu_scene_setup(g, material, palette, sprite));
     }
@@ -121,13 +118,6 @@ pub use flow::CARBON_PLAY_SOUND;
 
 // The typed helpers for the screens still on the RAM image.
 
-pub(super) fn hint_due(g: &mut Gba, screen: i32, event: i32) -> u32 {
-    let mut st = load_state(g);
-    let r = event::hint_due(&mut st, &g.rom, screen, event);
-    store_state(g, &st);
-    r
-}
-
 /// `list_slot` (`0x0812FD04`): the List screen's cursor slot (profile `+0x350 + slot`), −1 for other screens.
 pub fn list_slot(g: &Gba) -> i32 {
     flow::list_slot(g.u32(SCREEN), g.u16(g.u32(PROFILE) + 0x12))
@@ -178,4 +168,9 @@ pub fn game_state_step(g: &mut Gba) {
 }
 pub fn main_frame(g: &mut Gba) {
     typed(g, |st, h| flow::main_frame(st, h));
+}
+
+/// For Kind38 (still on the RAM image).
+pub(super) fn career_opponents(g: &mut Gba) {
+    typed(g, |st, h| super::setup::career_opponents(st, h));
 }

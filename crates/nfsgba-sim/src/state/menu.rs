@@ -78,6 +78,19 @@ layout! {
         0x0300_6238 map_cursor: i8,
         0x0300_6239 map_moved: u8,
         0x0300_64C0 keys: u16,
+        /// The options screen's globals: units, sound flag, music and sound volumes (x8), and scratch the
+        /// settings copy (`MenuProfile::settings`).
+        0x0300_0040 units: u32,
+        0x0300_0050 u_0050: u32,
+        0x0300_53E4 u_53e4: u32,
+        0x0300_5798 u_5798: u32,
+        0x0300_578C music_volume: u32,
+        0x0300_53A4 sound_volume: u32,
+        0x0300_5994 u_5994: u32,
+        /// The settings differ from the profile's copy (set by A on a settings screen).
+        0x0300_5998 settings_changed: u32,
+        /// Frame counter of the blinking cursors (bit 4) and PRESS START.
+        0x0300_53B4 flash: u32,
         /// Keys held (L and R turn the garage car).
         0x0300_64C4 keys_held: u16,
         /// The garage car record's working copy (17 bytes) and its turn angle.
@@ -141,10 +154,18 @@ layout! {
         /// The garage upgrade pages' selection (`+0x364`, `+0x365`).
         0x364 upgrade_a: u8,
         0x365 upgrade_b: u8,
+        /// The settings screens' cursor per screen and their arrow delays (2 per item).
+        0x368 setup_cursors: [u8; 6],
+        0x374 setup_delays: [i8; 16],
         0x388 event_cursors: [u8; 6],
         /// Race end: a new record was set (`+0x3B4`), the payout (`+0x3B8`).
         0x3B4 record_flag: u32,
         0x3B8 payout: u32,
+        0x3BC settings_head: u32,
+        /// The settings screens' copy of the race and option settings (`setting_variable` 2..=0x10): reverse,
+        /// laps, difficulty, opponents, traffic, `u_580c`, `u_53e4`, units, HUD, `u_5798`, music/8, sound/8,
+        /// language, `u_0050`.
+        0x3C0 settings: [u32; 15],
         /// A new track record (`+0x4A8`) and the unlock message keys (`+0x4AA`, 0-terminated).
         0x494 u_494: u16,
         0x4A8 new_record: u16,

@@ -167,7 +167,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 } else {
                     flow::menu_back(st, h);
                 }
-                h.career_opponents(st);
+                super::setup::career_opponents(st, h);
                 return 1;
             }
             h.call(CARBON_PLAY_SOUND, &[0x27, 1]);
