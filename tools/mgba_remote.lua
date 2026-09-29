@@ -13,6 +13,7 @@
 --                              memory as NAME.<domain>.bin, and every call appends EWRAM + IWRAM to NAME.ram.bin
 --                              (tools/trace_race.py turns that into deltas). SKIP: calls to leave out first
 --                              (docs/engine/physics.md)
+-- NFSGBA_MGBA_EXTRA (';'-separated paths) loads more scripts after this one.
 local dir = os.getenv("NFSGBA_MGBA_DIR")
 local KEYS = {A = 0, B = 1, SELECT = 2, START = 3, RIGHT = 4, LEFT = 5, UP = 6, DOWN = 7, R = 8, L = 9}
 local queue, batch, wait, held = {}, nil, 0, false
@@ -126,5 +127,11 @@ callbacks:add("frame", function()
   local ok, err = pcall(run, line)
   if not ok then log("error in '" .. line .. "': " .. tostring(err)) end
 end)
+
+-- NFSGBA_MGBA_EXTRA: more scripts to load, separated by ';' (e.g. tools/trace_race_rules.lua).
+for path in (os.getenv("NFSGBA_MGBA_EXTRA") or ""):gmatch("[^;]+") do
+  local ok, err = pcall(dofile, path)
+  log((ok and "loaded " or "failed to load ") .. path .. (ok and "" or (": " .. tostring(err))))
+end
 
 log("remote ready")

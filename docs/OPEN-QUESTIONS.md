@@ -11,12 +11,13 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Code
 
-10. **What are the tables at `0x794000–0x799B88`** (referenced 49 times from game code) **and the ~41 KiB at `0x7F5CC8–0x800000`?**
+10. **What is `0x78E714–0x799B88`** (46 KiB right after the last racing line; 49 code references into its `0x794000` part), **the 48-byte byte map at `0x7F5CC8`, and the 4 KiB table at `0x722DD4`** (level descriptor `+0x28`)? ROM attribution: 98.907% of the ROM is claimed ([engine/harness.md](engine/harness.md)).
 
 18. **Menu materials 6, 16–152 and most overlays:** what are they, and which palette does each screen use (FIDELITY U4)?
 19. **HUD details:** material kind bit 4 (materials 5–33), element bytes `+0x0F`/`+0x10`, and which race mode HUD screen 3 serves.
 20. **Menu sprite screens (`0x347778`):** all elements use material 0. Hit boxes or cursor anchors?
 21. **The 128 bytes at `0x71F168`**, zero apart from one word, just before the city palettes.
+22. **Who calls `FUN_0814279c` (countdown timer), `FUN_08142aac` (best lap) and `FUN_08143094` (units panel)?** The HUD modes don't.
 16. **Audio module header bytes `+0x038` and `+0x138`** are never read by the player. What did they hold for the converter?
 17. **What calls the sound re-init/shutdown pair at `0x08149dbe`–`0x0814a018`?** Hypothesis: link play.
 
