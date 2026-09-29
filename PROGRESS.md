@@ -12,13 +12,15 @@ Session state for whoever picks this up next. Read `AGENTS.md` first, then this 
   - a Quick Play race is reached, with savestates `race.ss` and `mainmenu.ss` in `data/work/e5298b24/mgba/`;
   - the race uses video mode 4 plus an ARM software renderer in IWRAM.
 - **Ghidra:** a headless analysis with the race IWRAM dump is done. The decompiled C of 874 functions is in `data/work/e5298b24/ghidra/carbon_decomp.c` (not in git). Rebuild it with the command in TOOLS.md.
-- **First 3D geometry decoded:** the vehicle model bank has 102 models (cars in 3 LODs, spoilers, traffic). Details are in `docs/formats/vehicle-models.md`; `tools/models.py` exports OBJ. 11 tests pass.
+- **First 3D geometry decoded:** the vehicle model bank has 102 models (cars in 3 LODs, spoilers, traffic). Details are in `docs/formats/vehicle-models.md`; `tools/models.py` exports OBJ.
+- **City decoded:** a 2.5D portal/sector engine (Doom/Build style) with 1,113 sectors and 4,423 walls. Details are in `docs/formats/city-sectors.md`; `tools/city.py` exports SVG and OBJ. 12 tests pass.
+- **Preview renders** (not in git): `data/out/previews/` holds the city top-down map, a 3D district, all vehicle models, and a car atlas.
 
 ## Next step
 
-1. **City geometry:** read `FUN_030013ac` and `FUN_03000b44`, the level-descriptor words `+0x00…+0x30`, and the per-map table `DAT_08139598`.
-2. **Textures:** pair each car model with its 256×200 atlas and palette, and apply the UVs.
-3. **Roadmap step 2:** a minimal Bevy viewer that loads the models (and later the city) straight from the ROM.
+1. **Textures:** city materials (texels at `0x47BC6C`) and palettes; pair car models with their atlases and apply the UVs.
+2. **Road surface:** the floor renderer (`FUN_03000b44`, `FUN_03002da0`).
+3. **Roadmap step 2:** a minimal Bevy viewer that loads the city and cars straight from the ROM (untextured first).
 
 ## Environment notes
 
