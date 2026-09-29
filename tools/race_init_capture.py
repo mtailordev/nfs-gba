@@ -30,6 +30,14 @@ SCENARIOS = {
     "wingmanb": ("ai-traffic/wingmaninfo", ["wait 53", "hold A 10"]),
     "hunter": ("physics-paths/hunter-info", ["hold A 10"]),
     "hunterb": ("physics-paths/hunter-info", ["wait 91", "hold A 10"]),
+    # Quick Play race info: LONGPOINT, Mazda RX-7, light traffic / VW Golf GTI, easy, no traffic.
+    "rx7": ("hud-logic/prerace", ["hold A 10"]),
+    "golf": ("physics-paths/easy-info", ["hold A 10"]),
+    # The RX-7 race as an elimination: the mode byte (0x030056E0) poked on the info screen.
+    "elimination": ("hud-logic/prerace", ["poke 0x030056E0 1", "hold A 10"]),
+    # Career: the event grid (Lucky 7's, LONGPOINT circuit), A until the race starts.
+    "career": ("race-rules/event_grid", ["hold A 10", "wait 60", "hold A 10", "wait 60", "hold A 10", "wait 60",
+                                         "hold A 10"]),
 }
 
 

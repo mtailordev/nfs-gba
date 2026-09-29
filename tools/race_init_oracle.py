@@ -5,8 +5,9 @@
 
 For each NAME_pre capture (tools/race_init_capture.py) it runs the game's own race_start_from_table_a in the
 function oracle (no IRQs) and saves the result as NAME_oracle.<domain>.bin; crates/nfsgba-game/tests/race_init.rs
-compares the port with it. It also diffs the oracle's result with mGBA's NAME_post: the IRQs that fired during the
-race start may explain a difference (IRQ_WRITES), anything else is reported as unexplained and fails.
+compares the port with it. It also finds the number of VBlank IRQs that ran before setup_race_cars read the tick
+counter as the rand seed: the one count for which the oracle equals mGBA's NAME_post outside the IRQs' own writes
+(IRQ_WRITES), saved as NAME_seed.txt; the Rust test then compares the port with mGBA directly.
 """
 import sys
 from pathlib import Path
@@ -72,7 +73,9 @@ def run(name):
             and not unexplained(rk, name, engine)]
     print(f"{name}: oracle state saved; with the tick advanced by {fits} VBlanks the oracle equals mGBA outside "
           f"the IRQ writes (rand index included)")
-    return bool(fits)
+    if len(fits) == 1:
+        (WORK / f"{name}_seed.txt").write_text(f"{fits[0]}\n")
+    return len(fits) == 1
 
 
 if __name__ == "__main__":
