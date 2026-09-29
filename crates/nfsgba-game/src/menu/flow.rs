@@ -5,7 +5,7 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, exit_kind, map, update_kind};
+use super::{Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, map, update_kind};
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
@@ -18,6 +18,8 @@ pub trait Host {
     fn rom(&self) -> &[u8];
     /// A game function that is not ported: its address and arguments; returns its result.
     fn call(&mut self, function: u32, args: &[u32]) -> u32;
+    /// A string the game builds on its stack and passes to a text primitive by pointer: the pointer it gets.
+    fn text_arg(&mut self, s: Vec<u8>) -> u32;
     /// A kind's handler (`phase`: 0 enter, 1 update, 2 draw, 3 exit). It reads and writes `st`.
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32;
     /// `career_opponents` (screen 15's entry).
@@ -283,7 +285,7 @@ pub fn rom_u16(rom: &[u8], addr: u32) -> u16 {
     u16::from_le_bytes([rom[o], rom[o + 1]])
 }
 
-fn rom_u32(rom: &[u8], addr: u32) -> u32 {
+pub fn rom_u32(rom: &[u8], addr: u32) -> u32 {
     let o = (addr & 0x1FF_FFFF) as usize;
     u32::from_le_bytes(rom[o..o + 4].try_into().unwrap())
 }
@@ -422,7 +424,7 @@ pub fn main_frame(st: &mut MenuState, h: &mut impl Host) {
 
 /// Whether a kind's handler runs on typed state ([`run_typed`]); the others still run on the RAM image.
 pub fn is_typed(kind: Kind, phase: usize) -> bool {
-    matches!((kind, phase), (Kind::Kind7, 0..=2))
+    matches!((kind, phase), (Kind::Kind7 | Kind::Event, 0..=2))
 }
 
 /// A typed handler (see [`is_typed`]).
@@ -431,6 +433,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Kind7, 0) => map::enter(st, h),
         (Kind::Kind7, 1) => map::update(st, h),
         (Kind::Kind7, 2) => map::draw(st, h),
+        (Kind::Event, 0) => event::enter(st, h),
+        (Kind::Event, 1) => event::update(st, h),
+        (Kind::Event, 2) => event::draw(st, h),
         _ => unreachable!("{kind:?} phase {phase} is not typed"),
     }
 }

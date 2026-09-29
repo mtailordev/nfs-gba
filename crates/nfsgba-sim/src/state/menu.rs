@@ -9,6 +9,22 @@ layout! {
     pub struct MenuGlobals: 0 {
         /// The race outcome (5: quit to the menu) and the player's entity slot.
         0x0300_0048 race_outcome: u32,
+        /// Bit per race mode: hints allowed.
+        0x0300_0070 mode_bits: u32,
+        /// The race setup the career event screen writes (AI skill, difficulty 0..2, laps, traffic, mode).
+        0x0300_00BC skill: u32,
+        0x0300_5604 traffic: u32,
+        0x0300_5608 difficulty: u32,
+        0x0300_56E0 race_mode: u32,
+        0x0300_56E4 laps: u32,
+        /// Per-racer start slot bytes (indexed by the player's slot) and the value written.
+        0x0300_538C slot_bytes: [u8; 16],
+        0x0300_53BC start_slot: u32,
+        0x0300_57F0 unpack_buffer: u32,
+        /// The interface language (0 English … 4).
+        0x0300_5600 language: u32,
+        /// The IWRAM divide routine's remainder.
+        0x0300_6480 div_remainder: u32,
         0x0300_0060 race_player: u32,
         /// Environment of the chosen route (first byte of the route record).
         0x0300_006C environment: u32,
@@ -70,8 +86,22 @@ layout! {
         0x10 career_car: i8,
         0x11 car: i8,
         0x12 u_12: u16,
+        /// The 15 cars' 17-byte records.
+        0xF9 car_records: [[u8; 17]; 15],
+        /// Career hints seen (`+0x1F8`, `+0x1F9`) and the hint flag (`+0x1FA`).
+        0x1F8 hints_a: u8,
+        0x1F9 hints_b: u8,
+        0x1FA hint_flag: u8,
         /// The career district (zone) selected on the map.
         0x1FB zone: u8,
+        /// The selected event slot in the zone.
+        0x1FC event_slot: u8,
+        /// 2 bits per career event: 1 won, 2 second, 3 not done.
+        0x205 events: [u8; 19],
+        /// Record time (frames) per track: 12 circuits, then 18 sprints.
+        0x218 records: [u16; 30],
+        /// The event cursor per zone.
+        0x388 event_cursors: [u8; 6],
         0x2EE music: i8,
         0x2F6 u_2f6: u16,
         0x2F8 u_2f8: u32,
@@ -93,12 +123,16 @@ layout! {
 impl MenuProfile {
     /// `unlock_is_locked` (`0x0812D784`): 1 when bit `id` of the unlock bits is clear.
     pub fn is_locked(&self, id: i32) -> u32 {
-        let i = (id >> 3) as usize;
+        (self.unlock_byte((id >> 3) as usize) as i32 >> (id & 7) & 1 == 0) as u32
+    }
+
+    /// Byte `i` of the unlock bits (0 past the declared 48).
+    pub fn unlock_byte(&self, i: usize) -> u8 {
         let byte = self
             .unlocks
             .get(i)
             .or_else(|| self.unlocks_more.get(i.wrapping_sub(32)));
-        (byte.copied().unwrap_or(0) as i32 >> (id & 7) & 1 == 0) as u32
+        byte.copied().unwrap_or(0)
     }
 }
 
