@@ -151,6 +151,9 @@ layout! {
         0x11 car: i8,
         0x0C cash: i32,
         0x12 u_12: u16,
+        /// The 15 cars' 15-byte extra records (`+0x14`) and the four bytes at `+0xF5`.
+        0x14 car_extra: [[u8; 15]; 15],
+        0xF5 field_f5: [u8; 4],
         /// The 15 cars' 17-byte records.
         0xF9 car_records: [[u8; 17]; 15],
         /// Career hints seen (`+0x1F8`, `+0x1F9`) and the hint flag (`+0x1FA`).
@@ -213,6 +216,10 @@ layout! {
         0x350 cursors: [u8; 17],
         /// Map screens' mode.
         0x404 map_mode: u8,
+        /// `+0x328`: the profile was loaded from a save (`save_load_profile`).
+        0x328 loaded: u8,
+        /// The saved names of save slots 0 and 1 (`+0x496`, 9 bytes each).
+        0x496 slot_names: [[u8; 9]; 2],
         /// Unlock bits by id.
         0x42D unlocks: [u8; 32],
         0x44D unlocks_more: [u8; 16],

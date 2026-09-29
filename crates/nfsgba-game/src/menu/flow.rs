@@ -52,6 +52,19 @@ pub trait Host {
     fn button_prompts(&mut self, st: &MenuState, args: &[u32; 3]);
     /// `message_box_draw`: the open message box.
     fn message_box_draw(&mut self, st: &mut MenuState);
+    /// `profile_reset` (`0x081356DC`). The default logs the call (the oracle cases stub it); [`super::boot::BootHost`]
+    /// runs [`super::save::profile_reset`].
+    fn profile_reset(&mut self, _st: &mut MenuState) {
+        self.call(0x0813_56DC, &[]);
+    }
+    /// `save_load_profile` (`0x08149D84`) of the slot in `g.save_buffer`.
+    fn save_load(&mut self, st: &mut MenuState) -> u32 {
+        self.call(0x0814_9D84, &[st.g.save_buffer])
+    }
+    /// `save_write_profile` (`0x08149FD8`) of the slot in `g.save_buffer`.
+    fn save_write(&mut self, st: &mut MenuState) -> u32 {
+        self.call(0x0814_9FD8, &[st.g.save_buffer])
+    }
 }
 
 /// `list_slot` (`0x0812FD04`): the List screen's cursor slot, −1 for other screens.

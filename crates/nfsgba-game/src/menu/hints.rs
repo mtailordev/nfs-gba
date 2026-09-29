@@ -7,8 +7,8 @@ use nfsgba_sim::state::MenuState;
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
 use super::{
-    CARBON_PLAY_MUSIC, CARBON_STOP_SOUND, FILL_RECT, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SAVE_WRITE_PROFILE,
-    SND_STOP_MUSIC, TEXT_BOX, TEXT_MENU, VBLANK_INTR_WAIT, WORLD,
+    CARBON_PLAY_MUSIC, CARBON_STOP_SOUND, FILL_RECT, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SND_STOP_MUSIC, TEXT_BOX,
+    TEXT_MENU, VBLANK_INTR_WAIT, WORLD,
 };
 
 fn s16(h: &impl Host, a: u32) -> u32 {
@@ -246,7 +246,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 if st.profile.hints_b != 0 {
                     st.profile.hints_a = st.profile.hints_b.wrapping_add(st.profile.hints_a);
                     st.profile.hints_b = 0;
-                    h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                    h.save_write(st);
                 }
                 stop_music(st, h);
                 st.g.screen = 0x29;
@@ -303,7 +303,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
                     }
                     p.zone_step = 0;
                 }
-                h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                h.save_write(st);
                 h.call(CARBON_PLAY_MUSIC, &[0]);
                 st.profile.back[0] = 0;
                 st.g.screen = 3;

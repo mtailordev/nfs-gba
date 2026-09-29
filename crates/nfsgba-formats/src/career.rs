@@ -1147,6 +1147,11 @@ impl Save {
         if u16_at(b, 0x102) != SAVE_VERSION {
             return Err(invalid("save version is not 9"));
         }
+        Ok(Save::decode(b))
+    }
+
+    /// `save_decode` (`FUN_08149820`): the fields of any buffer, without the checksum and version checks.
+    pub fn decode(b: &[u8; SAVE_SIZE]) -> Save {
         let mut car_bits = 0;
         let cars = std::array::from_fn(|i| {
             let p = &b[12 * i..12 * i + 12];
@@ -1172,7 +1177,7 @@ impl Save {
             r
         });
         let (bc, be) = (u16_at(b, 0xBC), u16_at(b, 0xBE));
-        Ok(Save {
+        Save {
             name: b[0xB4..0xBC].try_into().unwrap(),
             cars,
             car_bits,
@@ -1199,7 +1204,7 @@ impl Save {
                 mode_flags: b[0xC3] >> 4,
             },
             unlock_flags: b[0x11B] & 0x3F,
-        })
+        }
     }
 
     /// The game's save buffer for this profile (`FUN_081492c0`, in its write order). The game encodes into a fresh

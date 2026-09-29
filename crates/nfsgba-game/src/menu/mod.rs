@@ -192,6 +192,7 @@ fn vram_offset(addr: u32) -> usize {
 }
 
 mod adapt;
+pub mod boot;
 pub mod draw;
 mod event;
 pub mod flow;
@@ -200,6 +201,7 @@ mod intro;
 mod list;
 mod map;
 mod results;
+pub mod save;
 pub mod scene;
 mod setup;
 pub mod text;
@@ -399,8 +401,6 @@ const TEXT_BOX: u32 = 0x0814_1C88; // (font, text key or pointer, x, y, width, l
 const INTRO_PAGE_SETUP: u32 = 0x0813_64C4; // (unpack buffer): clears the page
 
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
-
-const SAVE_WRITE_PROFILE: u32 = 0x0814_9FD8;
 
 // The hint and story pages' constants (`hints.rs`).
 const CARBON_STOP_SOUND: u32 = 0x0813_6028; // (id)

@@ -8,7 +8,7 @@ use nfsgba_sim::state::MenuState;
 use super::event::{career_event_to_globals, hint_due};
 use super::flow::{self, CARBON_PLAY_SOUND, Host, message_box_open, peek_back_i, rom_u16, rom_u32};
 use super::text::{number_text, thousands};
-use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SAVE_WRITE_PROFILE, TEXT_BOX, TEXT_MENU, WORLD};
+use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_BOX, TEXT_MENU, WORLD};
 
 const LIST_PAGES: u32 = 0x087E_544C;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
@@ -297,7 +297,7 @@ fn list_action(st: &mut MenuState, h: &mut impl Host, action: i32) -> bool {
                 } else {
                     flow::goto_screen(st, h, 4);
                 }
-                h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                h.save_write(st);
             } else if state == 0 {
                 message_box_open(st, 2, 0x2BF, u32::MAX);
             } else if state == 2 {
@@ -335,7 +335,7 @@ fn list_action(st: &mut MenuState, h: &mut impl Host, action: i32) -> bool {
                 }
                 st.profile.zone_step = 0;
             }
-            h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+            h.save_write(st);
             st.profile.back[0] = 0;
             st.g.screen = if st.g.career == 0 { 0x1C } else { 3 };
             st.g.back_top = 0;
@@ -381,13 +381,13 @@ fn confirmed_message(st: &mut MenuState, h: &mut impl Host, action: i32) {
                     h.call(BUY_UNLOCK, &[st.g.player_car.wrapping_add(0x108)]);
                     st.profile.hints_a = st.profile.hints_b.wrapping_add(st.profile.hints_a);
                     st.profile.hints_b = 0;
-                    h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                    h.save_write(st);
                     st.g.back_top = -1;
                     st.g.screen = 0;
                     flow::goto_screen(st, h, 3);
                 } else {
                     h.call(BUY_UNLOCK, &[st.g.player_car.wrapping_add(0x108)]);
-                    h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                    h.save_write(st);
                 }
             }
         }
@@ -402,7 +402,7 @@ fn confirmed_message(st: &mut MenuState, h: &mut impl Host, action: i32) {
         } else {
             st.profile.upgrades_saving = 0;
             if st.g.upgrades_changed != 0 {
-                h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                h.save_write(st);
             }
         }
     }

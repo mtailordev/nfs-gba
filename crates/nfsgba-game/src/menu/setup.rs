@@ -7,9 +7,7 @@ use nfsgba_sim::state::{MenuGlobals, MenuState};
 
 use super::event::hint_due;
 use super::flow::{self, CARBON_PLAY_SOUND, Host, message_box_open, rom_u16, rom_u32};
-use super::{
-    INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, SAVE_WRITE_PROFILE, TEXT_BOX, TEXT_MENU, WORLD,
-};
+use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, TEXT_BOX, TEXT_MENU, WORLD};
 
 const SETUP_SCREENS: u32 = 0x087E_6260;
 
@@ -265,7 +263,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 g.sound_volume = c[SOUND] << 3;
                 g.language = c[LANGUAGE];
                 g.u_0050 = c[U_0050];
-                h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]);
+                h.save_write(st);
             }
             flow::menu_back(st, h);
         }

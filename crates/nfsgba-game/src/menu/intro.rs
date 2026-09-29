@@ -5,16 +5,12 @@
 use nfsgba_sim::state::MenuState;
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
-use super::{
-    FLASH_BLINK, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SAVE_WRITE_PROFILE, TEXT_MENU, TEXT_MENU_WRAPPED,
-    VBLANK_INTR_WAIT, WORLD,
-};
+use super::{FLASH_BLINK, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_MENU, TEXT_MENU_WRAPPED, VBLANK_INTR_WAIT, WORLD};
 
 /// The name buffer's address (the game passes it to the text primitive as a pointer).
 const NAME: u32 = 0x0300_5970;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
-const SAVE_LOAD_PROFILE: u32 = 0x0814_9D84;
 
 /// The intro page record (`0x7E5DA8`, 0x14 bytes) of an intro screen: `+6`/`+8` the background passed to the
 /// menu scene setup, `+0x10` the item list (`+8`: the next screen).
@@ -69,7 +65,7 @@ pub fn enter(st: &mut MenuState, h: &mut impl Host) -> u32 {
             st.g.keyboard_column = 0;
             st.g.keyboard_row = 0;
             st.g.name_len = 0;
-            h.call(0x0813_56DC, &[]); // profile_reset
+            h.profile_reset(st);
             st.g.name = [0; 9];
             // Start from the profile's current name.
             // ponytail: the game reads on until a 0 byte; a full 9-byte name stops at 9 here.
@@ -263,7 +259,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 st.profile.u_494 = 0;
                 if st.profile.profile_exists != 0 {
                     h.call(0x0814_19C0, &[0xC, 0x159, 0x78, 0x32, 0xDC, 2, 0]);
-                    h.call(SAVE_LOAD_PROFILE, &[st.g.save_buffer]);
+                    h.save_load(st);
                     let lang = st.g.language;
                     if lang != st.profile.saved_language as u32 {
                         st.g.units = (lang != 0) as u32;
@@ -417,7 +413,7 @@ fn name_entry(st: &mut MenuState, h: &mut impl Host) {
             }
             h.call(CARBON_PLAY_SOUND, &[2, 1]);
             st.profile.name = st.g.name;
-            if h.call(SAVE_WRITE_PROFILE, &[st.g.save_buffer]) != 0 {
+            if h.save_write(st) != 0 {
                 flow::goto_screen(st, h, 0); // save_write_profile failed
             } else if st.profile.u_494 == 2 {
                 flow::menu_back(st, h);
