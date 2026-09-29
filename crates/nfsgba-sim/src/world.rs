@@ -75,7 +75,7 @@ pub fn select_bindings(mem: &mut Mem, automatic: i32) {
 }
 
 /// `FUN_030047a8` (IWRAM, ARM): whether (`x`, `z`) is inside the convex wall loop; returns `id` or 0xFFFF.
-fn inside(mem: &Mem, x: i32, z: i32, walls: u32, count: u32, id: u32) -> u32 {
+pub(crate) fn inside(mem: &Mem, x: i32, z: i32, walls: u32, count: u32, id: u32) -> u32 {
     let mut prev = walls + (count.wrapping_sub(1)) * 0x44;
     let mut cur = walls;
     for _ in 0..count {

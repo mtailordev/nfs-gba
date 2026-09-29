@@ -266,7 +266,7 @@ pub fn track_waypoint(mem: &mut Mem, e: u32) -> Result<()> {
 
 /// `FUN_0813f098`: crossing the start line on segment 0 with flag 2 set completes a lap: best lap (`+0xB4`),
 /// lap start (`+0xB8`), laps left (`+0xC5`).
-fn lap(mem: &mut Mem, e: u32) -> Result<()> {
+pub(crate) fn lap(mem: &mut Mem, e: u32) -> Result<()> {
     let p = mem.u32(e + 0x8C);
     let last = if mem.i32(CIRCUIT) == 0 { -2 } else { -1 };
     let wp = mem.i16(e + 0x90) as i32;
