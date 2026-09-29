@@ -34,7 +34,7 @@ PROVENANCE = {
     "audio": ("tools/record.py audio (recorders/audio.py + audio.lua)", "record.py audio <state> <frames> [<name> <keys>]", "race.ss, mainmenu.ss (docs/formats/audio.md)"),
     "hud-logic": ("tools/record.py hud (recorders/hud.py + hud.lua)", "record.py hud <state> <frames> [<name> <keys> <pokes>]", "Quick Play races per mode (docs/formats/ui.md, HUD logic)"),
     "menus": ("tools/oracle/cases.py menus (function oracle)", "cases.py menus <set>; unlock.jsonl: cases.py unlock", "menu snapshots named in each case (docs/formats/ui.md, Menus)"),
-    "menus3": ("tools/oracle/cases.py menus (function oracle)", "cases.py menus all", "menu snapshots named in each case (docs/formats/ui.md, Menus, continued)"),
+    "menus3": ("tools/oracle/cases.py menus, draw, scene (function oracle); power-on (headless mGBA, tools/retro.py)", "cases.py menus all; cases.py draw; cases.py scene; cases.py power-on", "menu snapshots named in each case (docs/formats/ui.md, Menus, continued); po-*: a power-on run to the main menu"),
     "ui-2d": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump <name>", "fresh save, intro screens (docs/formats/ui.md)"),
     "car-paint": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump <name>", "race.ss, driving left (docs/formats/car-paint.md)"),
     "car-atlas": ("mGBA session car-atlas, trace scripts in the folder", "see docs/formats/car-paint.md (car-atlas)", "race starts from race.ss and mainmenu.ss, RAM-poked records"),
