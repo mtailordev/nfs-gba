@@ -1,6 +1,0 @@
-address,name,kind,comment
-0x08160624,rotation_y,function,3x4 matrix: rotation about y by an angle (cos 0 -sin / 0 0x4000 0 / sin 0 cos), zero translation
-0x08160668,rotation_z,function,3x4 matrix: rotation about z by an angle, zero translation
-0x081607e0,transform_point,function,out = (v · M >> 14) + translation (row vector times the 3x3, then m9..m11)
-0x081608fc,rotate_vector,function,out = v · M >> 14 (row vector times the 3x3, no translation)
-0x08137744,camera_push_out_of_walls,function,pushes the camera out to 80 units from flag-0x1000 (or low 0x4000) walls of the camera sector

@@ -160,39 +160,3 @@ and writes the same bytes the game writes.
 Calling `ai_advance` would mean copying the racer, the race, the planes and the back table out of RAM and back each
 call. That is more code than the 40-line transcription, and it could get the write order wrong (the RNG index, flags).
 Both versions are checked against the game's code, so they agree.
-
-## Integration notes
-
-**FIDELITY.md:**
-- **D4:** the AI part is exact. Opponents (handler 0x29, including the wingman) and traffic (0x36) match the game's code:
-  - 12,376 calls byte-exact over 12 traces (sprint, circuit, wingman, heavy traffic);
-  - a free replay of 12,372 car states.
-  - Leave D4 open only for cops if any exist (no cop handler has been seen in these races).
-- **New entry, the lane-timer timing:** `+0x4D4` restarts at the race time the VBlank IRQ has counted by the moment the AI runs; it needs cycle timing. It was hit 38 times in the traces.
-- **New entry, `opponent_effects`:** reported, not drawn (the 2D layer; `FUN_0814E628` → `FUN_0814E414`, sprite pool `*0x03000058`).
-- **New entry, effect entities:** handler 0x34 (`0x0814C49C`) is not ported. The traces apply the game's writes for those entities.
-- **D9, D10, D11:** they now also block the AI, as listed under Not ported. When the physics port adds them, drop the names from `EXPECTED_STOPS` in `tests/ai_trace.rs`.
-
-**For the physics port (owner of `route.rs`):** `route::lap` stops at lap completion. `career::RacingLine::lap_crossing` is oracle-checked; wiring it in would let AI cars finish sprints.
-
-**Changes to existing modules, visibility only** (`fn` → `pub(crate) fn`):
-- `car::{nitro, curve, auto_shift}`;
-- `init::{nitro_setup, setup_handling, race_start_setup}`;
-- `route::lap`;
-- `walls::walls` (the AI calls it without portal recursion);
-- `world::inside`.
-
-**Tools:**
-- `tools/trace_ai_oracle.py` (new);
-- `tools/trace_ai_race.py` (new);
-- `tools/mgba_remote.lua` gains `poke ADDR VALUE` (backward compatible).
-
-**Address map and symbols:**
-- `docs/engine/notes/symbols.ai-traffic.csv`: 31 functions.
-- `docs/engine/notes/addresses.ai-traffic.csv`: ROM tables, the wingman's globals, driver, entity and profile fields.
-- `notes_merge.py` reports two conflicts, and both are intended renames of tentative names:
-  - `0x0814a2a0` `entity_update_rim` → `opponent_handler`;
-  - `0x0814a390` `entity_reset_rim` → `opponent_init`.
-- `0x0814d078` keeps the race-rules name `ai_drive`.
-
-**INDEX.md:** `| [engine/ai.md](engine/ai.md) | Opponents, the wingman and traffic: entity handlers 0x29 and 0x36, trace-exact (`nfsgba-sim` `ai.rs`, `traffic_ai.rs`) |`
