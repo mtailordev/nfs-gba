@@ -1,11 +1,12 @@
 # World renderer (Carbon `BN7E`, race IWRAM code)
 
 **Status:**
-- **Exact and verified against the reference race frame:** the projection, the visible-sector list, the wall transform, wall setup and near clipping, the floor/ceiling outline and its column clip, and the camera-sector search. They are reimplemented in `crates/nfsgba-formats/src/render.rs`, whose tests reproduce the RAM of `data/work/e5298b24/mgba/race.ss` value for value:
+- **Exact and verified against the reference race frame:** the whole world pass (pass 0). It is reimplemented in `crates/nfsgba-formats/src/render.rs`: projection, visible-sector list, wall transform, setup and near clipping, which walls draw, the wall column rasteriser, the floor/ceiling outline, its clip and the flat rasterisers, the painter's order, and the camera-sector search. The tests reproduce `data/work/e5298b24/mgba/race.ss` value for value:
   - visible list (world `+0x60`), all 9 entries;
   - wall draw buffer (world `+0x68`) of the camera sector;
-  - flat outline (world `+0x6C`) and its clipped copy.
-- **Decoded from the code but not reimplemented:** the column and span rasterisers and the entity draw. These are marked below; no pixel comparison has been made yet.
+  - flat outline (world `+0x6C`) and its clipped copy;
+  - **the frame itself**: all 33,350 world pixels of the 240×160 frame match VRAM, except 536 pixels where pass 1 had begun drawing the player car over the floor. The only other areas are the sky and row 159.
+- **Decoded but not reimplemented:** the entity draw (pass 1 and entities in pass 0). It is marked below.
 - Everything here comes from the ARM code (Ghidra decompilation, checked against the disassembly where it matters) plus the reference dump. Hypotheses are labelled.
 
 The race renderer is ARM code copied from ROM `0x08165134` to IWRAM `0x03000220`, so an IWRAM address is the ROM address minus `0x164F14`. Thumb code reaches it through two dispatchers:
@@ -150,6 +151,8 @@ There is no per-row clipping in the list (top/bottom are always the full screen)
 
 ## `draw_sector` (`FUN_0300224c`)
 
+Reimplemented as `render::draw_sector` (pass 0, entities left out); `render::draw_world` is pass 0 of `FUN_030048c8`.
+
 ```
 flags = sector+0x12 (byte); if sector+0x0A != 0xFFFF: flags = offsets[+0x0A].+8; if flags & 0x40: return
 world+0xE2..E8 = entry.left, right, top, bottom; the rasteriser's rectangle likewise
@@ -203,7 +206,7 @@ if the sector has a floor or ceiling:
                        FUN_03004d20((fu0 << flat.log2w) >> 7, d0), FUN_03004d20((fv0 << flat.log2h) >> 7, d0)}
    emit the same for the end with r1, floor1, ceil1, d1, fu1, fv1
 if flags & 0x2000 && x1 < x0: flags |= 2
-if flags & 2: swap x0, x1                                            // heights are not swapped
+if flags & 2: swap x0, x1                                            // the rasteriser reads the rest swapped
 if x0 < x1 && (u16)E2 <= x1 && x0 < (u16)E4: project top/bottom (start with r0, end with r1)
 else flags |= 4
 world+0xF2 = vertices emitted
@@ -229,9 +232,14 @@ raster_wall_columns(span, log2w = rec+0x1E, log2h = rec+0x1F, texels = city texe
   - Each is one quad between the wall's own top and bottom heights. **There are no separate upper and lower parts**; the data models a step as the portal wall's own height range.
   - Portals with bit 0 set (1,951 walls, flags `0x601` typically) are open.
 - **Deferred walls:** walls with span flag 2 are drawn after the floor and ceiling. That covers ROM flag 2 (10 walls) and back-facing walls with flag `0x2000` (2 walls). The mask is truncated to 8 bits, so such a wall with a countdown index of 8 or more (a sector with 8+ walls) is never drawn. This is a quirk to keep.
-- **Flag 2** also swaps u0/u1 and the screen x ends, but not the heights.
+- **Flag 2:**
+  - `setup_wall_spans` swaps u0/u1 and the screen x ends;
+  - the rasteriser then reads depth, u, top and bottom in swapped order, so the drawn wall is consistent;
+  - the v fields are read unswapped.
 
-### `raster_wall_columns` (`FUN_03000304`), not reimplemented
+### `raster_wall_columns` (`FUN_03000304`)
+
+Reimplemented as `render::raster_wall_columns`, with the draw loop as `render::draw_sector_walls`.
 
 - **Columns:** walls are drawn in **2-pixel columns**, from `x0 >> 1` to `(x1 + 1) >> 1`. A wall of fewer than 2 columns is not drawn.
 - **Horizontal clip:** the columns are clipped to `E2 >> 1 .. E4 >> 1`, and the wall is dropped entirely when it lies outside.
@@ -245,6 +253,7 @@ raster_wall_columns(span, log2w = rec+0x1E, log2h = rec+0x1F, texels = city texe
   - **Height:** `h = ((bottom + 0x3FFF) >> 14) − ((top − 0x3FFF) >> 14)`.
   - **v** (wall flag `0x80` clear, which is every wall): starts at `(wall+0x10) << 8` and steps by `FUN_03004cf8(wall+0x18, h)` per row, plus `voff·256`. The texel row is `v >> 15` masked to the height. So **v is in 1/128 texel rows: 16,384 = 128 rows**, not one texture.
     - The data agrees: 64-row textures use a v span of 8,192.
+    - The pixel test covers 128-row textures only. The frame's 64-row step walls are hidden behind nearer sectors, so this part rests on the code and the data.
     - The end values `+0x14`/`+0x1C` are ignored unless flag `0x80` is set (perspective-correct v). No wall has it.
   - **Vertical clip:** clip rows to `E6..E8` (world `+0xE6`/`+0xE8`).
   - **Texel:** `texels + (colmap[u & (W−1)] << log2h) + row`.
@@ -258,8 +267,11 @@ raster_wall_columns(span, log2w = rec+0x1E, log2h = rec+0x1F, texels = city texe
 
 **Verified:** reproduces the reference frame's 6 clipped vertices exactly.
 
-The rasterisers (`draw_flat_textured` `FUN_03002da0`, `draw_flat_fill` `FUN_03003180`) are not reimplemented:
-- **Scanlines:** they walk the left and right edges (`FUN_03002a0c`) from the top vertex (`FUN_03005008`), over rows `E6..E8`. The polygon is skipped when its min y ≥ E8, its max y ≤ E6, or it is flat.
+The rasterisers (`draw_flat_textured` `FUN_03002da0`, `draw_flat_fill` `FUN_03003180`) are reimplemented as `render::draw_sector_flats`:
+- **Scanlines:** they walk the left and right edges (`FUN_03002a0c`) from the top vertex (`FUN_03005008`), over rows `E6` to `E8` exclusive. So with the race rectangle **row 159 is never drawn** by the world renderer.
+  - The polygon is skipped when its min y ≥ E8, its max y ≤ E6, or it is flat.
+  - The two edges share one count of outline vertices.
+  - For the floor, the left edge walks the outline backwards; for the ceiling, forwards.
 - **Textured spans:** written as **bytes to every other address** (`FUN_03004fa8`). Mode-4 VRAM stores a byte write into both pixels of the halfword, so **textured floors and ceilings are 120 pixels wide** (pairs of equal pixels).
   - Spans of up to 32 pixel pairs are affine between perspective-correct ends; longer spans are split into 16-pair perspective segments (`FUN_03002c40`).
   - Texel = `texels[((v >> (15 − log2w)) & ((H−1) << log2w)) + ((u & ((1 << (log2w+15)) − 1)) >> 15)]`.
@@ -314,11 +326,16 @@ A neighbour with floor 0 is replaced by its `+0x20` alias when that is set. Othe
 - **Buffers used:** the visible list at `0x02018C8C`, the wall buffer at `0x02017288`, the flat buffer at `0x0201B094`, the view at `0x03000080` and the camera at `0x030057A0`. At dump time the buffers hold camera sector 760, the last sector drawn in pass 0.
 - **Scripts** (not in git): `data/scratch/frame.py`, `flat.py`, `map.py` and `walls.py` in the renderer worktree.
 - **Tests:** `cargo test -p nfsgba-formats render` (needs the ROM vault).
+  - `world_pixels_match_the_race_frame` also needs `race.vram.bin`. It renders pass 0 of the frame with `visible_sectors` + `draw_world` and compares against the VRAM page being drawn (`0x0600A000`).
+  - It draws on two backgrounds to tell written pixels from unwritten ones.
 
 ## Not done / NOT 1:1 if used as is
 
-- The column and span rasterisers are specified above but not reimplemented; no pixel comparison has been made against `race.vram.bin`.
-- The entity LOD path is decoded but not checked against a frame. Entity `+0x36`/`+0x64`/`+0x88` meanings are hypotheses.
+- **Entities** (`render::draw_sector` / `draw_world` leave them out, marked `NOT 1:1`):
+  - the entity draw (pass 1, and entities drawn with `0x80` sectors in pass 0), its LOD path and `raster_polygon` are not reimplemented;
+  - the LOD path is not checked against a frame;
+  - the meanings of entity `+0x36`/`+0x64`/`+0x88` are hypotheses.
+- The pixel check covers one frame: 9 sectors, 128-row wall textures, textured floors. Fill-colour flats, ceilings, deferred walls, moving pieces, animated or scrolled materials and transparent textures are reimplemented from the code but not yet exercised against a frame.
 - The focal speed effect's input `g` (`FUN_0815fc38`, `FUN_0815fadc`) is not decoded.
 - The camera offsets `0x030056B8`, `0x030053A0`, `0x030055F8`, `0x03005390` and `0x03005FA4` are not traced to their writers.
 - The runtime tables (world `+0x18`, `+0x1C`, `+0x48`) are inputs. Their writers (door/animation code) are not decoded.
@@ -427,7 +444,8 @@ Rename existing rows:
 - **R7:** close. Material 0 is never drawn (`draw_sector_walls` skips material records whose `+0` is 0; only material 0 has that); walls with flag bit 0 are not drawn either.
 - **R8:** exact rule found; the viewer still needs it. Portal walls with flag bit 0 clear and material ≠ 0 are drawn like solid walls over their own top..bottom. There are no upper/lower parts. 661 such walls.
 - **R9:** close. Flat UV 16,384 = one texture in u and v (`setup_wall_spans` + `flat_span_affine` masks). Fill colours are sector `+0x0D`/`+0x0C`.
-- **R10:** algorithm exact and verified (`render::visible_sectors`, `transform_walls`); the viewer still draws everything.
+- **R10:** algorithm exact and verified. `render::visible_sectors` + `draw_world` reproduce the reference frame's world pixels exactly; the viewer still draws everything.
+- **R1 (new evidence):** a pixel-exact software path now exists for the world. `render::draw_world` writes the 240×160 index frame, and the race palette (R2) turns it into the game's image. It could back an "original resolution" mode or a reference view in the viewer.
 - **R11:** focal 150 → 77.32° × 56.14° FOV, principal point (120, 79), near 64, no pitch or roll; the viewer still uses the Bevy default.
 - **New entries:**
   - **Wall v units (reopen "Wall textures and wall UVs"):** `Wall::uv` normalises v by 16,384. The game's wall v is in 1/128 texel rows (`v >> 7`), so 16,384 = 128 rows. The 560 drawn walls with 64-row textures (v span 8,192) show only half their texture in the viewer. Exact normalised v = `v / (128 · texture_height)`, bottom = `+0x10 + +0x18`.

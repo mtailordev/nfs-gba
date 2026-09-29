@@ -207,16 +207,39 @@ pub struct Piece {
 pub struct Runtime {
     /// World `+0x18`: moving wall pieces.
     pub pieces: Vec<Piece>,
-    /// World `+0x1C` (0x14-byte records, named by sector `+0x0A`): ceiling and floor offsets (`+0x04`,
-    /// `+0x06`).
-    pub sector_offsets: Vec<[i16; 2]>,
-    /// World `+0x48` (8 bytes per material slot): `+0x04` u scroll, `+0x06` v scroll.
-    pub scroll: Vec<[i16; 2]>,
+    /// World `+0x1C`, named by sector `+0x0A` (no Carbon sector uses one).
+    pub sector_offsets: Vec<SectorOffsets>,
+    /// World `+0x48`, named by material `+0x00`; slots past the end read as all zero (no animation, no scroll).
+    pub materials: Vec<MaterialState>,
+}
+
+/// A sector's runtime record (world `+0x1C`, 0x14 bytes).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SectorOffsets {
+    /// `+0x04`, `+0x06`: added to the ceiling (wall `+0x3A`) and floor (wall `+0x38`) heights.
+    pub ceiling: i16,
+    pub floor: i16,
+    /// `+0x08`: replaces sector `+0x12`'s flags; `0x40` hides the sector, 8 makes it a container.
+    pub flags: u16,
+}
+
+/// A material's runtime entry (world `+0x48`, 8 bytes).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MaterialState {
+    /// `+0x02`: animation frame, added to the material index.
+    pub frame: u16,
+    /// `+0x04`, `+0x06`: texture scroll.
+    pub u_scroll: i16,
+    pub v_scroll: i16,
 }
 
 impl Runtime {
     fn piece(&self, index: u16) -> Option<Piece> {
         (index != 0xFFFF).then(|| self.pieces[index as usize])
+    }
+
+    fn material(&self, slot: u16) -> MaterialState {
+        self.materials.get(slot as usize).copied().unwrap_or_default()
     }
 }
 
@@ -373,8 +396,8 @@ pub fn setup_wall_spans(
     let (mut floor_dy, mut ceiling_dy) = (ty, ty);
     let offsets = u16_at(rom, sector + 0xA);
     if offsets != 0xFFFF {
-        let [ceiling, floor] = rt.sector_offsets[offsets as usize];
-        (floor_dy, ceiling_dy) = (ty + floor as i32, ty + ceiling as i32);
+        let o = rt.sector_offsets[offsets as usize];
+        (floor_dy, ceiling_dy) = (ty + o.floor as i32, ty + o.ceiling as i32);
     }
     let flat = material_at(rom, if floor_mat != 0 { floor_mat } else { ceiling_mat });
     let (flat_log2_w, flat_log2_h) = (rom[flat + 0x1E] as u32, rom[flat + 0x1F] as u32);
@@ -383,7 +406,7 @@ pub fn setup_wall_spans(
         let w = walls + 0x44 * k;
         let n = if k + 1 < count || count == 1 { w + 0x44 } else { walls };
         let mat = material_at(rom, u16_at(rom, w + 0x2C));
-        let [u_scroll, v_scroll] = rt.scroll.get(u16_at(rom, mat) as usize).copied().unwrap_or_default();
+        let MaterialState { u_scroll, v_scroll, .. } = rt.material(u16_at(rom, mat));
         let (mut floor0, mut floor1) = (
             i16_at(rom, w + 0x38) as i32 + floor_dy,
             i16_at(rom, n + 0x38) as i32 + floor_dy,
@@ -481,6 +504,554 @@ pub fn setup_wall_spans(
         s.flags = flags;
     }
     out
+}
+
+/// The mode-4 frame the renderer draws into: 240×160 palette indices, row-major.
+pub const SCREEN_WIDTH: usize = 240;
+
+/// `FUN_03004cf8`: `(a << 8) / (b + 1)` as `(a * recip[b]) >> 16`.
+fn div_recip_8(rom: &[u8], a: i32, b: i32) -> i32 {
+    ((a as i64 * recip(rom, b) as i64) >> 16) as i32
+}
+
+/// `draw_sector_walls` (`FUN_03002084`): draws the sector's walls. The first call (`deferred == None`) draws
+/// every visible wall without span flag 2 and returns the walls it deferred, bit `k` for the wall `k` from the
+/// end, truncated to 8 bits as the caller keeps it; `draw_sector` passes that mask back after the flats.
+pub fn draw_sector_walls(
+    rom: &[u8],
+    rt: &Runtime,
+    portal: &Portal,
+    spans: &[WallSpan],
+    deferred: Option<u8>,
+    screen: &mut [u8],
+) -> u8 {
+    let (walls, count) = sector_walls(rom, portal.sector);
+    let (e6, e8) = (portal.top as u16 as i32, portal.bottom as u16 as i32);
+    let mut mask = 0u32;
+    for (i, s) in spans.iter().enumerate() {
+        let (w, k) = (walls + 0x44 * i, (count - i) as u32);
+        let piece = rt.piece(u16_at(rom, w + 0x2A));
+        let material = u16_at(rom, w + 0x2C).wrapping_add(piece.map_or(0, |p| p.material));
+        if u16_at(rom, material_at(rom, material)) == 0 {
+            continue; // material 0
+        }
+        let flags = piece.map_or(u16_at(rom, w + 0x2E), |p| p.flags);
+        let draw = flags & 1 == 0
+            && match deferred {
+                None if s.flags & 4 != 0 => false,
+                None if s.flags & 2 != 0 => {
+                    mask |= 1u32.checked_shl(k).unwrap_or(0);
+                    false
+                }
+                None => true,
+                Some(m) => (m as u32).checked_shr(k).unwrap_or(0) & 1 != 0,
+            };
+        let rows =
+            (s.top[0] as i32) < e8 || (s.top[1] as i32) < e8 || e6 <= s.bottom[0] as i32 || e6 <= s.bottom[1] as i32;
+        if draw && rows {
+            let frame = material.wrapping_add(rt.material(material).frame);
+            raster_wall_columns(rom, portal, s, frame, u16_at(rom, w + 0x2E), screen);
+        }
+    }
+    mask as u8
+}
+
+/// `raster_wall_columns` (`FUN_03000304`) with its column writers `FUN_03004db0` / `FUN_03004d48`: draws one
+/// wall span in 2-pixel columns inside the portal's rectangle. Each pixel of a column pair samples its own
+/// texture column; the rows are shared. Textures whose first texel is 0 skip pairs with a 0 texel.
+pub fn raster_wall_columns(
+    rom: &[u8],
+    portal: &Portal,
+    s: &WallSpan,
+    material: u16,
+    wall_flags: u16,
+    screen: &mut [u8],
+) {
+    let base = ptr(rom, LEVEL_TABLE + 0x08);
+    let rec = material_at(rom, material);
+    let (log2w, log2h) = (rom[rec + 0x1E] as u32, rom[rec + 0x1F] as u32);
+    let colmap = base.wrapping_add(u32_at(rom, rec + 4) as usize);
+    let texels = base.wrapping_add(u32_at(rom, rec + 8) as usize);
+    let end = (s.x[1] as i32 + 1) >> 1;
+    let mut start = s.x[0] as i32 >> 1;
+    let mut cols = end - start;
+    if cols <= 1 {
+        return;
+    }
+    let transparent = rom[texels] == 0;
+    let (wmask, hmask) = ((1u32 << log2w) - 1, (1u32 << log2h) - 1);
+    let (ds, de, us, ue, ts, te, bs, be) = if s.flags & 2 == 0 {
+        (
+            s.depth[0],
+            s.depth[1],
+            s.u[0],
+            s.u[1],
+            s.top[0],
+            s.top[1],
+            s.bottom[0],
+            s.bottom[1],
+        )
+    } else {
+        (
+            s.depth[1],
+            s.depth[0],
+            s.u[1],
+            s.u[0],
+            s.top[1],
+            s.top[0],
+            s.bottom[1],
+            s.bottom[0],
+        )
+    };
+    let (ds, de) = (ds as i32, de as i32);
+    let step = |a: i32, b: i32| div_recip(rom, b.wrapping_sub(a), cols);
+    let mut uz = div_recip_16(rom, us, ds);
+    let uz_step = step(uz, div_recip_16(rom, ue, de));
+    let (mut vz_top, mut vz_bottom) = (div_recip_16(rom, s.v_start[0], ds), div_recip_16(rom, s.v_start[1], ds));
+    let vz_top_step = step(vz_top, div_recip_16(rom, s.v_end[0], de));
+    let vz_bottom_step = step(vz_bottom, div_recip_16(rom, s.v_end[1], de));
+    let mut iz = recip(rom, ds).wrapping_mul(0x100);
+    let iz_step = step(iz, recip(rom, de).wrapping_mul(0x100));
+    let (mut top, mut bottom) = (ts as i32 * 0x4000, bs as i32 * 0x4000);
+    let (top_step, bottom_step) = (step(top, te as i32 * 0x4000), step(bottom, be as i32 * 0x4000));
+    let left = (portal.left as u16 >> 1) as i32;
+    if start < left {
+        if end < left {
+            return;
+        }
+        let n = left - start;
+        uz = uz.wrapping_add(n.wrapping_mul(uz_step));
+        iz = iz.wrapping_add(n.wrapping_mul(iz_step));
+        top = top.wrapping_add(n.wrapping_mul(top_step));
+        bottom = bottom.wrapping_add(n.wrapping_mul(bottom_step));
+        vz_top = vz_top.wrapping_add(n.wrapping_mul(vz_top_step));
+        vz_bottom = vz_bottom.wrapping_add(n.wrapping_mul(vz_bottom_step));
+        (start, cols) = (left, end - left);
+    }
+    let right = (portal.right as u16 >> 1) as i32;
+    if right < end {
+        if right < start {
+            return;
+        }
+        cols = right - start;
+    }
+    if cols <= 1 {
+        return;
+    }
+    let (e6, e8) = (portal.top as u16 as i32, portal.bottom as u16 as i32);
+    for col in start..start + cols {
+        let mut h = (bottom.wrapping_add(0x3FFF) >> 14) - (top.wrapping_sub(0x3FFF) >> 14);
+        if (iz >> 12) as u32 >= 0x6000 {
+            return;
+        }
+        let z = recip(rom, iz >> 12);
+        let u_left = z.wrapping_mul(uz >> 4) >> 23;
+        let u_right =
+            (uz.wrapping_add(uz_step >> 1) >> 4).wrapping_mul(recip(rom, iz.wrapping_add(iz_step >> 1) >> 12)) >> 23;
+        let (mut v, v_step) = if wall_flags & 0x80 == 0 {
+            (s.v_start[0] << 8, div_recip_8(rom, s.v_start[1], h))
+        } else {
+            let v = z.wrapping_mul(vz_top >> 4) >> 8;
+            (v, div_recip(rom, (vz_bottom.wrapping_mul(z) >> 12) - v, h))
+        };
+        v = v.wrapping_add(s.v_offset as i32 * 0x100);
+        let mut row = top;
+        if top < e6 << 14 {
+            let n = e6 - (top >> 14);
+            h -= n;
+            v = v.wrapping_add(v_step.wrapping_mul(n));
+            row = e6 << 14;
+        }
+        if e8 << 14 <= bottom {
+            h = h - 1 - ((bottom >> 14) - e8);
+        }
+        if h > 0 {
+            let column = |u: i32| texels + ((rom[colmap + (u as u32 & wmask) as usize] as usize) << log2h);
+            let (a, b) = (column(u_left), column(u_right));
+            let mut at = SCREEN_WIDTH * (row as u32 >> 14) as usize + 2 * col as usize;
+            for _ in 0..h {
+                let t = ((v as u32 >> 15) & hmask) as usize;
+                let (pa, pb) = (rom[a + t], rom[b + t]);
+                if !transparent || (pa != 0 && pb != 0) {
+                    screen[at] = pa;
+                    screen[at + 1] = pb;
+                }
+                at += SCREEN_WIDTH;
+                v = v.wrapping_add(v_step);
+            }
+        }
+        uz = uz.wrapping_add(uz_step);
+        vz_top = vz_top.wrapping_add(vz_top_step);
+        vz_bottom = vz_bottom.wrapping_add(vz_bottom_step);
+        top = top.wrapping_add(top_step);
+        bottom = bottom.wrapping_add(bottom_step);
+        iz = iz.wrapping_add(iz_step);
+    }
+}
+
+/// One edge of a flat polygon being scanned (`FUN_03002a0c`'s state): x in 16.16 and, for textured flats, u/z,
+/// v/z and 1/z (the vertex `recip`), each with its per-row step.
+#[derive(Debug, Clone, Copy, Default)]
+struct Edge {
+    index: usize,
+    rows: i32,
+    x: i32,
+    dx: i32,
+    uz: i32,
+    duz: i32,
+    vz: i32,
+    dvz: i32,
+    iz: i32,
+    diz: i32,
+}
+
+impl Edge {
+    fn step(&mut self) {
+        self.x = self.x.wrapping_add(self.dx);
+        self.uz = self.uz.wrapping_add(self.duz);
+        self.vz = self.vz.wrapping_add(self.dvz);
+        self.iz = self.iz.wrapping_add(self.diz);
+    }
+}
+
+/// `FUN_03002a0c`: from vertex `index`, walks the outline (`forward` or backwards) to the next edge that ends
+/// below row `top` and spans at least one row, clipped to start at `top`. `remaining` counts the outline's
+/// vertices for both edges together. Returns the edge and its first row, or `None` when the polygon is done.
+fn next_edge(
+    rom: &[u8],
+    v: &[FlatVertex],
+    mut index: usize,
+    forward: bool,
+    remaining: &mut i32,
+    textured: bool,
+    (top, bottom): (i32, i32),
+) -> Option<(Edge, i32)> {
+    let n = v.len();
+    let mut cur = v[index];
+    if cur.floor_y >= bottom {
+        return None;
+    }
+    let (prev, mut rows) = loop {
+        let prev = cur;
+        index = if forward { (index + 1) % n } else { (index + n - 1) % n };
+        *remaining -= 1;
+        if *remaining < 0 {
+            return None;
+        }
+        cur = v[index];
+        let rows = if cur.floor_y < top {
+            0
+        } else {
+            cur.floor_y - prev.floor_y
+        };
+        if rows >= 1 {
+            break (prev, rows);
+        }
+    };
+    let slope = |a: i32, b: i32| {
+        if textured {
+            div_recip(rom, b.wrapping_sub(a), rows)
+        } else {
+            0
+        }
+    };
+    let mut e = Edge {
+        index,
+        dx: (recip(rom, rows) >> 8).wrapping_mul(cur.x - prev.x),
+        x: prev.x.wrapping_mul(0x10000),
+        duz: slope(prev.u, cur.u),
+        uz: prev.u,
+        dvz: slope(prev.v, cur.v),
+        vz: prev.v,
+        diz: slope(prev.recip, cur.recip),
+        iz: prev.recip,
+        rows: 0,
+    };
+    let mut y = prev.floor_y;
+    if y < top {
+        let d = top - y;
+        e.x = e.x.wrapping_add(d.wrapping_mul(e.dx));
+        e.uz = e.uz.wrapping_add(d.wrapping_mul(e.duz));
+        e.vz = e.vz.wrapping_add(d.wrapping_mul(e.dvz));
+        e.iz = e.iz.wrapping_add(d.wrapping_mul(e.diz));
+        rows -= d;
+        y = top;
+    }
+    e.rows = rows;
+    Some((e, y))
+}
+
+/// A flat's texture: texels, log2 size and the material's scroll (world `+0x48` `+4`/`+6`, `<< 7`).
+struct FlatTexture {
+    texels: usize,
+    log2w: u32,
+    log2h: u32,
+    scroll: (i32, i32),
+}
+
+/// `FUN_03004fa8`: `n` textured pixel pairs from `at`. The game stores one byte per pair; mode-4 VRAM writes a
+/// byte into both pixels of its halfword.
+#[allow(clippy::too_many_arguments)]
+fn flat_span_affine(
+    rom: &[u8],
+    t: &FlatTexture,
+    screen: &mut [u8],
+    at: usize,
+    n: i32,
+    u: i32,
+    v: i32,
+    du: i32,
+    dv: i32,
+) {
+    let umask = ((1u64 << (t.log2w + 15)) - 1) as u32;
+    let vmask = ((1u32 << t.log2h) - 1) << t.log2w;
+    let (mut u, mut v, mut at) = (u, v, at);
+    for _ in 0..n {
+        let tu = u as u32 & umask;
+        u = u.wrapping_add(du);
+        let tv = (v >> ((15 - t.log2w) & 0xFF)) as u32;
+        v = v.wrapping_add(dv);
+        let texel = rom[t.texels + (vmask & tv) as usize + (tu >> 15) as usize];
+        screen[at] = texel;
+        screen[at + 1] = texel;
+        at += 2;
+    }
+}
+
+/// `FUN_03005094`: fills pixels `x..x + n` of a row with `colour`, in halfwords and words. A halfword step at
+/// the end can write one pixel past `n`, as the game does.
+fn fill_span(screen: &mut [u8], row: usize, x: i32, n: i32, colour: u8) {
+    let (mut x, mut n) = (x as usize, n);
+    let mut put = |x: usize, count: usize| screen[row + x..row + x + count].fill(colour);
+    if x & 1 != 0 {
+        put(x, 1);
+        n -= 1;
+        if n < 1 {
+            return;
+        }
+        x += 1;
+    }
+    if x & 2 != 0 {
+        put(x, 2);
+        n -= 2;
+        if n < 1 {
+            return;
+        }
+        x += 2;
+    }
+    put(x, 4 * (n >> 2) as usize);
+    x += 4 * (n >> 2) as usize;
+    n &= 3;
+    if n > 1 {
+        put(x, 2);
+        n -= 2;
+        if n < 1 {
+            return;
+        }
+        x += 2;
+    }
+    if n != 0 {
+        put(x, 1);
+    }
+}
+
+/// `draw_flat_textured` (`FUN_03002da0`) and `draw_flat_fill` (`FUN_03003180`): scans the clipped outline from
+/// its top vertex (`FUN_03005008`) down to row `portal.bottom` (exclusive). The ceiling walks the outline the
+/// other way round. Textured spans run in pixel pairs: up to 32 pairs affine between perspective-correct ends,
+/// longer ones in 16-pair perspective segments (`FUN_03002c40`). Fill spans are full resolution.
+fn draw_flat(
+    rom: &[u8],
+    portal: &Portal,
+    v: &[FlatVertex],
+    texture: Option<&FlatTexture>,
+    fill: u8,
+    ceiling: bool,
+    screen: &mut [u8],
+) {
+    let clip = (portal.top as u16 as i32, portal.bottom as u16 as i32);
+    let Some(first) = v.first() else { return };
+    let (mut start, mut min, mut max) = (0, first.floor_y, first.floor_y);
+    for (i, p) in v.iter().enumerate() {
+        if p.floor_y < min {
+            (start, min) = (i, p.floor_y);
+        }
+        max = max.max(p.floor_y);
+    }
+    if min == max || clip.1 <= min || max <= clip.0 {
+        return;
+    }
+    let mut remaining = v.len() as i32;
+    let (mut l, mut r) = (
+        Edge {
+            index: start,
+            ..Edge::default()
+        },
+        Edge {
+            index: start,
+            ..Edge::default()
+        },
+    );
+    let (mut l_rows, mut r_rows, mut row) = (0, 0, min);
+    loop {
+        l_rows -= 1;
+        if l_rows < 1 {
+            let Some((e, y)) = next_edge(rom, v, l.index, ceiling, &mut remaining, texture.is_some(), clip) else {
+                return;
+            };
+            (l, l_rows, row) = (e, e.rows, y);
+        }
+        r_rows -= 1;
+        if r_rows < 1 {
+            let Some((e, y)) = next_edge(rom, v, r.index, !ceiling, &mut remaining, texture.is_some(), clip) else {
+                return;
+            };
+            (r, r_rows, row) = (e, e.rows, y);
+        }
+        let at = SCREEN_WIDTH * row as usize;
+        if let Some(t) = texture {
+            let x = l.x >> 17;
+            let n = (r.x.wrapping_add(0x1FFFF) >> 17) - x;
+            if n > 0 {
+                let (inv, at) = (recip(rom, n) >> 8, at + 2 * x as usize);
+                let (zl, zr) = (recip(rom, l.iz >> 4), recip(rom, r.iz >> 4));
+                let (u, v) = (zl.wrapping_mul(l.uz >> 8) >> 4, (l.vz >> 8).wrapping_mul(zl) >> 4);
+                if n < 0x21 {
+                    let du = inv.wrapping_mul(((zr.wrapping_mul(r.uz >> 8) >> 4) - u) >> 8) >> 8;
+                    let dv = inv.wrapping_mul(((zr.wrapping_mul(r.vz >> 8) >> 4) - v) >> 8) >> 8;
+                    flat_span_affine(
+                        rom,
+                        t,
+                        screen,
+                        at,
+                        n,
+                        u.wrapping_add(t.scroll.0),
+                        v.wrapping_add(t.scroll.1),
+                        du,
+                        dv,
+                    );
+                } else {
+                    let d_iz = ((r.iz.wrapping_sub(l.iz) as i64 * inv as i64) >> 12) as i32;
+                    let (duz, dvz) = (r.uz.wrapping_sub(l.uz) >> 8, r.vz.wrapping_sub(l.vz) >> 8);
+                    let (mut iz, mut uz, mut vz, mut u0, mut v0) = (l.iz, l.uz, l.vz, u, v);
+                    let (mut left, mut at) = (n, at);
+                    while left > 0 {
+                        iz = iz.wrapping_add(d_iz);
+                        uz = uz.wrapping_add(inv.wrapping_mul(duz) >> 4);
+                        let z = recip(rom, iz >> 4);
+                        vz = vz.wrapping_add(inv.wrapping_mul(dvz) >> 4);
+                        let (u1, v1) = (z.wrapping_mul(uz >> 8) >> 4, (vz >> 8).wrapping_mul(z) >> 4);
+                        let (du, dv) = ((u1 - u0) >> 4, (v1 - v0) >> 4);
+                        let (u, v) = (u0.wrapping_add(t.scroll.0), v0.wrapping_add(t.scroll.1));
+                        flat_span_affine(rom, t, screen, at, left.min(16), u, v, du, dv);
+                        (at, u0, v0, left) = (at + 32, u1, v1, left - 16);
+                    }
+                }
+            }
+        } else {
+            let x = l.x >> 16;
+            let n = (r.x.wrapping_add(0xFFFF) >> 16) - x;
+            if n > 0 {
+                fill_span(screen, at, x, n, fill);
+            }
+        }
+        l.step();
+        r.step();
+        row += 1;
+        if row >= clip.1 {
+            return;
+        }
+    }
+}
+
+/// The floor and ceiling part of `draw_sector` for the clipped outline (`clip_flat`): the floor (sector `+0x08`)
+/// then the ceiling (`+0x04`, at the outline's ceiling heights), each filled with sector `+0x0D` / `+0x0C`
+/// when that is not 0, else textured with the material's current animation frame.
+pub fn draw_sector_flats(rom: &[u8], rt: &Runtime, portal: &Portal, clipped: &[FlatVertex], screen: &mut [u8]) {
+    let sector = sector_at(rom, portal.sector);
+    let base = ptr(rom, LEVEL_TABLE + 0x08);
+    let ceiling_outline: Vec<_> = clipped
+        .iter()
+        .map(|p| FlatVertex {
+            floor_y: p.ceiling_y,
+            ..*p
+        })
+        .collect();
+    for (material, fill, outline, ceiling) in [
+        (u16_at(rom, sector + 8), rom[sector + 0xD], clipped, false),
+        (u16_at(rom, sector + 4), rom[sector + 0xC], &ceiling_outline[..], true),
+    ] {
+        if material == 0 {
+            continue;
+        }
+        let state = rt.material(u16_at(rom, material_at(rom, material)));
+        let rec = material_at(rom, material.wrapping_add(state.frame));
+        let texture = FlatTexture {
+            texels: base.wrapping_add(u32_at(rom, rec + 8) as usize),
+            log2w: rom[rec + 0x1E] as u32,
+            log2h: rom[rec + 0x1F] as u32,
+            scroll: ((state.u_scroll as i32) << 7, (state.v_scroll as i32) << 7),
+        };
+        draw_flat(
+            rom,
+            portal,
+            outline,
+            (fill == 0).then_some(&texture),
+            fill,
+            ceiling,
+            screen,
+        );
+    }
+}
+
+/// `draw_sector` (`FUN_0300224c`), pass 0: walls, then the floor and ceiling, then the walls it deferred.
+/// NOT 1:1: the sector's entities (drawn here when `entry.flags & 0x80`, else in pass 1) are left out.
+pub fn draw_sector(rom: &[u8], frame: &Frame, rt: &Runtime, entry: &mut Portal, screen: &mut [u8]) {
+    let sector = sector_at(rom, entry.sector);
+    let mut flags = rom[sector + 0x12] as u16;
+    let offsets = u16_at(rom, sector + 0xA);
+    if offsets != 0xFFFF {
+        flags = rt.sector_offsets[offsets as usize].flags;
+        if flags & 0x40 != 0 {
+            return;
+        }
+    }
+    if flags & 8 != 0 {
+        // A container: draws its chain of children (`+0x24`) through the same entry.
+        let own = entry.sector;
+        let mut child = u16_at(rom, sector + 0x24);
+        while child != 0xFFFF {
+            entry.sector = child;
+            draw_sector(rom, frame, rt, entry, screen);
+            child = u16_at(rom, sector_at(rom, child) + 0x24);
+        }
+        entry.sector = own;
+        return;
+    }
+    let Some((mut spans, far)) = transform_walls(rom, frame, rt, entry.sector) else {
+        return;
+    };
+    if far {
+        entry.flags |= 0x80;
+    }
+    let outline = setup_wall_spans(rom, frame, rt, entry, &mut spans);
+    let deferred = draw_sector_walls(rom, rt, entry, &spans, None, screen);
+    if u16_at(rom, sector + 8) != 0 || u16_at(rom, sector + 4) != 0 {
+        let clipped = clip_flat(rom, &outline, entry.left, entry.right);
+        draw_sector_flats(rom, rt, entry, &clipped, screen);
+    }
+    if deferred != 0 {
+        draw_sector_walls(rom, rt, entry, &spans, Some(deferred), screen);
+    }
+}
+
+/// Pass 0 of `FUN_030048c8`: every visible sector from the last list entry to the first (painter's order),
+/// skipping merged entries (flag 8). NOT 1:1: pass 1 (entities) is left out.
+pub fn draw_world(rom: &[u8], frame: &Frame, rt: &Runtime, vis: &mut Visibility, screen: &mut [u8]) {
+    for entry in vis.portals.iter_mut().rev() {
+        if entry.flags & 8 == 0 {
+            draw_sector(rom, frame, rt, entry, screen);
+        }
+    }
 }
 
 /// `FUN_03004c40`: `recip[n]`, or `recip[n >> 1] >> 1` above `0x7FFE`.
@@ -785,5 +1356,48 @@ mod tests {
         // ...but not through the solid wall 3046 (flag 0x1000), nor two sectors away.
         assert_eq!(camera_sector(&rom, &rt, 760, 118341, -63000), None);
         assert_eq!(camera_sector(&rom, &rt, 760, 130000, -65000), None);
+    }
+
+    /// Pass 0 of the whole reference frame (every visible sector, farthest first: walls, floors, deferred walls)
+    /// against the frame being drawn in the dump (VRAM page `0x0600A000`, world `+0x50` → `+0x00`). Needs
+    /// `race.vram.bin` from the reference run; skipped without it.
+    #[test]
+    fn world_pixels_match_the_race_frame() {
+        let Some(rom) = rom() else { return };
+        let Ok(vram) = std::fs::read(crate::data_dir().join("work/e5298b24/mgba/race.vram.bin")) else {
+            eprintln!("skipping: no race.vram.bin");
+            return;
+        };
+        let page = &vram[0xA000..0xA000 + SCREEN_WIDTH * 160];
+        let rt = Runtime::default();
+        let root = Portal {
+            sector: 760,
+            left: 0,
+            right: 240,
+            top: 0,
+            bottom: 159,
+            flags: 0,
+            depth: 0,
+        };
+        let draw = |fill: u8| {
+            let mut screen = vec![fill; SCREEN_WIDTH * 160];
+            let mut vis = visible_sectors(&rom, &RACE, root);
+            draw_world(&rom, &RACE, &rt, &mut vis, &mut screen);
+            screen
+        };
+        // Draw on two backgrounds: the pixels that differ between them were not written.
+        let (a, b) = (draw(0), draw(255));
+        let written: Vec<usize> = (0..a.len()).filter(|&i| a[i] == b[i]).collect();
+        let differ: Vec<usize> = written.iter().copied().filter(|&i| a[i] != page[i]).collect();
+        eprintln!("{} of {} pixels match", written.len() - differ.len(), written.len());
+        // Everything but the sky (seen through sector 760's missing ceiling) and row 159 is world. The only
+        // differences are the player car (car palette slots 160..224, in a 40×60 box), which pass 1 was drawing
+        // over the floor when the dump was taken.
+        assert_eq!(written.len(), 33350);
+        let car = |&i: &usize| {
+            (160..224).contains(&page[i]) && (100..140).contains(&(i % SCREEN_WIDTH)) && i / SCREEN_WIDTH >= 100
+        };
+        assert!(differ.iter().all(car), "a pixel differs outside the car");
+        assert_eq!(differ.len(), 536);
     }
 }
