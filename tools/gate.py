@@ -18,13 +18,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
-ID = re.compile(r"\b[RDUAGT]\d+\b")
+ID = re.compile(r"\b[A-Z]\d+\b")
 MARKER = re.compile(r"NOT 1:1\s*(?:\(([^)]*)\))?")
 
 
 def open_ids(fidelity: str) -> set[str]:
     """IDs of the open entries: the first cell of the ledger's table rows."""
-    return set(re.findall(r"^\| ([RDUAGT]\d+) \|", fidelity, re.M))
+    return set(re.findall(r"^\| ([A-Z]\d+) \|", fidelity, re.M))
 
 
 def marker_problems(files: dict[str, str], fidelity: str) -> list[str]:

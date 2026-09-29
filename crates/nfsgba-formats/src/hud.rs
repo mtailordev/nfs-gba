@@ -459,7 +459,7 @@ fn hunter_bars(g: &Globals, racers: &[Racer; 4], o: &mut [Object]) {
             o[k + 1].flags &= 0xFFFE;
             continue;
         }
-        // NOT 1:1: a racer without a driver would make the game read BIOS memory at 0x4E8; none has one.
+        // NOT 1:1 (N1): a racer without a driver would make the game read BIOS memory at 0x4E8; none has one.
         let life = r.driver.map_or(0, |d| d.hunter_life);
         let v = (life.wrapping_mul(28) / (1 << 19)).clamp(0, 28);
         if v <= 12 {

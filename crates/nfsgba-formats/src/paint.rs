@@ -81,7 +81,7 @@ pub fn glass_shades(rom: &[u8], glass: u8, angle: i32) -> [u16; 2] {
 /// Palette RAM during a race: `base` tinted by the light (`tint_palette`), except the glass slots 192 and 208,
 /// which hold `base`'s raw shades (`shade_car_paint` runs after the previous frame's tint).
 ///
-/// NOT 1:1: the tint (end of a game frame) also writes 192 and 208, and the next frame's shade replaces them 1–7
+/// NOT 1:1 (R17): the tint (end of a game frame) also writes 192 and 208, and the next frame's shade replaces them 1–7
 /// scanlines later (measured in mGBA); those few scanlines of tinted glass per game frame are not reproduced.
 pub fn race_palette(base: &[u16], light: [i32; 3]) -> Vec<u16> {
     let mut ram = tint_palette(base, light);

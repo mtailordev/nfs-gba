@@ -67,7 +67,7 @@ fn racing_step(sim: &mut Sim, e: u32) -> Result<()> {
     }
     let index = m.u16(e) as u32;
     if phase != 1 && phase != 4 {
-        // NOT 1:1 (rendering): for the player, seen from the side, the game redraws the decal onto the car's
+        // Rendering, done by `nfsgba-game` (`slots.rs`), not here: for the player, seen from the side, the game redraws the decal onto the car's
         // texture atlas here (`draw_decal_on_atlas`, `FUN_0813bd90`). That belongs to the renderer.
         nitro(&mut sim.mem, e);
         let input = sim.mem.u16(INPUT + index * 2) as u32;

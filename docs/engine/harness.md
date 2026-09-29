@@ -7,7 +7,7 @@ reads the canonical ROM from the vault and writes only under `$NFSGBA_DATA`. Use
 | Tool | What it answers |
 |---|---|
 | `tools/oracle/oracle.py` | What does game function X return, and which bytes does it change, for these inputs on this RAM snapshot? |
-| `tools/oracle/prove.py` + `tools/oracle/rust-check/` | Is the oracle right? It is checked against ported functions, and the saved cases check the Rust ports |
+| `tools/oracle/prove.py` + `crates/nfsgba-formats/tests/oracle_cases.rs` | Is the oracle right? It is checked against ported functions, and the saved cases check the Rust ports |
 | `tools/trace_oracle.py` | Per-step replay of recorded car traces (vehicle-physics); runs on the oracle |
 | `tools/coverage.py` + `tools/coverage.lua` | Which functions run in real play, per scenario, and how often |
 | `tools/rom_attribution.py` | Which known structure owns each ROM byte, and what is still unexplained |
@@ -27,7 +27,7 @@ gba.call(fn, stubs={0x08135FDC: record})       # stub a callee: record(uc) runs,
 
 CLI: JSON lines in, one result per line out (`.venv/Scripts/python.exe tools/oracle/oracle.py < q.jsonl`), for
 example `{"fn": "0x0816a708", "regs": {"r0": 7, "r1": -2}}`. The other keys are listed in the module docstring.
-A Rust test either spawns it or, better, reads a saved JSONL of cases, as `rust-check` does.
+A Rust test either spawns it or, better, reads a saved JSONL of cases, as `crates/nfsgba-formats/tests/oracle_cases.rs` does.
 
 **A snapshot** is any mGBA memory dump prefix under `data/work/<sha8>/` (`Gba("car-paint/d0")`). To make one from a
 savestate, run `python tools/mgba_ctl.py "load NAME" "dump NAME"` with mGBA running.
@@ -40,7 +40,7 @@ savestate, run `python tools/mgba_ctl.py "load NAME" "dump NAME"` with mGBA runn
 - **`writes` leaves out the call's own stack frames.** A write counts as a frame when it lands below the initial sp and within a push's reach (64 bytes) of the sp of that moment. IWRAM globals are never hidden, whatever their address.
 - **Translation cache:** code bytes changed behind the CPU's back (inputs, restores) invalidate unicorn's translation cache, so rewritten IWRAM code runs as written.
 
-**Checked against ported functions** (`prove.py`, cases saved to `data/work/<sha8>/harness/oracle/*.jsonl`; `rust-check` compares the Rust ports):
+**Checked against ported functions** (`prove.py`, cases saved to `data/work/<sha8>/harness/oracle/*.jsonl`; `oracle_cases.rs` compares the Rust ports):
 
 | Function | Cases | Result |
 |---|---|---|

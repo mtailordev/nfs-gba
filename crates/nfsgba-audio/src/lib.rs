@@ -1,7 +1,7 @@
 //! The sound engine of Need for Speed Carbon: Own the City (GBA, `BN7E`): Logik State's LS_Play ("GBAModPlay
 //! 3.0") module player, its sound effects and its software mixer, rewritten from the game's code.
 //!
-//! Everything here is exact against the reference build unless marked `NOT 1:1`; the format, the code
+//! Everything here is exact against the reference build unless a comment names a FIDELITY entry (A1–A6); the format, the code
 //! addresses and how it was checked are in `docs/formats/audio.md`. Addresses are GBA addresses: the engine
 //! keeps sample and pattern pointers as the game does, and reads them through [`Rom`].
 

@@ -708,7 +708,7 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
                     }
                     d += dir;
                 }
-                // NOT 1:1 (timing): the race time is read when the AI runs; the VBlank IRQ may have counted it
+                // NOT 1:1 (T1): the race time is read when the AI runs; the VBlank IRQ may have counted it
                 // up since the frame began (docs/engine/ai.md).
                 m.set_u16(p + 0x4D4, (m.u32(RACE_TIME) & 0x1F) as u16);
             }

@@ -470,7 +470,7 @@ fn route_distances(m: &mut Mem) {
 }
 
 /// `unpack_decal` (`FUN_0813bf58`) without its last call: the player's decal pixels onto the heap.
-/// NOT 1:1 (rendering): the blit onto the car's texture atlas (`draw_decal_on_atlas`, `FUN_0813bd90`) belongs
+/// Rendering, done by `nfsgba-game` (`slots.rs`), not here: the blit onto the car's texture atlas (`draw_decal_on_atlas`, `FUN_0813bd90`) belongs
 /// to the renderer.
 fn unpack_decal(m: &mut Mem, e: u32) {
     let car = m.u8(e + 0x89) as u32;

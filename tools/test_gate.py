@@ -25,7 +25,7 @@ class MarkerTest(unittest.TestCase):
         }
         problems = marker_problems(files, FIDELITY)
         self.assertEqual([p.split(": ")[0] + ": " + p.split(": ")[1][:6] for p in problems],
-                         ["b.rs:1: cites ", "b.rs:2: no ID", "b.rs:3: no ID", "b.rs:4: no ID"])  # Z9 is no ID
+                         ["b.rs:1: cites ", "b.rs:2: no ID", "b.rs:3: no ID", "b.rs:4: cites "])  # Z9: an ID that is not open
         self.assertIn("R12", problems[0])
 
 

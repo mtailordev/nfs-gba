@@ -53,7 +53,7 @@ pub struct Timing {
 }
 
 impl Timing {
-    /// NOT 1:1 (live play): a steady race frame as measured in the reference race (timer 3 at 1,098 ticks, four
+    /// NOT 1:1 (T1, live play): a steady race frame as measured in the reference race (timer 3 at 1,098 ticks, four
     /// VBlanks, all while the world is drawn). The real timing depends on the CPU time the frame takes.
     pub fn steady() -> Timing {
         Timing {

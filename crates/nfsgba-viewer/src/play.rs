@@ -196,7 +196,7 @@ const BLEND: (u32, u32) = (15, 13);
 /// the BG palette (index 0: the line's backdrop colour), then the top sprite pixel over it, semi-transparent sprites
 /// (OBJ mode 1) blended `min(31, (obj·EVA + bg·EVB) >> 4)` per channel. High-resolution view: the sprites alone over
 /// the GPU image.
-/// NOT 1:1 (high-resolution view only): semi-transparent sprites are drawn at 50% alpha (the blend brightens the
+/// NOT 1:1 (G2, high-resolution view only): semi-transparent sprites are drawn at 50% alpha (the blend brightens the
 /// GPU image, which the 2D layer cannot read). OBJ priority against the background is not modelled (the HUD is
 /// always in front).
 pub fn hud_layer(play: Res<Play>, race: Res<Race>, mut images: ResMut<Assets<Image>>) {

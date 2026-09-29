@@ -81,7 +81,7 @@ pub struct Scene<'a> {
     /// EWRAM (`0x02000000`, 256 KiB), where the game unpacks the atlases (entity `+0x84`).
     pub ram: &'a [u8],
     /// The entity handler `world+0x78[+0x4E]` (Thumb game code), which the sort calls for entities with state
-    /// bit 0 and not bit 1. NOT 1:1 by default: the handlers are not reimplemented; the default does nothing.
+    /// bit 0 and not bit 1. NOT 1:1 (R26) by default: the handlers are not reimplemented; the default does nothing.
     pub handler: Box<dyn FnMut(&mut Entity) + 'a>,
     /// Spans left to draw: the rasteriser stops after this many (to match a RAM dump taken mid-frame).
     pub spans: usize,
@@ -117,7 +117,7 @@ impl<'a> Scene<'a> {
         match at >> 24 {
             2 => self.ram[(at & 0x3_FFFF) as usize],
             8 | 9 => rom[(at - 0x0800_0000) as usize],
-            _ => 0, // NOT 1:1: no texture points elsewhere in Carbon's data
+            _ => 0, // NOT 1:1 (N1): no texture points elsewhere in Carbon's data
         }
     }
 }

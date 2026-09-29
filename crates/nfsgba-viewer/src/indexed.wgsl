@@ -14,7 +14,7 @@
 // floors and ceilings). With a portal list (texel (0, 0) of `portals` = entry count, -1 = none) a fragment is drawn
 // only inside the screen span of an entry of its sector, pixels `left ..= right` and rows `top .. bottom` (so row
 // 159 is never drawn), and a wall only if the entry's wall mask (row 1) has it. CULL surfaces drop back faces.
-// NOT 1:1 (hi-res): the game's spans are its projected portal ends rounded down, and it draws walls in 2-pixel
+// NOT 1:1 (R27): the game's spans are its projected portal ends rounded down, and it draws walls in 2-pixel
 // column pairs clipped to pairs `left >> 1 .. right >> 1`, so its surfaces meet on whole pixels. Here the geometry
 // is continuous: a surface behind a portal ends where the portal's continuous end lies, up to a pixel past the
 // rounded `right`, so the span keeps that pixel (clipping any tighter opens a hairline where the backdrop shows).

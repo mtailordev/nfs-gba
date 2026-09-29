@@ -1205,7 +1205,7 @@ fn thousands(g: &Gba, s: &mut Vec<u8>, n: i32) {
         return;
     }
     let sep = if lang == 1 { b' ' } else { b'.' };
-    // NOT 1:1 (unreachable): above 999,999 the game uses a stale register as the position.
+    // NOT 1:1 (N1): above 999,999 the game uses a stale register as the position.
     let pos = match n {
         1_000..=9_999 => 1,
         10_000..=99_999 => 2,
@@ -2486,7 +2486,7 @@ fn page_script(g: &mut Gba, script: u32) {
                 g.unported(MENU_BLIT_MATERIAL, &[WORLD, 0xDB, 0xA0, 2]);
                 i += 2;
             }
-            // NOT 1:1 (unreachable): an unknown command makes the game loop forever.
+            // NOT 1:1 (N1): an unknown command makes the game loop forever.
             _ => panic!("page script {script:#x}: unknown command {c:#x}"),
         }
         c = w(g, i);

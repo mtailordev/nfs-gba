@@ -163,7 +163,7 @@ pub fn unpack_lowest_reference(rom: &[u8], at: usize) -> i64 {
 
 /// Exact port of `FUN_08164d90(dst, stride, src, w, h, key)`, the menu blitter: copies `w × h` bytes row by
 /// row, skipping bytes equal to `key` (0 at every call seen), through 16-bit read-modify-write. It does not
-/// clip; bytes outside `fb` are dropped here (NOT 1:1 only for such out-of-frame calls).
+/// clip; bytes outside `fb` are dropped here (NOT 1:1 (N1) only for such out-of-frame calls).
 #[allow(clippy::too_many_arguments)] // mirrors the routine's arguments
 pub fn blit(fb: &mut [u8], stride: usize, x: i32, y: i32, src: &[u8], w: usize, h: usize, key: u8) {
     for row in 0..h {
@@ -559,7 +559,7 @@ impl Font {
     /// bytes per row) at (`x`, `y`), adding `colour` to every glyph pixel. The game draws only when
     /// `0 <= y <= 159 - height` and the aligned `x < stride`.
     ///
-    /// NOT 1:1 only where the game would write outside the frame buffer (negative aligned `x` on row 0):
+    /// NOT 1:1 (N1) only where the game would write outside the frame buffer (negative aligned `x` on row 0):
     /// such bytes are dropped here.
     #[allow(clippy::too_many_arguments)] // mirrors FUN_08162860
     pub fn draw(

@@ -225,7 +225,7 @@ impl Chase {
     /// below the height limit `*0x03005778`; a moving piece's flags replace the wall's), a camera nearer than 81
     /// units to its line (and within its ends, or within √0x18FF of them) is pushed out to 80 units along the wall
     /// normal (`+0x34`/`+0x36`, 4.12). Walls in the game's order: the last one first, then 0, 1, …
-    /// NOT 1:1: the height limit (a smoothed ground height from `FUN_0814ca84`) is taken as passed, as it is for
+    /// NOT 1:1 (R11): the height limit (a smoothed ground height from `FUN_0814ca84`) is taken as passed, as it is for
     /// every wall in the reference race.
     fn push_out_of_walls(&mut self, rom: &[u8], rt: &render::Runtime) {
         let walls = word(rom, rom::LEVEL_TABLE + 0x14) as u32 - rom::ROM_BASE;
@@ -313,7 +313,7 @@ impl Chase {
     /// The camera sector: the camera position must be reachable from the previous sector (else the player's
     /// sector is taken), then the sector 72 units ahead along the look yaw (`FUN_081608fc(R(look), (0, 0, 72))`)
     /// becomes the camera sector, the previous one when that search fails.
-    /// NOT 1:1: the second fallback `FUN_0814dbbc` is not decoded (the previous sector is kept); sector `+0x22`
+    /// NOT 1:1 (R11): the second fallback `FUN_0814dbbc` is not decoded (the previous sector is kept); sector `+0x22`
     /// aliases (none in the Carbon city) are not applied.
     fn find_sector(&mut self, rom: &[u8], rt: &render::Runtime, player: &Racer) {
         if render::camera_sector(rom, rt, self.sector, self.x >> 8, self.z >> 8).is_none() {

@@ -577,8 +577,8 @@ fn setup(
     // The player's texture is built as `unpack_player_atlas` builds it, with the rim at angle 0 (race start), or
     // taken from the dump's EWRAM as the race left it; the opponents' are raw materials already in their palette
     // slots (`look`).
-    // NOT 1:1 (R13 in-race, grid only): the game redraws the rim rotated by the wheel angle most frames; the viewer
-    // has no wheel spin. NOT 1:1 (R24): that redraw can read heap bytes around the rim buffer; not at angle 0.
+    // NOT 1:1 (R28): the game redraws the rim rotated by the wheel angle most frames; the viewer
+    // has no wheel spin. (R24 needs the game's heap; play mode has it): that redraw can read heap bytes around the rim buffer; not at angle 0.
     let player_car = setup.cars[0] as usize;
     let player_first = &vehicle_textures[cars[player_car].first_material];
     let player_pixels = match dump.as_ref().and_then(|d| d.atlas(0, player_first.pixels.len())) {
@@ -887,7 +887,7 @@ fn game_camera(
 /// depth (`Racer::models_at`). Racers from a dump stand as their vehicle matrices put them (pitch and roll
 /// included); on a grid they stand level on the floor, facing their heading.
 /// NOT 1:1 (R10): hidden surfaces come from the depth buffer; the game overdraws in list order (painter's).
-/// NOT 1:1 (R12): the cars are not clipped to their portal's span and the screen-row cull is not applied.
+/// NOT 1:1 (R28): the cars are not clipped to their portal's span and the screen-row cull is not applied.
 fn visibility(
     race: Res<Race>,
     tint: Res<Tint>,
@@ -1039,7 +1039,7 @@ fn tint(
     } else {
         let t = camera.translation;
         let (px, pz, y) = ((t.x / SCALE).floor() as i32, (-t.z / SCALE).floor() as i32, t.y);
-        // NOT 1:1 (free camera only): the observer's sector by position, keeping the current one while it still
+        // Free camera (a non-game mode): the observer's sector by position, keeping the current one while it still
         // contains the point, else the containing sector whose floor is nearest the eye (sectors overlap).
         tint.sector.filter(|&s| contains(&tint.sectors[s], px, pz)).or_else(|| {
             let near = |s: &usize| (y - race.floors[*s]).abs();
@@ -1117,7 +1117,7 @@ type SkyKey = (usize, sky::SkyCamera, Option<([i32; 12], u16)>);
 ///
 /// NOT 1:1 (R6): the game clears only whole 32-byte blocks above the skyline and never clears below it, so a few
 /// bytes keep the page's previous frame (none in the chase view); the viewer starts from a cleared screen.
-/// NOT 1:1 (R12, original frame): the cars (pass 1) are not drawn.
+/// NOT 1:1 (R28, original frame outside play mode): the cars (pass 1) are not drawn.
 fn sky(
     keys: Res<ButtonInput<KeyCode>>,
     mut skies: ResMut<Skies>,
@@ -1180,7 +1180,7 @@ fn sky(
     }
     if let (Some((frame, _)), Some(visible)) = (world_frame, race.visible.as_ref()) {
         // The cars come from the dump's entities; on a grid the world is drawn alone.
-        // NOT 1:1 (R12, grid): the vehicle matrices are built by game code the viewer does not have
+        // NOT 1:1 (R28): the vehicle matrices are built by game code the viewer does not have
         // (`draw_vehicle` `0x0814bc30`, `FUN_0814eba0`).
         let mut scene = match &race.dump {
             Some(d) => d.scene(tint.sectors.len()),

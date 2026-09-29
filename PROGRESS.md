@@ -35,7 +35,7 @@ Run everything: `cargo test --release --workspace` (about 3 minutes; the AI trac
 
 ## Next steps: the consolidation phase
 
-1. **Test kit.** Build one shared test crate:
+1. **Test kit: done** (`crates/nfsgba-testkit`, `tools/gate.py`, `docs/engine/fixtures.csv`, `docs/engine/testkit.md`; every marker now names an open ID). **Run `tools/gate.py` before every merge.** The original plan was one shared test crate:
    - one `rom()` and data loader, and `NFSGBA_REQUIRE_DATA=1` so missing data fails instead of skipping;
    - a fixture manifest with provenance (sha1, ROM hash, recorder, command, savestate);
    - a scenario library replacing the per-agent folders;
