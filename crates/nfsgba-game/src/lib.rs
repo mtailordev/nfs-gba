@@ -11,6 +11,7 @@
 #![allow(clippy::precedence)]
 
 pub mod oam;
+pub mod race_init;
 pub mod standin;
 pub mod trace;
 pub mod view;
