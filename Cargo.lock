@@ -3525,6 +3525,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nfsgba-audio"
+version = "0.1.0"
+dependencies = [
+ "nfsgba-formats",
+]
+
+[[package]]
 name = "nfsgba-formats"
 version = "0.1.0"
 dependencies = [
