@@ -4,30 +4,35 @@ Session state for whoever picks this up next. Read `AGENTS.md` first, then this 
 
 ## Status (2026-09-29)
 
-- **Task 1 (recon):** done. Redundant dumps deleted at the user's request, with hashes in `docs/DECISIONS.md`. Five zips and five vault ROMs remain.
-- **Static pass:** done. Covered the text table, the LZ77 image bank (car atlases, bitmaps) and the corrected first look.
-- **Tools:** all installed (see `docs/TOOLS.md`), except MSYS2, which is broken and only needed to build gbarecomp's runtime. That's not required; gbarecomp is reference-only.
-- **Reference run works:**
-  - `tools/mgba_ctl.py` drives the mGBA nightly (keys, screenshots, RAM dumps, savestates);
-  - a Quick Play race is reached, with savestates `race.ss` and `mainmenu.ss` in `data/work/e5298b24/mgba/`;
-  - the race uses video mode 4 plus an ARM software renderer in IWRAM.
-- **Ghidra:** a headless analysis with the race IWRAM dump is done. The decompiled C of 874 functions is in `data/work/e5298b24/ghidra/carbon_decomp.c` (not in git). Rebuild it with the command in TOOLS.md.
-- **First 3D geometry decoded:** the vehicle model bank has 102 models (cars in 3 LODs, spoilers, traffic). Details are in `docs/formats/vehicle-models.md`; `tools/models.py` exports OBJ.
-- **City decoded:** a 2.5D portal/sector engine (Doom/Build style) with 1,113 sectors and 4,423 walls. Details are in `docs/formats/city-sectors.md`; `tools/city.py` exports SVG and OBJ. 12 tests pass.
-- **Preview renders** (not in git): `data/out/previews/` holds the city top-down map, a 3D district, all vehicle models, a car atlas, and the viewer overview and street screenshots.
-- **Rust workspace (roadmap step 2, first cut):**
-  - `crates/nfsgba-formats` reads the city, city palette and materials, and the vehicle bank from the ROM (3 real-data tests).
-  - `crates/nfsgba-viewer` (Bevy 0.19.1) renders the **textured city** at full resolution with a free camera, plus an untextured vehicle showroom.
-  - Run it with `cargo run --release -p nfsgba-viewer` from the repo root. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
+Done and committed:
+- **Task 1 (recon):** the vault holds five ROMs, one per game, and the redundant dumps are deleted (hashes in `docs/DECISIONS.md`). The first-look reports are in `docs/recon/`.
+- **Tools:** all installed (`docs/TOOLS.md`). MSYS2 is broken but not needed.
+- **Reference run:** `tools/mgba_ctl.py` and `tools/mgba_remote.lua` drive the mGBA nightly (keys, screenshots, RAM dumps, savestates). Savestates `mainmenu.ss` and `race.ss` are in `data/work/e5298b24/mgba/`. The route into a race is in TOOLS.md.
+- **Ghidra:** headless analysis with the race's IWRAM loaded (`tools/ghidra/*.java`). Decompiled C of 874 functions is in `data/work/e5298b24/ghidra/carbon_decomp.c` (not in git).
+- **Formats decoded and verified** (details in `docs/formats/`):
+  - text table: 977 keys × 5 languages;
+  - LZ77 image bank;
+  - vehicle model bank: 102 models, the car table (15 cars, names, LOD triplets, atlases), vehicle textures and UVs;
+  - city: portal/sector world; column-mapped wall textures; exact wall and floor UVs; floors, ceilings and material 0; 12 skies;
+  - world scale: one unit for cars and city, about 48 per metre.
+- **Rust workspace:**
+  - `crates/nfsgba-formats` has 4 real-data tests;
+  - `crates/nfsgba-viewer` (Bevy 0.19.1) shows the textured city, the skies (K cycles them) and a showroom of all cars in every paint variant.
+  - Run it with `cargo run --release -p nfsgba-viewer`. `NFSGBA_CAM` and `NFSGBA_SHOT` give scripted screenshots.
+  - clippy and rustfmt are clean (`rustfmt.toml`: max width 120).
+- **Tests:** the Python tools have 12 tests.
+- **Previews** (not in git): `data/out/previews/`. `viewer-race-camera.png` renders from the game's own chase camera and matches the in-game screenshot `data/work/e5298b24/mgba/s15.png`.
 
-## Next step
+## Next steps (roadmap)
 
-1. **Car textures:** find the car-definition table (fills entity `+0x44…+0x48`), which says which model and atlas make up each car, and the 32-colour car palettes. See `docs/formats/vehicle-models.md`.
-2. **Exact wall UVs** (wall `+0x28`, `+0x40`, `+0x42`), replacing the square-texel guess, and the real vehicle scale (`CAR_SCALE` is guessed).
-3. **Sky/backdrop** (the 240×64 materials) and the sector passes `+0x04`/`+0x08`.
+1. **Race data:** decode the route table at `0x7F2798` (44 × 0x14) and the level-descriptor event fields, to get start positions, checkpoints and AI lines. Put a car on the start line in the viewer.
+2. **Runtime palette:** find the time-of-day/fog palette transform and which sky each event uses, to match in-game colours.
+3. **Portal step walls:** the upper and lower wall parts between sectors of different heights.
+4. **Gameplay parity (roadmap step 4):** handling, AI and cops, checked against traces from the reference build (mGBA plus Ghidra).
 
 ## Environment notes
 
-- Toolchains: Rust 1.98.1, Git 2.55.0, uv 0.12.20, Python 3.14.7 (pinned by `.python-version`; the global pyenv stays 3.12.10). The analysis venv is `.venv` (capstone, unicorn, numpy, pillow).
-- In the Bash tool, `python` is a pyenv-win batch shim. **Multi-line `python -c` and `python - <<EOF` get mangled**, so write a script file into the scratchpad instead.
+- Toolchains: Rust 1.98.1 (with clippy and rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10). The analysis venv is `.venv`.
+- In the Bash tool, `python` is a pyenv-win batch shim. **Multi-line `python -c` and `python - <<EOF` get mangled or hang**, so write a script file into the scratchpad instead.
+- In PowerShell, `@(118039/48, -30/48)` fails to parse; pass precomputed numbers.
 - The mGBA stable build from scoop creates `cheats/ patch/ savegame/ savestate/ screenshot/` in its current folder. The tools agent left such folders in the repo root. They are untracked, and the user was asked to delete them.
