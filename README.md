@@ -13,4 +13,6 @@ A from-scratch Rust reimplementation of the Pocketeers Game Boy Advance engine, 
 5. `python tools/first_look.py`: runs the recon reports.
 6. `python -m unittest discover -s tools`: runs the smoke tests.
 
-Python 3.14 (stdlib only). Docs start at [docs/INDEX.md](docs/INDEX.md); agents start at [AGENTS.md](AGENTS.md).
+7. `cargo run --release -p nfsgba-viewer`: fly through the city with the vehicle bank beside it, all read from your ROM. Hold right mouse to look around, WASD/QE to move, Shift to run, and the scroll wheel to change speed.
+
+Tools: Python 3.14 (stdlib only; the analysis extras are in `tools/requirements.txt`) and Rust stable (built with 1.98). Docs start at [docs/INDEX.md](docs/INDEX.md); agents start at [AGENTS.md](AGENTS.md).

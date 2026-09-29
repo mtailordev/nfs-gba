@@ -4,6 +4,15 @@ Newest first. Each entry: what, why, alternatives.
 
 ## 2026-09-29
 
+- **Rust workspace:** two crates.
+  - `crates/nfsgba-formats` holds the ROM parsers. It has no Bevy dependency, so its real-data tests build in seconds.
+  - `crates/nfsgba-viewer` is the Bevy app.
+  - **Bevy is pinned to `=0.19.1`**, the latest stable. We skipped 0.20.0-rc.2 because it's a release candidate. The camera uses Bevy's built-in `FreeCamera` rather than our own controller.
+- **Viewer units and axes:**
+  - `SCALE = 1/256` turns raw units into roughly metres (a two-lane street of 1,920 units comes out about 7.5 m wide).
+  - Raw space (x right, y down, z forward) maps to Bevy as `(x, -y, -z)`: a rotation, not a mirror.
+  - Vehicles are drawn at `CAR_SCALE = 4` × `SCALE`. **This is a guess** (it makes a car about 4 m long), marked `ponytail:` in the code until the vehicle transform gives the real factor.
+
 - **Redundant dumps deleted, at the user's request** (they chose "only redundant copies"). The kept Carbon zip was re-verified to contain `e5298b24…` before anything was deleted. Deleted (SHA-1 of each file):
   - `Need for Speed - Carbon - Own the City (USA, Europe) (En,Fr,De,Es,It).zip`, `71aa106e4bbbdc31524570523cd9472c6b33dab5`: the same ROM as the kept `Need for Speed Carbon - …` zip, which has the TorrentZip timestamp.
   - `Need for Speed - Porsche Unleashed (USA).zip`, `8eb540eb138274bb433461a05cd95062f87c4295`, and its vault ROM `AZFE_v0_c57a0652.gba`, `c57a0652017c47ac2d25a51bf351738cd634272b`: the same build as EU `AZFP`, with 3 bytes different (see FIRST-LOOK.md).

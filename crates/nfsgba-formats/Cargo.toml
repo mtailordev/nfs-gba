@@ -1,0 +1,10 @@
+[package]
+name = "nfsgba-formats"
+version = "0.1.0"
+edition = "2024"
+description = "Readers for the Pocketeers GBA NFS data formats, straight from the user's own ROM"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+serde_json = "1.0.151"
