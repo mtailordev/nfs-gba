@@ -199,6 +199,8 @@ pub struct RacingLine {
     pub sections: Vec<Section>,
     /// The whole 0x1800-byte copy (256 records; those past the route are whatever ROM data follows).
     pub points: Vec<LinePoint>,
+    /// Per section, the branch's distance scale onto the lap, ×256 (`0x03006120`; 0 for sections never forked into).
+    pub scales: Vec<i32>,
 }
 
 impl RacingLine {
@@ -225,12 +227,63 @@ impl RacingLine {
             p => u32_at(rom, (p - super::ROM_BASE) as usize) as usize,
         };
         sections.truncate(branches + 1);
-        let mut this = RacingLine { sections, points };
+        let mut this = RacingLine {
+            sections,
+            points,
+            scales: Vec::new(),
+        };
         if sprint {
             this.make_sprint();
         }
         this.rebuild_links();
+        this.measure(!sprint);
         Some(this)
+    }
+
+    /// `FUN_0813f744` (the player's driver setup, after the planes are built): the lap's distances become running
+    /// sums of integer lengths (the first point gets `isqrt(0)` = 1; in sprints point 1 restarts at 0). Each branch
+    /// that a lap point forks into (link index 0) is measured the same way from 0 and then scaled onto the lap
+    /// between the fork and where the branch rejoins; quirk kept: its first point scales its old distance. The scale
+    /// (×256) goes to `0x03006120 + 4 · section`.
+    fn measure(&mut self, lapped: bool) {
+        let len = |a: LinePoint, b: LinePoint| {
+            let (dx, dz) = (b.x.wrapping_sub(a.x), b.z.wrapping_sub(a.z));
+            isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32)
+        };
+        self.scales = vec![0; self.sections.len()];
+        self.scales[0] = 0x100;
+        let count = i32::from(self.sections[0].count);
+        let (mut prev, mut dist) = (self.point(0, 0), 0i32);
+        for k in 0..count {
+            let i = self.index(0, k);
+            dist = dist.wrapping_add(len(prev, self.points[i]));
+            if k == 1 && !lapped {
+                dist = 0;
+            }
+            (prev, self.points[i].distance) = (self.points[i], dist);
+        }
+        for k in 0..count {
+            let fork = self.point(0, k);
+            if fork.link_index != 0 {
+                continue;
+            }
+            let s = usize::from(fork.link_section);
+            let n = i32::from(self.sections[s].count);
+            let rejoin = self.point(0, self.point(s, n - 1).link_index.into());
+            let span = rejoin.distance.wrapping_sub(fork.distance) >> 8;
+            let (mut prev, mut d) = (self.point(s, 0), 0i32);
+            for i in 1..n {
+                let j = self.index(s, i);
+                d = d.wrapping_add(len(prev, self.points[j]));
+                (prev, self.points[j].distance) = (self.points[j], d);
+            }
+            let branch = self.point(s, n - 1).distance >> 8;
+            for i in 0..n {
+                let j = self.index(s, i);
+                self.points[j].distance = div(span.wrapping_mul(self.points[j].distance), branch) + fork.distance;
+            }
+            self.scales[s] = div(span << 8, branch);
+        }
     }
 
     /// `FUN_081390b0` (sprints): every point moves up one slot, and the lap gets a point before its start and one
@@ -572,13 +625,361 @@ pub fn race_payout(save: &mut Save, events: &[Event], zone: usize, slot: usize, 
     pay
 }
 
+/// The career place `career_race_payout` pays for, from the result bytes at `0x03005730`: 1 when `[4]` is 0,
+/// else 2 when `[5]` is 0, else 3.
+pub fn payout_place(order: &[u8]) -> u8 {
+    if order[4] == 0 {
+        1
+    } else if order[5] == 0 {
+        2
+    } else {
+        3
+    }
+}
+
 /// Race progress used for positions (`FUN_081400ec`): laps done times the lap length plus the distance into the
 /// lap. `laps_left` counts down from `laps` (driver `+0xC5`); sprints (`0x0300608C` = 0) use the distance alone.
 pub fn race_progress(lapped: bool, lap_length: i32, laps: i32, laps_left: i32, distance: i32) -> i32 {
     if lapped {
-        lap_length * (laps - laps_left) + distance
+        lap_length.wrapping_mul(laps - laps_left).wrapping_add(distance)
     } else {
         distance
+    }
+}
+
+/// The fields of one car that the race rules read and write: its entity (world `+0x3C`, 0xA4 bytes each) and
+/// its driver struct (`*(entity + 0x8C)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Racer {
+    /// Entity `+0x00`.
+    pub id: u16,
+    /// Entity `+0x72`: racing-line section (0 = the lap).
+    pub section: u16,
+    /// Entity `+0x90`: segment (waypoint index) in the section.
+    pub segment: i16,
+    /// Entity `+0x4A`: 2 once finished or knocked out.
+    pub state: u16,
+    /// Entity `+0x08`.
+    pub entity_flags: u16,
+    /// Entity `+0x0C`/`+0x14`: position, 8.8 fixed point.
+    pub x: i32,
+    pub z: i32,
+    /// Driver `+0xA8`, 1-based.
+    pub place: i32,
+    /// Driver `+0xAC`: distance into the lap.
+    pub distance: i32,
+    /// Driver `+0xB4`/`+0xB8`/`+0xBC`: best lap, lap start and finish time, in frames of `0x03005800`.
+    pub best_lap: u32,
+    pub lap_start: u32,
+    pub finish: u32,
+    /// Driver `+0xC5`: laps left.
+    pub laps_left: i8,
+    /// Driver `+0x4D8`: bit 0 set while going backwards past the start, bit 1 lap armed, bit 3 knocked out.
+    pub flags: u16,
+    /// Driver `+0x4E8`: hunter life, `0..=HUNTER_LIFE_MAX`.
+    pub life: i32,
+    /// Driver `+0x4EC`: wrong-way frames; `+0x4EE`: wall frames; `+0x4F0`: cleared by hunter hits.
+    pub wrong_way: i16,
+    pub wall: i16,
+    pub hit: i16,
+    /// Driver `+0xF8..+0x104` (the AI's; a knockout copies `0x7F3DD0` there).
+    pub knockout: [u32; 3],
+    /// Driver `+0x444`: the AI's side of its next crossing line.
+    pub side: i32,
+    /// Driver `+0x4D6`: set to 2 when the AI changes section.
+    pub section_changed: u16,
+}
+
+/// The race globals the rules use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Race {
+    /// `0x030056E0`: [`RaceMode`] index.
+    pub mode: u32,
+    /// `0x0300608C`: laps count (every mode but sprint).
+    pub lapped: bool,
+    /// `0x030056E4`.
+    pub laps: i32,
+    /// `0x03005784`: racers besides the player.
+    pub opponents: u32,
+    /// `0x03005800`: race frames.
+    pub time: u32,
+    /// `0x030061A4`: someone finished.
+    pub finished: bool,
+    /// `0x030057F8` (the camera's car) and `0x03000060` (the player's entity).
+    pub view: u32,
+    pub player: u32,
+    /// `0x03005608`: 0..2.
+    pub difficulty: u32,
+    /// `0x03000048`.
+    pub state48: u32,
+    /// `0x030064C8`: [`rand_table`] index.
+    pub rand: u32,
+    /// `0x03005384`: the player has been going the wrong way for over 27 frames.
+    pub wrong_way: bool,
+    /// `0x03005650..0x03005690`: `+8` a byte per car (8 = knocked out), `+0x20` a finish time per car id.
+    pub results: [u8; 0x40],
+}
+
+impl Default for Race {
+    fn default() -> Self {
+        Race {
+            mode: 0,
+            lapped: false,
+            laps: 0,
+            opponents: 0,
+            time: 0,
+            finished: false,
+            view: 0,
+            player: 0,
+            difficulty: 0,
+            state48: 0,
+            rand: 0,
+            wrong_way: false,
+            results: [0; 0x40],
+        }
+    }
+}
+
+/// `rand_table` (`FUN_0815fcfc`): the next of 256 `u16` at `0x7C03F0`, index `0x030064C8`.
+pub fn rand_table(rom: &[u8], index: &mut u32) -> u32 {
+    *index = (*index + 1) & 0xFF;
+    u32::from(u16_at(rom, 0x7C_03F0 + 2 * *index as usize))
+}
+
+/// Per difficulty, the roll (`rand & 0xFF`) an AI must beat to take a shortcut (`0x7BFCD4`).
+pub const AI_BRANCH_CHANCE: usize = 0x7B_FCD4;
+/// What a knocked-out car's driver `+0xF8..` gets (`0x7F3DD0`, three words).
+pub const KNOCKOUT_WORDS: usize = 0x7F_3DD0;
+
+impl RacingLine {
+    fn side(planes: &[Plane], row: i32, r: &Racer) -> i32 {
+        let p = planes[row as usize];
+        (r.x >> 8)
+            .wrapping_mul(p[4])
+            .wrapping_add((r.z >> 8).wrapping_mul(p[5]))
+            .wrapping_sub(p[6])
+    }
+
+    /// The player's racing-line tracker (`FUN_0813edd8`, every frame). `vectors` are driver `+0x11C` and `+0x140`
+    /// (x, y, z each, 2.12). Updates the wrong-way counter and flag, then advances the segment when the car is past
+    /// the next waypoint's crossing line (arming the lap on lap segments 1–9 and in branches) or steps it back when
+    /// it is behind the current one. Returns true when the game then runs [`RacingLine::lap_crossing`].
+    pub fn track_player(
+        &self,
+        planes: &[Plane],
+        back: &BackTable,
+        race: &mut Race,
+        r: &mut Racer,
+        vectors: [i32; 6],
+    ) -> bool {
+        let (section, seg) = (usize::from(r.section), i32::from(r.segment));
+        let head = self.sections[section];
+        let (s, i) = self.step(race.lapped, back, section, seg + 1);
+        let first = self.sections[s].first as i32;
+        // Quirk kept: the direction row is the stepped section's first plus the *current* segment.
+        let dir = planes[(first + seg) as usize];
+        let dot = |v: &[i32]| (v[0].wrapping_mul(dir[0]) >> 12) + (v[2].wrapping_mul(dir[1]) >> 12);
+        let ahead = dot(&vectors[..3]);
+        r.wrong_way = if ahead < -10 || (ahead < 1 && dot(&vectors[3..]) < 0) {
+            r.wrong_way.wrapping_add(1)
+        } else {
+            0
+        };
+        race.wrong_way = r.wrong_way > 27;
+        let count = i32::from(head.count);
+        if Self::side(planes, first + i, r) > 0 {
+            if section == 0 {
+                if (seg - 1) as u32 <= 8 {
+                    r.flags |= 2;
+                }
+                if seg == count - 2 || seg == 0 {
+                    r.flags &= 0xFFFE;
+                }
+                r.segment = self.step(race.lapped, back, 0, seg + 1).1 as i16;
+                if i32::from(r.segment) == count - 1 {
+                    r.segment = 0;
+                }
+            } else {
+                r.segment = r.segment.wrapping_add(1);
+                r.flags |= 2;
+            }
+            return true;
+        }
+        if Self::side(planes, head.first as i32 + seg, r) >= 0 {
+            return false;
+        }
+        if section != 0 {
+            r.segment = r.segment.wrapping_sub(1);
+            return false;
+        }
+        if seg == 2 {
+            r.flags &= 0xFFFD;
+        }
+        if seg == if race.lapped { 0 } else { 1 } {
+            r.flags |= 1;
+        }
+        r.segment = self.step(race.lapped, back, 0, seg - 1).1 as i16;
+        false
+    }
+
+    /// The AI's racing-line advance inside its driver (`FUN_0814d078`, `0x0814D21C..0x0814D3AA`); `segment` is the
+    /// driver's working segment there. Past the next crossing line it moves on: through a branch link at the
+    /// section's second-to-last point, else one point (the lap wraps); segments 1–7 arm the lap; before a fork it may
+    /// take the shortcut when `rand & 0xFF` beats [`AI_BRANCH_CHANCE`]`[difficulty]` and `branch_ok[section]`
+    /// (`0x030060C0`) allows it. Returns true when the game then runs [`RacingLine::lap_crossing`].
+    pub fn ai_advance(
+        &self,
+        rom: &[u8],
+        (planes, back): (&[Plane], &BackTable),
+        race: &mut Race,
+        r: &mut Racer,
+        segment: i32,
+        branch_ok: &[u32],
+    ) -> bool {
+        let section = usize::from(r.section);
+        let count = i32::from(self.sections[section].count);
+        let (s, i) = self.step(race.lapped, back, section, segment + 1);
+        r.side = Self::side(planes, self.sections[s].first as i32 + i, r);
+        if r.side <= 0 {
+            return false;
+        }
+        r.flags &= 0xFFFE;
+        let next = self.stepped(race.lapped, back, section, segment + 1);
+        let mut seg = segment;
+        if next.link_index != 0xFFFF && seg == count - 2 {
+            (r.section, r.section_changed, seg) = (next.link_section, 2, i32::from(next.link_index));
+        } else {
+            seg += 1;
+            if seg == count - 1 && r.section == 0 {
+                seg = 0;
+            }
+        }
+        let next = self.stepped(race.lapped, back, usize::from(r.section), seg + 1);
+        if (seg - 1) as u32 <= 6 {
+            r.flags |= 2;
+        }
+        if next.link_index == 0 && r.place != 1 && u32::from(r.id) <= race.opponents {
+            let roll = (rand_table(rom, &mut race.rand) & 0xFF) as i32;
+            let chance = u32_at(rom, AI_BRANCH_CHANCE + 4 * race.difficulty as usize) as i32;
+            if roll > chance && branch_ok[usize::from(next.link_section)] != 0 {
+                (r.section, r.section_changed, seg) = (next.link_section, 2, i32::from(next.link_index) - 1);
+                r.flags |= 2;
+            }
+        }
+        r.segment = seg as i16;
+        true
+    }
+
+    /// `lap_crossing` (`FUN_0813f098`) for `cars[who]`: an armed car on the lap's last segment (`count − 1`,
+    /// sprints `count − 2`) or segment 0 finishes a lap: lap time and best lap, one lap fewer, elimination
+    /// knock-outs, and the finish when no laps are left (or in a sprint).
+    pub fn lap_crossing(&self, rom: &[u8], race: &mut Race, cars: &mut [Racer], who: usize) {
+        let target = i32::from(self.sections[0].count) - if race.lapped { 1 } else { 2 };
+        let c = cars[who];
+        let seg = i32::from(c.segment);
+        if c.section != 0 || !(seg == target || seg == 0) || c.flags & 2 == 0 {
+            return;
+        }
+        let c = &mut cars[who];
+        c.flags &= 0xFFFD;
+        let lap = race.time.wrapping_sub(c.lap_start);
+        if lap < c.best_lap || c.best_lap == 0 {
+            c.best_lap = lap;
+        }
+        c.lap_start = race.time;
+        c.laps_left = c.laps_left.wrapping_sub(1);
+        let (place, left) = (c.place, i32::from(c.laps_left));
+        if race.mode == 1 && place == race.opponents as i32 - (race.laps - left) + 1 {
+            let words = [0, 4, 8].map(|k| u32_at(rom, KNOCKOUT_WORDS + k));
+            for j in 0..=race.opponents as usize {
+                let o = &mut cars[race.player as usize + j];
+                if o.place == place + 1 {
+                    race.results[8 + j] = 8;
+                    o.flags |= 8;
+                    o.state = 2;
+                    o.entity_flags &= 0xFFFB;
+                    o.knockout = words;
+                }
+            }
+        }
+        if cars[who].laps_left == 0 || !race.lapped {
+            race.finished = true;
+            if u32::from(cars[who].id) > race.opponents {
+                cars[who].state = 2;
+            } else {
+                Self::finish(race, cars, who);
+            }
+        }
+    }
+
+    /// `FUN_0813f008`: a racer finishes. Quirk kept: in elimination the camera car's finish marks result byte
+    /// `opponents + 1` (the loop that finds the last place is computed and ignored).
+    fn finish(race: &mut Race, cars: &mut [Racer], who: usize) {
+        let c = &mut cars[who];
+        c.finish = c.lap_start;
+        let t = 0x20 + 4 * usize::from(c.id);
+        race.results[t..t + 4].copy_from_slice(&c.lap_start.to_le_bytes());
+        c.state = 2;
+        if who == race.view as usize && race.mode == 1 {
+            race.results[8 + race.opponents as usize + 1] = 8;
+        }
+    }
+
+    /// Positions (`FUN_0813ea04`, every frame): each car still racing is 1 + the cars ahead on progress (ties go to
+    /// the lower index), not counting knocked-out cars; finished cars count as ahead. When `0x03000048` is 9 the
+    /// places are just the entity order.
+    pub fn update_places(&self, race: &Race, cars: &mut [Racer]) {
+        let n = race.opponents as usize + 1;
+        let base = race.player as usize;
+        if race.state48 == 9 {
+            for i in 0..n {
+                cars[base + i].place = i as i32 + 1;
+            }
+            return;
+        }
+        let len = self.lap_length();
+        let progress = |c: &Racer| race_progress(race.lapped, len, race.laps, c.laps_left.into(), c.distance);
+        for i in 0..n {
+            let me = base + i;
+            if cars[me].state == 2 {
+                continue;
+            }
+            let mine = progress(&cars[me]);
+            let mut place = 1;
+            for (j, o) in cars[..n].iter().enumerate() {
+                if o.flags & 8 == 0 && j != me {
+                    let d = mine.wrapping_sub(progress(o));
+                    if d < 0 || (d == 0 && j < i) || o.state == 2 {
+                        place += 1;
+                    }
+                }
+            }
+            cars[me].place = place;
+        }
+    }
+
+    /// `finish_time_estimate` (`FUN_0814f050`) for a car still racing at the end, after `elapsed` frames:
+    /// `elapsed + (total − done) · elapsed / done` on the progress scale (64-bit; both at least 1), where anything
+    /// outside `1..=359_999` becomes 359 999. Also keeps the best lap at the time per lap. In sprints it sets
+    /// `laps` and laps left to 1 and measures to the point before the extra end point.
+    pub fn finish_estimate(&self, race: &mut Race, c: &mut Racer, elapsed: u32) -> u32 {
+        let count = i32::from(self.sections[0].count);
+        let mut len = self.point(0, count - 1).distance;
+        if !race.lapped {
+            (race.laps, c.laps_left) = (1, 1);
+            len = self.point(0, count - 2).distance;
+        }
+        let len = i64::from(len);
+        let done = len * i64::from((race.laps - i32::from(c.laps_left)) as u32) + i64::from(c.distance);
+        let rest = (len * i64::from(race.laps as u32) - done).max(1);
+        let t = rest * i64::from(elapsed as i32) / done.max(1) + i64::from(elapsed as i32);
+        let t = if (1..=359_999).contains(&t) { t as u32 } else { 359_999 };
+        c.finish = t;
+        let per = t / race.laps as u32;
+        if per < c.best_lap || c.best_lap == 0 {
+            c.best_lap = per;
+        }
+        t
     }
 }
 
@@ -586,37 +987,45 @@ pub fn race_progress(lapped: bool, lap_length: i32, laps: i32, laps_left: i32, d
 pub const HUNTER_LIFE_MAX: i32 = 0x80000;
 /// Life gained per frame by race position 1..4 (`0x030061B0 + 4 * position`).
 pub const HUNTER_GAIN: [i32; 5] = [0, 200, 150, 100, 0];
+/// Hit damage per impulse unit (`0x0300617C`), and the two drains' factors (`0x03006184`, `0x030061A0`), all ×256.
+pub const HUNTER_HIT: i32 = 0x440;
+pub const HUNTER_DRAIN: [i32; 2] = [0x240, 0x240];
 
 /// One frame of hunter life (`FUN_08140f78`): driving backwards (driver `+0x4EC` above 27) drains 1000, a wall
 /// (`+0x4EE` above 50) drains 100, otherwise life grows by position until someone finishes (`0x030061A4`).
-pub fn hunter_life_tick(life: i32, backwards: i16, wall: i16, position: usize, finished: bool) -> i32 {
-    if backwards > 27 {
-        (life - 1000).max(0)
-    } else if wall > 50 {
-        (life - 100).max(0)
-    } else if finished {
-        life
+pub fn hunter_life_tick(race: &Race, r: &mut Racer) {
+    r.life = if r.wrong_way > 27 {
+        (r.life - 1000).max(0)
+    } else if r.wall > 50 {
+        (r.life - 100).max(0)
+    } else if race.finished {
+        r.life
     } else {
-        (life + HUNTER_GAIN[position]).min(HUNTER_LIFE_MAX)
-    }
-}
-
-/// A hunter hit (`FUN_0814101c`): the victim loses `impulse * 0x440 >> 8`, the attacker gains three quarters of
-/// that while nobody has finished and the victim is a racer (entity id ≤ opponents). Returns (attacker, victim).
-pub fn hunter_hit(attacker: i32, victim: i32, impulse: i32, finished: bool, victim_is_racer: bool) -> (i32, i32) {
-    let damage = (impulse * 0x440) >> 8;
-    let attacker = if !finished && victim_is_racer {
-        (attacker + ((damage * 3) >> 2)).min(HUNTER_LIFE_MAX)
-    } else {
-        attacker
+        (r.life + HUNTER_GAIN[r.place as usize]).min(HUNTER_LIFE_MAX)
     };
-    (attacker, (victim - damage).max(0))
 }
 
-/// Elimination (`FUN_0813f098`): when the car in `position` finishes a lap (after `laps_left` was decremented)
-/// and `position == opponents - laps_done + 1`, the car in `position + 1` is knocked out.
-pub fn eliminated_position(position: i32, opponents: i32, laps: i32, laps_left: i32) -> Option<i32> {
-    (position == opponents - (laps - laps_left) + 1).then_some(position + 1)
+/// A hunter hit (`FUN_0814101c`), unless either car is finished: the victim loses `impulse · 0x440 >> 8`, and the
+/// attacker gains three quarters of that while nobody has finished and the victim is a racer (id ≤ opponents).
+pub fn hunter_hit(race: &Race, attacker: &mut Racer, victim: &mut Racer, impulse: i32) {
+    if attacker.state == 2 || victim.state == 2 {
+        return;
+    }
+    let damage = impulse.wrapping_mul(HUNTER_HIT) >> 8;
+    victim.life = (victim.life - damage).max(0);
+    if !race.finished && u32::from(victim.id) <= race.opponents {
+        attacker.life = (attacker.life + ((damage * 3) >> 2)).min(HUNTER_LIFE_MAX);
+    }
+    attacker.hit = 0;
+}
+
+/// The other two life drains (`FUN_0814136c` with `kind` 0, `FUN_081413b0` with 1), unless the car is finished:
+/// `HUNTER_DRAIN[kind] · amount >> 8`.
+pub fn hunter_drain(r: &mut Racer, kind: usize, amount: i32) {
+    if r.state != 2 {
+        r.life = (r.life - (HUNTER_DRAIN[kind].wrapping_mul(amount) >> 8)).max(0);
+        r.hit = 0;
+    }
 }
 
 pub const SAVE_SIZE: usize = 512;
@@ -978,7 +1387,8 @@ mod tests {
         let line = ptr(&rom, ROUTE_TABLE + 0x14 * 23 + 8);
         assert_eq!(rom[line..line + 8], rom[line + 35 * 0x18..line + 35 * 0x18 + 8]);
         assert_eq!(u32_at(&rom, line + 35 * 0x18 + 0x10), 108_219);
-        assert_eq!(RacingLine::new(&rom, 23, false).unwrap().lap_length(), 108_219);
+        // The race measures the lap again with integer lengths (`FUN_0813f744`): 108,217.
+        assert_eq!(RacingLine::new(&rom, 23, false).unwrap().lap_length(), 108_217);
     }
 
     /// The world's racing line and the plane table that `race_load_level` built for the reference race (route 23,
@@ -1004,8 +1414,9 @@ mod tests {
                 u32_at(&ew, w + 4) as i32,
                 u16_at(&ew, w + 0xC),
                 u16_at(&ew, w + 0xE),
+                u32_at(&ew, w + 0x10) as i32,
             );
-            assert_eq!((p.x, p.z, p.link_section, p.link_index), ram, "point {k}");
+            assert_eq!((p.x, p.z, p.link_section, p.link_index, p.distance), ram, "point {k}");
         }
         let (table, back_table) = (at(u32_at(&iw, 0x5FB4)), at(u32_at(&iw, 0x5FB8)));
         let (planes, back) = line.planes(false);
@@ -1200,8 +1611,347 @@ mod tests {
             (100, 110, 140)
         );
         assert_eq!(race_progress(true, 108_219, 3, 2, 500), 108_719);
-        assert_eq!(eliminated_position(3, 3, 3, 2), Some(4));
-        assert_eq!(hunter_life_tick(HUNTER_LIFE_MAX - 10, 0, 0, 1, false), HUNTER_LIFE_MAX);
-        assert_eq!(hunter_hit(0, 100, 0x100, false, true), (0x330, 0));
+        let race = Race {
+            opponents: 3,
+            ..Race::default()
+        };
+        let mut r = Racer {
+            life: HUNTER_LIFE_MAX - 10,
+            place: 1,
+            ..Racer::default()
+        };
+        hunter_life_tick(&race, &mut r);
+        assert_eq!(r.life, HUNTER_LIFE_MAX);
+        let (mut a, mut v) = (
+            Racer {
+                hit: 5,
+                ..Racer::default()
+            },
+            Racer {
+                id: 1,
+                life: 100,
+                ..Racer::default()
+            },
+        );
+        hunter_hit(&race, &mut a, &mut v, 0x100);
+        assert_eq!((a.life, v.life, a.hit), (0x330, 0, 0));
+    }
+
+    /// One line of a race-rule trace (`tools/trace_race_rules.lua`).
+    struct Trace {
+        file: String,
+        frame: u64,
+        func: String,
+        kv: std::collections::HashMap<String, String>,
+    }
+
+    impl Trace {
+        fn get(&self, k: &str) -> &str {
+            self.kv
+                .get(k)
+                .unwrap_or_else(|| panic!("{} frame {}: no {k}", self.file, self.frame))
+        }
+        fn ints(&self, k: &str) -> Vec<i64> {
+            self.get(k).split(',').map(|v| v.parse().unwrap()).collect()
+        }
+        fn bytes(&self, k: &str) -> Vec<u8> {
+            let s = self.get(k);
+            (0..s.len() / 2)
+                .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+                .collect()
+        }
+        fn racer(&self, k: &str) -> Racer {
+            let v = self.ints(k);
+            Racer {
+                id: v[0] as u16,
+                section: v[1] as u16,
+                segment: v[2] as i16,
+                state: v[3] as u16,
+                entity_flags: v[4] as u16,
+                x: v[5] as i32,
+                z: v[6] as i32,
+                place: v[7] as i32,
+                distance: v[8] as i32,
+                best_lap: v[9] as u32,
+                lap_start: v[10] as u32,
+                finish: v[11] as u32,
+                laps_left: v[12] as i8,
+                flags: v[13] as u16,
+                life: v[14] as i32,
+                wrong_way: v[15] as i16,
+                wall: v[16] as i16,
+                hit: v[17] as i16,
+                knockout: [v[18] as u32, v[19] as u32, v[20] as u32],
+                side: v[21] as i32,
+                section_changed: v[22] as u16,
+            }
+        }
+        /// The race globals `g`, with the results block `res` when the line has one; also the route index.
+        fn race(&self, g: &str, res: &str) -> (Race, usize) {
+            let v = self.ints(g);
+            let mut results = [0; 0x40];
+            if self.kv.contains_key(res) {
+                results.copy_from_slice(&self.bytes(res));
+            }
+            let race = Race {
+                mode: v[0] as u32,
+                lapped: v[1] != 0,
+                laps: v[2] as i32,
+                opponents: v[3] as u32,
+                time: v[4] as u32,
+                finished: v[5] != 0,
+                view: v[6] as u32,
+                player: v[7] as u32,
+                difficulty: v[8] as u32,
+                state48: v[9] as u32,
+                rand: v[10] as u32,
+                wrong_way: v[11] != 0,
+                results,
+            };
+            (race, v[12] as usize)
+        }
+        fn cars(&self, tag: &str, race: &Race) -> Vec<Racer> {
+            (0..=race.opponents)
+                .map(|i| self.racer(&format!("{tag}.c{i}")))
+                .collect()
+        }
+    }
+
+    /// Every line of `data/work/e5298b24/race-rules/*.log`, file by file in name order.
+    fn traces() -> Vec<Trace> {
+        let dir = data_dir().join("work/e5298b24/race-rules");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            eprintln!("skipping: no race-rule traces in {}", dir.display());
+            return Vec::new();
+        };
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "log") && p.file_name().is_some_and(|n| n != "log.txt"))
+            .collect();
+        files.sort();
+        let mut out = Vec::new();
+        for f in files {
+            let name = f.file_name().unwrap().to_string_lossy().into_owned();
+            for line in std::fs::read_to_string(&f).unwrap().lines() {
+                let kv: std::collections::HashMap<_, _> = line
+                    .split_whitespace()
+                    .filter_map(|w| w.split_once('='))
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect();
+                if let (Some(frame), Some(func)) = (kv.get("frame"), kv.get("fn")) {
+                    out.push(Trace {
+                        file: name.clone(),
+                        frame: frame.parse().unwrap(),
+                        func: func.clone(),
+                        kv,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The race rules reproduce every traced call of the reference build (see `career.md`, "Race-rule traces").
+    #[test]
+    fn race_rules_match_the_traces() {
+        let Some(rom) = rom() else { return };
+        let events = events(&rom);
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        // Per file: the lapped flag the plane table was built with (0 when a file has no build line).
+        let mut built: std::collections::HashMap<String, bool> = Default::default();
+        for t in traces() {
+            let at = || format!("{} frame {} {}", t.file, t.frame, t.func);
+            let lapped_at_build = *built.get(&t.file).unwrap_or(&false);
+            let line_for = |race: &Race, route: usize| RacingLine::new(&rom, route, race.mode == 3).unwrap();
+            match t.func.as_str() {
+                "build_planes" => {
+                    let (race, route) = t.race("g", "");
+                    let line = line_for(&race, route);
+                    let lapped = t.get("lapped") != "0";
+                    built.insert(t.file.clone(), lapped);
+                    let (sections, points) = (t.bytes("sections"), t.bytes("points"));
+                    let total: usize = line.sections.iter().map(|s| usize::from(s.count)).sum();
+                    for (s, sec) in line.sections.iter().enumerate() {
+                        assert_eq!(
+                            (u16_at(&sections, 8 * s), u32_at(&sections, 8 * s + 4)),
+                            (sec.count, sec.first)
+                        );
+                    }
+                    for (k, p) in line.points[..total].iter().enumerate() {
+                        let w = 0x18 * k;
+                        let got = (u32_at(&points, w) as i32, u32_at(&points, w + 4) as i32);
+                        let links = (u16_at(&points, w + 0xC), u16_at(&points, w + 0xE));
+                        assert_eq!(
+                            ((p.x, p.z), (p.link_section, p.link_index)),
+                            (got, links),
+                            "{} point {k}",
+                            at()
+                        );
+                    }
+                    let (planes, back) = line.planes(lapped);
+                    let (table, back_table) = (t.bytes("planes"), t.bytes("back"));
+                    for (k, row) in planes[..total].iter().enumerate() {
+                        let ram: Plane = std::array::from_fn(|i| u32_at(&table, 0x20 * k + 4 * i) as i32);
+                        assert_eq!(*row, ram, "{} plane {k}", at());
+                    }
+                    assert!(
+                        (0..256).all(|s| back[s] == u32_at(&back_table, 4 * s) as i32),
+                        "{}",
+                        at()
+                    );
+                }
+                "lap_crossing" => {
+                    let (mut race, route) = t.race("pre.g", "pre.res");
+                    let mut cars = t.cars("pre", &race);
+                    line_for(&race, route).lap_crossing(&rom, &mut race, &mut cars, t.get("who").parse().unwrap());
+                    let (want, _) = t.race("post.g", "post.res");
+                    assert_eq!((race, cars), (want, t.cars("post", &want)), "{}", at());
+                }
+                "ai_advance" if !t.kv.contains_key("ok") => continue, // captured before the tracer logged 0x030060C0
+                "track_player" | "ai_advance" => {
+                    let (mut race, route) = t.race("g", "");
+                    let line = line_for(&race, route);
+                    let (planes, back) = line.planes(lapped_at_build);
+                    let mut r = t.racer("pre");
+                    let crossed = if t.func == "track_player" {
+                        let v = t.ints("vec");
+                        line.track_player(&planes, &back, &mut race, &mut r, std::array::from_fn(|i| v[i] as i32))
+                    } else {
+                        let ok: Vec<u32> = t.ints("ok").iter().map(|&v| v as u32).collect();
+                        let seg = t.get("seg").parse().unwrap();
+                        let crossed = line.ai_advance(&rom, (&planes, &back), &mut race, &mut r, seg, &ok);
+                        assert_eq!(race.rand, t.get("rand").parse::<u32>().unwrap(), "{} rand", at());
+                        crossed
+                    };
+                    let want = if t.kv.contains_key("mid") {
+                        t.racer("mid")
+                    } else {
+                        t.racer("post")
+                    };
+                    assert_eq!((crossed, r), (t.kv.contains_key("mid"), want), "{}", at());
+                    if t.func == "track_player" {
+                        assert_eq!(race.wrong_way, t.get("ww_flag") != "0", "{}", at());
+                    }
+                }
+                "race_progress" => {
+                    let (race, route) = t.race("g", "");
+                    let c = t.racer("c");
+                    let len = line_for(&race, route).lap_length();
+                    let got = race_progress(race.lapped, len, race.laps, c.laps_left.into(), c.distance);
+                    assert_eq!(got, t.get("ret").parse::<i32>().unwrap(), "{}", at());
+                }
+                "update_places" => {
+                    let (race, route) = t.race("pre.g", "pre.res");
+                    let mut cars = t.cars("pre", &race);
+                    line_for(&race, route).update_places(&race, &mut cars);
+                    assert_eq!(cars, t.cars("post", &race), "{}", at());
+                }
+                "hunter_life_tick" | "hunter_drain_a" | "hunter_drain_b" => {
+                    let (race, _) = t.race("g", "");
+                    assert_eq!(
+                        t.ints("tune")[..],
+                        [0, 200, 150, 100, 0, 27, 50, 1000, 100, 0x440, 0x240, 0x240],
+                        "{}",
+                        at()
+                    );
+                    let mut r = t.racer("pre");
+                    match t.func.as_str() {
+                        "hunter_life_tick" => hunter_life_tick(&race, &mut r),
+                        f => hunter_drain(
+                            &mut r,
+                            usize::from(f == "hunter_drain_b"),
+                            t.get("amount").parse().unwrap(),
+                        ),
+                    }
+                    assert_eq!(r, t.racer("post"), "{}", at());
+                }
+                "hunter_hit" => {
+                    let (race, _) = t.race("g", "");
+                    let (mut a, mut v) = (t.racer("pre.a"), t.racer("pre.v"));
+                    hunter_hit(&race, &mut a, &mut v, t.get("impulse").parse().unwrap());
+                    assert_eq!((a, v), (t.racer("post.a"), t.racer("post.v")), "{}", at());
+                }
+                "finish_estimate" => {
+                    let (mut race, route) = t.race("g", "");
+                    let mut c = t.racer("pre");
+                    let got =
+                        line_for(&race, route).finish_estimate(&mut race, &mut c, t.get("elapsed").parse().unwrap());
+                    assert_eq!(got as i64, t.get("ret").parse::<i64>().unwrap(), "{}", at());
+                    assert_eq!(
+                        (c, race.laps),
+                        (t.racer("post"), t.race("post.g", "").0.laps),
+                        "{}",
+                        at()
+                    );
+                }
+                "style_rating" => {
+                    let rec: [u8; 17] = t.bytes("record").try_into().unwrap();
+                    assert_eq!(
+                        style_rating(&rom, t.get("car").parse().unwrap(), &rec),
+                        t.get("ret").parse::<i32>().unwrap(),
+                        "{}",
+                        at()
+                    );
+                }
+                "career_race_payout" => {
+                    if t.get("career") != "1" {
+                        continue; // only career events (0x030000A0 = 1) pay
+                    }
+                    let mut save = blank_save();
+                    save.cash = t.get("pre.cash").parse().unwrap();
+                    save.events.copy_from_slice(&t.bytes("pre.events"));
+                    let car: usize = t.get("car").parse().unwrap();
+                    let rec: [u8; 17] = t.bytes("records")[17 * car..17 * car + 17].try_into().unwrap();
+                    let percent = reward_percent(style_rating(&rom, car, &rec));
+                    let (zone, slot) = (t.get("zone").parse().unwrap(), t.get("slot").parse().unwrap());
+                    let paid = race_payout(&mut save, &events, zone, slot, payout_place(&t.bytes("order")), percent);
+                    assert_eq!(paid, t.get("paid").parse::<i32>().unwrap(), "{}", at());
+                    assert_eq!(
+                        (save.cash, save.events.to_vec()),
+                        (t.get("post.cash").parse().unwrap(), t.bytes("post.events")),
+                        "{}",
+                        at()
+                    );
+                }
+                "rebuild_unlocks" => {
+                    let mut save = blank_save();
+                    save.events.copy_from_slice(&t.bytes("events"));
+                    save.field_1f8 = t.get("f1f8").parse().unwrap();
+                    let flags = t.ints("flags");
+                    save.unlock_flags = (0..6).filter(|&b| flags[b] & 1 != 0).map(|b| 1 << b).sum();
+                    assert_eq!(save.unlocks(&rom)[..], t.bytes("unlocks")[..], "{}", at());
+                }
+                "save_encode" => {
+                    let (heap, out) = (t.bytes("heap"), t.bytes("out"));
+                    let save = Save::parse(out[..].try_into().unwrap()).unwrap();
+                    assert_eq!(save.encode(heap[..].try_into().unwrap())[..], out[..], "{}", at());
+                    // The image holds the profile and globals as they were when the game saved.
+                    let (p, cars, g) = (t.bytes("profile"), t.bytes("cars"), t.ints("globals"));
+                    assert_eq!(
+                        (&p[..8], u32_at(&p, 0xC), &p[0x205..0x217]),
+                        (&save.name[..], save.cash, &save.events[..]),
+                        "{}",
+                        at()
+                    );
+                    assert!((0..15).all(|i| cars[17 * i..17 * i + 17] == save.cars[i]), "{}", at());
+                    let o = save.options;
+                    let want = [
+                        o.camera,
+                        o.units,
+                        o.hud,
+                        o.transmission,
+                        o.music << 3,
+                        o.sfx << 3,
+                        o.language,
+                        o.catch_up,
+                        o.mode_flags,
+                    ];
+                    assert_eq!(g, want.map(i64::from), "{}", at());
+                }
+                _ => continue,
+            }
+            *counts.entry(t.func).or_default() += 1;
+        }
+        eprintln!("race-rule trace lines checked: {counts:?}");
     }
 }
