@@ -297,9 +297,7 @@ impl RacingLine {
         (p[0].x, p[0].z) = (p[0].x * 5 - p[2].x * 4, p[0].z * 5 - p[2].z * 4);
         (p[n - 1].x, p[n - 1].z) = (p[n - 1].x * 5 - p[n - 3].x * 4, p[n - 1].z * 5 - p[n - 3].z * 4);
         for q in &mut p[n..0xFF] {
-            if q.link_index != 0xFFFF {
-                q.link_index += 1;
-            }
+            q.link_index = q.link_index.saturating_add(1); // 0xFFFF (no link) stays
         }
         self.sections[0].count += 2;
         for s in &mut self.sections[1..] {

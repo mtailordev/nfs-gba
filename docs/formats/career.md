@@ -78,8 +78,14 @@ Checked: the reference Quick Play race (STORAGE RUN forward) is route number 23,
 
 ### Race payout (`FUN_0812efe8`, career only)
 
-1. **Place.** It is 1 if the finishing-order byte `0x03005730 + 4` is 0 (the player), 2 if `+5` is 0, otherwise 3.
-2. **Reward base** = event[`zone·12 + completed − (old status ≠ 3 ? 1 : 0)`].`reward`. `completed` is counted before the update. It is the **ladder position**, not the raced event.
+0. **Ranking** (every race, `rank_results`): the results table at `0x03005730` is sorted first by `FUN_0812e8e4(key, descending)`:
+   - hunter (mode 2) by life, most first;
+   - circuit, elimination and sprint by time, least first;
+   - any other mode value not at all.
+
+   The table holds, per slot: a byte at `+0`, the **entity id** at `+4`, bytes at `+8` and `+0xC`, and `u32` at `+0x10` (best lap), `+0x20` (time) and `+0x30` (hunter life). Key 1 compares the time (signed), key 2 the `+0xC` byte, key 4 the life (unsigned). It is a bubble sort over `opponents + 1` slots with `opponents + 1` passes (`FUN_0812e860` swaps whole rows), so ties keep their order. Nothing else runs unless `0x030000A0` is 1 (a career event). Afterwards `FUN_0812ee14` runs whenever `0x030000A0` is not 0.
+1. **Place.** It is 1 if the ranked entity id `0x03005730 + 4` is 0 (the player), 2 if `+5` is 0, otherwise 3 (`payout_place`).
+2. **Reward base** = event[`zone·12 + completed − (old status ≠ 3 ? 1 : 0)`].`reward`. `completed` is counted before the update. It is the **ladder position**, not the raced event. Quirk kept: with status 0 (never written by the game, possible in an edited save) and nothing completed, the index is `zone·12 − 1`, the word before the zone's first record.
 3. **Status update:** the new place is stored if it is lower (better) than the old status.
 4. **Payout** = `percent × base / 100` (signed divide). It is halved for second place and halved again for a replay (old status 1 or 2); it is 0 for place 3. The payout is added to the cash (profile `+0x0C`) and stored at profile `+0x3B8`.
 5. **Display:** the event screen shows the same number (`FUN_0812dd80`: `base × percent / 100`, with `base` halved for a replay).
@@ -106,7 +112,7 @@ The rating maps to a percent: below 101 → 100, below 126 → 110, below 151 �
      - zones 1–5 get `0x122 + z` (boss 1 available);
      - boss 1 won adds `0x11D + z` (boss 2 available) and `0x10B + 2z`;
      - boss 2 won adds `0x10C + 2z`, `0x118 + z`, `0x12A + 2z` and `0x12B + 2z`.
-  5. **`unlock_flags` ranges** (save `0x11B`, see the save layout):
+  5. **`unlock_flags` ranges** (save `0x11B`, see the save layout; in RAM six `u32` at profile `+0x47C`, `+0x480`, `+0x484`, `+0x48C`, `+0x488`, `+0x478`, each tested `≠ 0`, while the save keeps only bit 0 of each):
      - bit 5: `0x108..=0x116`;
      - bit 4: `0x127..=0x134`;
      - bit 3: `0x117..=0x11C`;
@@ -179,49 +185,149 @@ Checked: the reference race (screenshot `s11`: forward, 3 laps, easy, 3 opponent
 
 ## Race rules
 
-Each car has a driver struct, pointed to by entity `+0x8C` (reference race: `0x0202C624` for the player, `0x0202D168` + 0x500·k for the opponents). Entities are 0xA4 bytes at world `+0x3C`; the player is entity `*0x03000060`, at `*0x030053AC`.
+Each car has a driver struct, pointed to by entity `+0x8C` (reference race: `0x0202C624` for the player, `0x0202D168` + 0x500·k for the opponents). Entities are 0xA4 bytes at world `+0x3C`; the player is entity `*0x03000060`, at `*0x030053AC`. `Racer` in `career.rs` holds the fields the rules use; `Race` the globals.
 
-- **Racing line sections** (route `+0x04`). This fills the "unknown 0x50 bytes" in `race-routes.md`:
-  - The table is 8 bytes per section: `u16 count, u16 0, u32 first waypoint`. It sits directly before the waypoints (`+0x08`), so the section count is `(line − table) / 8`.
-  - Section 0 is the lap. Its last waypoint repeats the first, so a lap is `count − 1` segments and the **lap length is the last main waypoint's distance** (`+0x10`; route 23: 36 waypoints, 108,219 units).
-  - Other sections are branches.
-  - **Waypoint links:** waypoint `+0x0C` (`u16` section) and `+0x0E` (`u16` index) link it to the same point in another section; `0xFFFF` means none. A fork on the main line points to the branch's first waypoint. The branch's first and last waypoints point back to where it leaves and rejoins (route 23: main 19 → branch, branch end → main 27).
-  - `FUN_0813e860(world, section, index)` walks an index across sections. On the main line it wraps modulo `count − 1` in lapped races (`0x0300608C` ≠ 0) and clamps otherwise. It follows the end links. The RAM table `*0x03005FB8` handles backward steps from an unlinked branch start.
-- **Laps.** Driver `+0xC5` counts the laps **left**. The driver setup (`FUN_0814a390`, `FUN_0814b98c`) sets it to `laps` (reference: 3 on every car). `0x0300608C` = 1 marks a lapped race; when it is 0 (sprint), `FUN_0814f050` forces laps and laps left to 1.
-  - **Crossing test** (`FUN_0813f098`), all required:
-    - entity `+0x72` = 0;
-    - segment (entity `+0x90`) = main `count − 1` (circuits) or `count − 2` (sprints), or 0;
-    - driver `+0x4D8` bit 1 is set (armed).
-  - **On a crossing:**
-    - bit 1 of `+0x4D8` is cleared;
-    - lap time = `0x03005800 − (+0xB8)`, with the best lap kept at `+0xB4`;
-    - `+0xB8` = now;
-    - `+0xC5` is decremented.
-  - **Race time** `0x03005800` counts frames (incremented in `vblank_irq`, reset in `race_init`). Times display as `frames × 100 / 60` centiseconds (`FUN_08142f74`).
-- **Position progress** (`FUN_081400ec`): `lap length × (laps − laps left) + distance` (driver `+0xAC`), or the distance alone when not lapped. The position is driver `+0xA8`, 1-based.
-- **Elimination** (`FUN_08143a4c`: mode = 1). After the decrement, if the crossing car's position equals `opponents − laps done + 1`, the car one place behind is knocked out:
-  - its driver `+0x4D8` gets `|= 8`;
-  - entity `+0x4A` = 2 and entity `+8` `&= 0xFFFB`;
-  - driver `+0xF8..` = the 3 words at `0x7F3DD0`;
-  - byte `0x03005658 + slot` = 8.
-- **Finish:** at laps left = 0, or any crossing in a sprint:
-  - `0x030061A4` = 1 ("someone finished");
-  - the player runs `FUN_0813f008`; AI cars get entity `+0x4A` = 2.
-  - Cars still racing when the race ends get an estimated time (`FUN_0814f050`), measured on the progress scale:
-    - `total = lap length × laps` and `done = progress` (both at least 1);
-    - time = `elapsed + (total − done) × elapsed / done` (64-bit), clamped to `0x57E3F`;
-    - stored at driver `+0xBC`, with the best lap `+0xB4` = min(best, time / laps).
-- **Hunter** (mode 2), per frame (`FUN_08140f78`). Life is driver `+0x4E8`, from 0 to `0x80000`. The tuning is set by `FUN_081412ec`:
-  - backwards counter `+0x4EC` above 27 (`0x030061D0`): −1000 (`0x030061F4`);
-  - otherwise wall counter `+0x4EE` above 50 (`0x030061E0`): −100 (`0x030061A8`);
-  - otherwise, while nobody has finished: + `[_, 200, 150, 100, 0][position]` (`0x030061B0`).
+All of this is exact and checked against the game (see "Race-rule checks" below).
 
-  **Hits** (`FUN_0814101c`), when neither car's entity `+0x4A` is 2:
-  - damage = `impulse × 0x440 >> 8` (`0x0300617C`), taken from the victim's life;
-  - if nobody has finished and the victim's entity id ≤ opponents, the attacker gains `damage × 3 >> 2`;
+### The racing line at race time (`RacingLine::new`)
+
+- **ROM data** (route `+0x04`/`+0x08`, also in `race-routes.md`):
+  - The section table is 8 bytes per section: `u16 count, u16 0, u32 first waypoint`. It sits directly before the waypoints, so the section count is `(line − table) / 8`.
+  - Section 0 is the lap; its last waypoint repeats the first. Other sections are branches.
+  - Waypoint `+0x0C` (`u16` section) and `+0x0E` (`u16` index) link it to another section; `0xFFFF` means none.
+- **`race_load_level`** copies 0x50 bytes of sections to world `+0x40` and 0x1800 bytes (256 waypoints) to world `+0x44`, then for a route with a line:
+  1. **Sprints** (`FUN_081390b0`, mode 3): sets `0x0300608C` = 0. Every waypoint moves up one slot, and the lap gets a point before its start and one after its end, extrapolated as `5·p − 4·neighbour`. The lap count grows by 2, the branches' `first` by 2, and links in waypoints past the lap move up one index.
+  2. **Links** (`FUN_081391f4`): the branch count N is `*0x7F37D8[route]` (a null pointer means 0), stored at `0x03006108`. Every link of sections 0..=N is cleared. Then each branch's start and end link to the nearest point (`(Δx >> 4)² + (Δz >> 4)²`, first found on ties) among the other sections' points `0..count − 2`, and that point links back to (branch, 0) or (branch, count − 1).
+  3. **Planes** (`FUN_08138f30`, `FUN_08138dc4`, `FUN_08138c24`): a 0x20-byte row per waypoint in `*0x03005FB4` (`Plane`):
+     - `[0..2]` the unit direction to the next point (×256), `[7]` the length;
+     - `[2]`/`[3]` two slopes (×0x1000);
+     - `[4..6]` the unit normal of the crossing line through the point (the mean of the directions in and out, ×256), `[6]` = normal · point.
+
+     Each row uses points `k − 1 … k + 2` through `racing_line_step`. It builds the lap, then each branch where a lap point forks into it (only when the branch's start is nearer the fork than its end), recursively. `back[branch]` (`*0x03005FB8`, 256 `i32`, reset to −1) = the lap index where it leaves.
+     - **History quirk:** the build uses `0x0300608C` as the previous scene left it (0 after power-on and in sprints; the menu's 3D scene and every race set it). With it the lap wraps; without it the ends clamp, so the lap's last row points at itself.
+     - **Buffer quirk:** the table is a `malloc(0x2000)`, and rows the build skips (a branch only ever entered at its end, route 21's first branch) keep the old heap contents.
+  4. **Distances** (`FUN_0813f744`, in the player's setup `FUN_0814b98c`, right after `FUN_0813e430` set `0x0300608C` = mode ≠ sprint):
+     - The lap's distances become running sums of integer lengths (`isqrt`, `FUN_0815fa54`: 16 two-bit steps, 0 → 1), so the first point gets 1. In sprints point 1 restarts at 0.
+     - Each branch forked into is measured from 0 and scaled onto the lap between fork and rejoin: `div(span · d, branch_len >> 8) + fork.distance`, with `span = (rejoin − fork) >> 8`. Quirk kept: its first point scales its old value.
+     - The scale `div(span << 8, branch_len >> 8)` goes to `0x03006120 + 4·branch` (`[0]` = 0x100).
+     - Route 23's lap becomes 108,217 units (ROM: 108,219).
+- **`racing_line_step`** (`FUN_0813e860`, `RacingLine::step`): index `i` of section `s`, following links past either end. The lap wraps with period `count − 1` in lapped races and clamps otherwise; a branch clamps at an unlinked end. Quirk kept: stepping back from an unlinked branch start stays in the branch at `back[s] + i`.
+
+### Lap arming (FIDELITY D6)
+
+Driver `+0x4D8` bit 1 ("armed") is set by the racing-line trackers. A lap counts only for an armed car.
+
+- **The player** (`FUN_0813edd8`, `RacingLine::track_player`), every frame from the player's update:
+  1. **Wrong way:** `d1` = dot(driver `+0x11C`, row direction) and `d2` = dot(driver `+0x140`, same), each term `(v·w) >> 12`. The row is `first(stepped section) + current segment` (quirk kept). The counter `+0x4EC` goes up by one if `d1 < −10`, or if `d1 < 1` and `d2 < 0`; otherwise it resets to 0. `0x03005384` = counter > 27.
+  2. **Advance** past the next point's crossing line (`side = (x >> 8)·n.x + (z >> 8)·n.z − d > 0`):
+     - on the lap: segments 1–9 arm the lap, and segments `count − 2` and 0 clear bit 0;
+     - the segment becomes `step(seg + 1)` (index only), and `count − 1` becomes 0;
+     - in a branch: segment + 1, and the lap is armed.
+
+     Then `lap_crossing` runs.
+  3. **Otherwise, behind the current point's line** (`side < 0`):
+     - in a branch the segment drops by one;
+     - on the lap, segment 2 disarms; segment 1 (sprints) or 0 (lapped) sets bit 0 ("backwards past the start"); and the segment becomes `step(seg − 1)`.
+
+  The player's section changes elsewhere (`FUN_0813f234`, by sector).
+- **The AI** (inside the AI driver `FUN_0814d078`, `0x0814D21C..0x0814D3AA`, `RacingLine::ai_advance`):
+  1. The driver's side of the next point's line goes to driver `+0x444`. When it is > 0, bit 0 is cleared.
+  2. **Move on:**
+     - At the section's second-to-last point with a linked next point, it jumps to the link (section and index; driver `+0x4D6` = 2).
+     - Otherwise it moves one point; the lap's `count − 1` becomes 0.
+  3. Segments 1–7 arm the lap.
+  4. **Shortcuts:** before a fork (the next point's link index is 0), a racer that is not leading may roll `rand_table() & 0xFF`. If the roll beats `0x7BFCD4[difficulty]` (255, 192, 100: easy AIs never take shortcuts) and `0x030060C0[branch]` allows it, it takes the branch at segment −1 and arms the lap.
+  5. The segment is stored and `lap_crossing` runs.
+
+### Lap crossing, elimination, finish (`FUN_0813f098`, `RacingLine::lap_crossing`)
+
+- **Crossing test**, all required:
+  - section 0;
+  - segment `count − 1` (lapped) or `count − 2` (sprints), or 0;
+  - armed.
+- **On a crossing:**
+  - disarm;
+  - lap time = `0x03005800 − lap start` (unsigned), kept at `+0xB4` when lower or when `+0xB4` is 0;
+  - lap start `+0xB8` = now;
+  - laps left `+0xC5` − 1.
+- **Elimination** (mode 1): if the crossing car's place equals `opponents − (laps − laps left) + 1`, then every racer (from the player's entity on) whose place is one more is knocked out:
+  - result byte `0x03005658 + j` = 8;
+  - driver `+0x4D8 |= 8`;
+  - entity `+0x4A` = 2 and entity `+8 &= 0xFFFB`;
+  - driver `+0xF8..+0x100` = the three words at `0x7F3DD0` (all 0).
+- **Finish:** at laps left 0, or any crossing in a sprint:
+  - `0x030061A4` = 1;
+  - entities beyond the racers (id > opponents, e.g. the wingman) get `+0x4A` = 2;
+  - racers run `FUN_0813f008`: finish `+0xBC` = lap start, result time `0x03005670 + 4·id` = lap start, `+0x4A` = 2. Quirk kept: in elimination the camera car (`0x030057F8`) also sets result byte `0x03005658 + opponents + 1` = 8 (it computes the last place and ignores it).
+- **Race time** `0x03005800` counts frames (incremented in `vblank_irq`, reset in `race_init`). Times display as `frames × 100 / 60` centiseconds (`FUN_08142f74`).
+
+### Positions and progress
+
+- **Progress** (`FUN_081400ec`, `race_progress`): `lap length × (laps − laps left) + distance` (driver `+0xAC`), or the distance alone when not lapped.
+- **Places** (`FUN_0813ea04`, every frame, `RacingLine::update_places`):
+  - Each racer still racing (`+0x4A` ≠ 2) gets 1 + the number of other racers that are not knocked out (`+0x4D8` bit 3) and are either ahead on progress, level with a lower index, or finished.
+  - When `0x03000048` is 9, the places are just the entity order.
+- **Finish estimate** (`FUN_0814f050`, `RacingLine::finish_estimate`) for cars still racing at the end:
+  - `total = len × laps` and `done = len × (laps − left) + distance`, in 64 bits; `laps − left` is taken unsigned. `total − done` and `done` are each at least 1.
+  - time = `(total − done) × elapsed / done + elapsed`, where anything outside 1..=359,999 becomes 359,999. It is stored at `+0xBC`, and the best lap becomes `time / laps` when lower or 0.
+  - In sprints it first sets `laps` = 1 and laps left = 1, and measures to the point before the extra end point.
+
+### Hunter life (mode 2; FIDELITY D6)
+
+Life is driver `+0x4E8`, 0..=`0x80000`. `hunter_tuning_init` (`FUN_081412ec`) runs for every race (all 121 dumps hold the same values; `0x030061B0` itself is never written, so a place-0 car such as the wingman gains 0).
+
+- **Per frame** (`FUN_08140f78`, from the player's and the AI's updates in hunter mode):
+  - wrong-way counter `+0x4EC` > 27: −1000;
+  - otherwise wall counter `+0x4EE` > 50: −100;
+  - otherwise, while nobody has finished: + `[0, 200, 150, 100, 0][place]`.
+
+  Results clamp to 0..=`0x80000`.
+- **Hits** (`FUN_0814101c`), unless either car's `+0x4A` is 2:
+  - damage `impulse · 0x440 >> 8` comes off the victim's life (not below 0);
+  - while nobody has finished and the victim's id ≤ opponents, the attacker gains `damage · 3 >> 2` (not above `0x80000`);
   - the attacker's `+0x4F0` is cleared.
+- **Two more drains** (`FUN_0814136c` and `FUN_081413b0`, from the collision code `FUN_081457b8` and `FUN_08145dac`), unless `+0x4A` is 2: `0x240 · amount >> 8` (`0x03006184`, `0x030061A0`), not below 0, and `+0x4F0` = 0.
+- **Life at zero:** nothing reacts in the race. Every reader of `+0x4E8` is listed here:
+  - the tick, the hit and the drains;
+  - the HUD bar (`FUN_08142674`: `life · 0x1C >> 0x13`, clamped 0..28);
+  - the driver setups, which zero it;
+  - the results copy (`FUN_0812eaac` → `0x03005650 + 0x30 + 4·id`).
 
-  Hunter also halves one speed term when driver `+0xA8` = 1 (`FUN_0813c5a8`). Other tuning words from `FUN_081412ec` have unknown use: `0x03006184` = `0x240`, `0x030061A0` = `0x240`, `0x03006170` = `0x80`, `0x03006194` = `0x20`, `0x03006198` = 400.
+  A car at 0 keeps racing and keeps gaining by place. Hunter results are ranked by life, most first (the payout's ranking above), so the lowest life ranks last and ties keep their order.
+- Hunter also halves one speed term for the leader (`FUN_0813c5a8`). Other tuning words have unknown use: `0x03006170` = `0x80`, `0x03006194` = `0x20`, `0x03006198` = 400.
+
+### Race-rule checks
+
+Two sources, one replay test (`race_rules_match_the_traces` in `career.rs`), which reads every file in `data/work/e5298b24/race-rules/` and skips when there are none.
+
+1. **mGBA traces** (`tools/trace_race_rules.lua`, `*.log`). The tracer is loaded through `NFSGBA_MGBA_EXTRA` (tools/mgba_remote.lua) and logs each traced call with the racers and globals before and after:
+   - `lap_crossing`, the player's tracker and the AI advance (with the state at a nested `lap_crossing`);
+   - `race_progress`, positions, the hunter functions and the finish estimate;
+   - payout, style rating, unlock rebuild and `save_encode` (with the heap bytes it overwrote);
+   - the plane build.
+
+   An autopilot (`auto on`) steers along the racing line. Captured: the story races (routes 1 and 3, wingmen), a career event, three game-written saves (plus the `.sav` mGBA wrote).
+2. **Oracle cases** (`tools/oracle_race_rules.py`, `oracle-*.jsonl`, the same keys). They run each function in the function oracle (`tools/oracle`, `docs/engine/harness.md`) on generated inputs over the reference race's RAM:
+   - random and edge values for places, laps, flags, times, lives, impulses, statuses and records;
+   - the racing line of all 43 routes, circuit and sprint, with both build flags, through the real load functions.
+
+| Rule | Traced calls | Oracle cases |
+|---|---|---|
+| `lap_crossing` (incl. elimination, finish, wingman) | 1,027 | 2,000 |
+| player tracker `FUN_0813edd8` | 539 | 2,000 |
+| AI advance (`FUN_0814d078` block) | 22,201 | — |
+| `race_progress` | 806 | 2,000 |
+| positions `FUN_0813ea04` | 160 | 2,000 |
+| finish estimate | — | 2,000 |
+| hunter tick / hit / drains | — | 2,000 each |
+| ranking `FUN_0812e8e4` | (in payout) | 2,000 |
+| `career_race_payout` | 3 | 3,000 |
+| `style_rating` | 179 | 2,000 |
+| `rebuild_unlocks` | 6 | 2,000 |
+| `save_encode` | 3 (+ `.sav`) | 2,000 |
+| racing line, planes, distances | 2 builds | 43 routes × 2 × 2 |
+
+Every line matches. The AI advance block can't be called on its own, so it is checked only on traces (22,201 calls, including branch choices).
 
 ## Save (EEPROM)
 
@@ -288,6 +394,16 @@ Each car has a driver struct, pointed to by entity `+0x8C` (reference race: `0x0
 
 Checked: the reference `.sav` (profile "A", created before the Quick Play race) decodes to exactly the profile, car records, flags and globals in `race.wram.bin`/`race.iwram.bin`. The one exception is catch-up: the save holds the default 1, and the race setup set the global to 0 without saving.
 
+### Encoder (`Save::encode`, FIDELITY D7)
+
+- **Write order.** `Save::encode(heap)` follows `save_encode` (`FUN_081492c0`) in its write order.
+- **Heap buffer.** The game encodes into a fresh `malloc(0x200)` (`save_write_profile`), so the unused bits above come from `heap`.
+- **Lossy image.** Fields wider than their bits are cut: the car records' 5-, 6- and 7-bit fields, camera bit 0, and bit 0 of each unlock flag word. Decoding a save therefore need not give back the RAM that was saved.
+- **Checks:**
+  - three game-written saves, encoded from the RAM at `save_encode`'s entry over the heap bytes it overwrote, are byte-identical, and so is the `.sav` mGBA wrote (`eeprom_to_buffer`, its own inverse);
+  - 2,000 oracle cases with random profiles, car records, flag words and globals match;
+  - decode then encode round-trips the reference `.sav`.
+
 ## Not 1:1 / open
 
 - **Opponent count and AI for career events.** The event record has none; where career races set `0x03005784` and the AI skill use of `0x030000BC` are not located. Boss races presumably differ.
@@ -295,12 +411,12 @@ Checked: the reference `.sav` (profile "A", created before the Quick Play race) 
   - `RaceSlot.rest` (`0x7F2588 + 2..`);
   - profile `+0x254`, `+0xF5..`, `+0x3F8`, `0x0300580C`;
   - the style-record field names;
-  - the hunter tuning words of unknown use;
-  - unlock ids `0x117..0x11C` and the parts ids.
-- **Armed bit.** The lap "armed" bit (driver `+0x4D8` bit 1) is set outside `FUN_0813f098`; the setter is not located.
-- **Life at zero.** What happens when hunter life reaches 0 is not located.
-- **Trace checks.** `race_payout`, `hunter_life_tick`, `hunter_hit`, `eliminated_position` and `race_progress` are transcriptions of the named functions, not yet checked against a trace. The unlock rebuild is verified only for a fresh profile (no events done).
-- **Save writer.** Not implemented: no encoder. `FUN_081492c0` is fully described above.
+  - the hunter tuning words of unknown use (`0x03006170`, `0x03006194`, `0x03006198`);
+  - unlock ids `0x117..0x11C` and the parts ids;
+  - the ranked results' bytes at `+0` and `+0xC` (key 2 sorts by the latter; the payout never uses it);
+  - what `FUN_0812ee14` does after a payout (outside the race rules).
+- **The player's section changes** (`FUN_0813f234`, by sector membership) are not ported; `track_player` takes the section as given.
+- **Stale plane rows.** Rows the build skips hold whatever the heap had; the rewrite needs the previous buffer contents (the previous race's table, if the allocator returns the same block) to be exact in a branch that is only entered at its end. Unmeasured.
 
 ## Integration notes
 
@@ -418,3 +534,46 @@ Checked: the reference `.sav` (profile "A", created before the Quick Play race) 
 - **New entries:**
   - **D5:** the race-rule transcriptions need trace checks.
   - **D6:** the lap-armed bit setter and hunter life at zero are not located.
+
+## Integration notes (race-rules)
+
+**FIDELITY:**
+- **D5 closed.** Every race rule is a state model in `career.rs` (`Racer`, `Race`) and matches the game. Checked on:
+  - mGBA traces: story races and a career event, 1,027 lap crossings, 22,201 AI advances;
+  - function-oracle cases on generated inputs (2,000–3,000 per function; table in "Race-rule checks").
+
+  The functions: `lap_crossing` (elimination, finish, non-racers), both racing-line trackers, `race_progress`, `update_places`, `finish_estimate`, the hunter tick, hit and both drains, the results ranking, `career_race_payout`, `style_rating` and `rebuild_unlocks`.
+- **D6 closed.**
+  - **Lap arming:** the player's `FUN_0813edd8` (lap segments 1–9 and branches) and the AI's advance inside `FUN_0814d078` (segments 1–7, shortcuts). Both are ported and checked.
+  - **Hunter life at zero:** nothing happens beyond the clamp. The car keeps racing, and hunter results rank by life. Every reader is listed in "Hunter life".
+- **D7 closed.** `Save::encode` is byte-identical to three game-written saves (and their `.sav`) and to 2,000 oracle cases.
+- **D1 follow-up:** `routes()` (lib.rs) returns the ROM line. The race's own line differs (`career::RacingLine`):
+  - sprints get two extra points;
+  - links are rebuilt;
+  - distances are re-measured: route 23's lap is 108,217 units at race time, not 108,219.
+
+  Anything that follows the racing line in a race should use `RacingLine`.
+- **New open entries:**
+  - **Stale plane rows:** rows the plane build skips keep the old heap contents (route 21's first branch). Exact only with the previous buffer; `RacingLine::planes` takes it as input.
+  - **Player section changes:** `FUN_0813f234` (sector-based) is not ported; `track_player` takes the section as input.
+
+**Address map and symbols:** machine-readable in `docs/engine/notes/symbols.race-rules.csv` (13 new functions, no conflicts) and `addresses.race-rules.csv` (30 rows; `notes_merge.py` flags 16 as already in the map, to edit by hand). Also:
+- `notes_merge.py` prints with the console codepage and crashes on `×`/`→`; run it with `PYTHONIOENCODING=utf-8`.
+- Existing names worth a comment update:
+  - `0x0813edd8 route_track_waypoint`: also arms the lap (driver `+0x4D8` bit 1).
+  - `0x0814136c hunter_wall_hit` is the drain `career::hunter_drain(.., 0, ..)`; `nfsgba-sim`'s `walls.rs` calls it `hunter_hit` in a comment, which is the other function (`0x0814101c`).
+
+**For other crates:** `nfsgba-sim` stops with `Unported` at `FUN_08140f78` (hunter_life_tick). `career::hunter_life_tick(&Race, &mut Racer)`, `hunter_hit` and `hunter_drain` are exact.
+
+**Tools:**
+- `tools/mgba_remote.lua` gained `NFSGBA_MGBA_EXTRA` (more scripts to load).
+- `tools/trace_race_rules.lua` is the race-rule tracer with an autopilot.
+- `tools/oracle_race_rules.py` generates the oracle cases (`.venv`).
+
+The captures (`*.log`, `oracle-*.jsonl`, savestates) are in `data/work/e5298b24/race-rules/`.
+
+**API changes in `career.rs`:**
+- `race_payout` takes the ROM instead of an event list;
+- the hunter functions work on `Racer`/`Race`;
+- `eliminated_position` is replaced by `RacingLine::lap_crossing`;
+- new: `payout_place`, `payout_ranking`, `rank_results`, `rand_table`, `isqrt`, `RacingLine` (`new`, `step`, `planes`, `track_player`, `ai_advance`, `lap_crossing`, `update_places`, `finish_estimate`), `Save::encode`.
