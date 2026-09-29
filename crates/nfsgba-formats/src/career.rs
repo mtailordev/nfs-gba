@@ -3,7 +3,7 @@
 //! Offsets are ROM offsets. RAM addresses in comments are the game's (IWRAM `0x03…`, EWRAM `0x02…`); the
 //! profile struct is `*0x030056EC` (`0x02000808` in the reference run).
 
-use super::{i16_at, ptr, u16_at, u32_at};
+use super::{div, i16_at, ptr, u16_at, u32_at};
 use std::io;
 
 /// 66 event records of 8 bytes: zones 1–5 have 12 events each, zone 6 has 6 (`FUN_0812da08`).
@@ -169,6 +169,260 @@ pub fn route_sections(rom: &[u8]) -> Vec<Vec<Section>> {
                 .collect()
         })
         .collect()
+}
+
+/// A racing-line waypoint as the race code reads it (24 bytes at world `+0x44`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinePoint {
+    pub x: i32,
+    pub z: i32,
+    /// `+0x0C`/`+0x0E`: the same point in another section; `0xFFFF` = none.
+    pub link_section: u16,
+    pub link_index: u16,
+    pub distance: i32,
+}
+
+/// Plane-table row (`*0x03005FB4`, 0x20 bytes per waypoint, `FUN_08138c24`): `[0..2]` unit direction to the next
+/// waypoint (×256), `[2]`/`[3]` two slopes (×0x1000), `[4..6]` the unit normal of the crossing line through the
+/// waypoint (×256), `[6]` its offset (`normal · waypoint`), `[7]` the distance to the next waypoint.
+pub type Plane = [i32; 8];
+
+/// Back table (`*0x03005FB8`, 256 `i32` per section, −1 = none): the lap index where a branch leaves.
+pub type BackTable = [i32; 256];
+
+/// Per route, a pointer to its branch count (`*0x03006108`; a null pointer means 0), read by `race_load_level`.
+pub const ROUTE_BRANCHES: usize = 0x7F_37D8;
+
+/// A route's racing line as the race uses it: world `+0x40` (sections) and `+0x44` (waypoints).
+#[derive(Debug, Clone)]
+pub struct RacingLine {
+    pub sections: Vec<Section>,
+    /// The whole 0x1800-byte copy (256 records; those past the route are whatever ROM data follows).
+    pub points: Vec<LinePoint>,
+}
+
+impl RacingLine {
+    /// The line `race_load_level` builds for route-table record `route` (`None` without one): the ROM copy, two
+    /// points longer in sprints (`FUN_081390b0`), with the branch links rebuilt (`FUN_081391f4`).
+    pub fn new(rom: &[u8], route: usize, sprint: bool) -> Option<RacingLine> {
+        let mut sections = route_sections(rom).swap_remove(route);
+        if sections.is_empty() {
+            return None;
+        }
+        let line = ptr(rom, ROUTE_TABLE + 0x14 * route + 8);
+        let points = (0..0x100)
+            .map(|k| line + 0x18 * k)
+            .map(|w| LinePoint {
+                x: u32_at(rom, w) as i32,
+                z: u32_at(rom, w + 4) as i32,
+                link_section: u16_at(rom, w + 0xC),
+                link_index: u16_at(rom, w + 0xE),
+                distance: u32_at(rom, w + 0x10) as i32,
+            })
+            .collect();
+        let branches = match u32_at(rom, ROUTE_BRANCHES + 4 * route) {
+            0 => 0,
+            p => u32_at(rom, (p - super::ROM_BASE) as usize) as usize,
+        };
+        sections.truncate(branches + 1);
+        let mut this = RacingLine { sections, points };
+        if sprint {
+            this.make_sprint();
+        }
+        this.rebuild_links();
+        Some(this)
+    }
+
+    /// `FUN_081390b0` (sprints): every point moves up one slot, and the lap gets a point before its start and one
+    /// after its end, extrapolated as `5·p − 4·neighbour`. Links past the lap move up one index.
+    fn make_sprint(&mut self) {
+        let p = &mut self.points;
+        let count = usize::from(self.sections[0].count);
+        p.copy_within(0..254, 2);
+        p.copy_within(2..count + 2, 1);
+        let n = count + 2;
+        (p[0].x, p[0].z) = (p[0].x * 5 - p[2].x * 4, p[0].z * 5 - p[2].z * 4);
+        (p[n - 1].x, p[n - 1].z) = (p[n - 1].x * 5 - p[n - 3].x * 4, p[n - 1].z * 5 - p[n - 3].z * 4);
+        for q in &mut p[n..0xFF] {
+            if q.link_index != 0xFFFF {
+                q.link_index += 1;
+            }
+        }
+        self.sections[0].count += 2;
+        for s in &mut self.sections[1..] {
+            s.first += 2;
+        }
+    }
+
+    /// `FUN_081391f4`: clears every link of the route's points, then links each branch's start and end with the
+    /// nearest point (`(Δ >> 4)²`, first found on ties) of the other sections, excluding their last points.
+    fn rebuild_links(&mut self) {
+        let total: usize = self.sections.iter().map(|s| usize::from(s.count)).sum();
+        for q in &mut self.points[..total] {
+            (q.link_section, q.link_index) = (0xFFFF, 0xFFFF);
+        }
+        for b in 1..self.sections.len() {
+            let count = i32::from(self.sections[b].count);
+            for (end, back_index) in [(0, 0), (count - 1, count - 1)] {
+                let at = self.point(b, end);
+                let mut best = (0x7FF_FFFF, 0, 0);
+                for s in (0..self.sections.len()).filter(|&s| s != b) {
+                    for i in 0..i32::from(self.sections[s].count) - 1 {
+                        let q = self.point(s, i);
+                        let (dx, dz) = ((q.x - at.x) >> 4, (q.z - at.z) >> 4);
+                        let d = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz));
+                        if d < best.0 {
+                            best = (d, s, i);
+                        }
+                    }
+                }
+                let (_, s, i) = best;
+                let here = self.index(b, end);
+                (self.points[here].link_section, self.points[here].link_index) = (s as u16, i as u16);
+                let there = self.index(s, i);
+                (self.points[there].link_section, self.points[there].link_index) = (b as u16, back_index as u16);
+            }
+        }
+    }
+
+    fn index(&self, section: usize, index: i32) -> usize {
+        (self.sections[section].first as i32 + index) as usize
+    }
+
+    /// `FUN_0814007c`: point `index` of `section` (the game does no range check).
+    pub fn point(&self, section: usize, index: i32) -> LinePoint {
+        self.points[self.index(section, index)]
+    }
+
+    /// Lap length: the distance of the lap's last waypoint (`race_progress`).
+    pub fn lap_length(&self) -> i32 {
+        self.point(0, i32::from(self.sections[0].count) - 1).distance
+    }
+
+    /// `racing_line_step` (`FUN_0813e860`): index `index` of `section`, following links past either end. The lap
+    /// wraps in lapped races (period `count − 1`) and clamps otherwise; a branch clamps at an unlinked end. Quirk
+    /// kept: stepping back from an unlinked branch start stays in the branch, at `back[section] + index`.
+    pub fn step(&self, lapped: bool, back: &BackTable, mut section: usize, mut index: i32) -> (usize, i32) {
+        loop {
+            let count = i32::from(self.sections[section].count);
+            if index > count - 1 {
+                if section == 0 {
+                    return (0, if lapped { index + 1 - count } else { count - 1 });
+                }
+                let end = self.point(section, count - 1);
+                if end.link_index == 0xFFFF {
+                    return (section, count - 1);
+                }
+                (section, index) = (end.link_section.into(), i32::from(end.link_index) + index - count + 1);
+            } else if index < 0 {
+                if section == 0 {
+                    return (0, if lapped { index - 1 + count } else { 0 });
+                }
+                let start = self.point(section, 0);
+                if start.link_index == 0xFFFF {
+                    index += back[section];
+                } else {
+                    (section, index) = (start.link_section.into(), i32::from(start.link_index) + index);
+                }
+            } else {
+                return (section, index);
+            }
+        }
+    }
+
+    fn stepped(&self, lapped: bool, back: &BackTable, section: usize, index: i32) -> LinePoint {
+        let (s, i) = self.step(lapped, back, section, index);
+        self.point(s, i)
+    }
+
+    /// The plane table and back table that `FUN_08138f30` builds at race start (lap, then each branch where it
+    /// leaves the lap, recursively; `FUN_08138dc4`).
+    pub fn planes(&self, lapped: bool) -> (Vec<Plane>, BackTable) {
+        let mut planes = vec![[0; 8]; self.points.len()];
+        let mut back = [-1; 256];
+        let count = i32::from(self.sections[0].count);
+        let row = |this: &Self, back: &BackTable, s: usize, k: i32| {
+            plane(
+                this.stepped(lapped, back, s, k - 1),
+                this.point(s, k),
+                this.stepped(lapped, back, s, k + 1),
+                this.stepped(lapped, back, s, k + 2),
+            )
+        };
+        for k in 0..count {
+            planes[k as usize] = row(self, &back, 0, k);
+            let p = self.point(0, k);
+            if p.link_index != 0xFFFF && p.link_section != 0 {
+                self.branch_planes(lapped, &mut planes, &mut back, p, k);
+            }
+        }
+        planes[0] = row(self, &back, 0, 0);
+        (planes, back)
+    }
+
+    /// `FUN_08138dc4`: the planes of the branch that `fork` links to, when the branch starts there.
+    fn branch_planes(&self, lapped: bool, planes: &mut [Plane], back: &mut BackTable, fork: LinePoint, at: i32) {
+        let s = usize::from(fork.link_section);
+        let count = i32::from(self.sections[s].count);
+        let d2 = |p: LinePoint| {
+            let (dx, dz) = ((p.x - fork.x) >> 4, (p.z - fork.z) >> 4);
+            dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz))
+        };
+        if d2(self.point(s, 0)) >= d2(self.point(s, count - 1)) {
+            return;
+        }
+        back[s] = at;
+        for k in 0..count {
+            planes[(self.sections[s].first as i32 + k) as usize] = plane(
+                self.stepped(lapped, back, s, k - 1),
+                self.point(s, k),
+                self.stepped(lapped, back, s, k + 1),
+                self.stepped(lapped, back, s, k + 2),
+            );
+            let p = self.point(s, k);
+            if p.link_index != 0xFFFF && p.link_section != 0 && k != count - 1 && k != 0 {
+                self.branch_planes(lapped, planes, back, p, k);
+            }
+        }
+    }
+}
+
+/// `FUN_0815fa54`: floor square root, 16 two-bit steps; 0 gives 1.
+pub fn isqrt(mut v: u32) -> i32 {
+    let (mut rem, mut root) = (0u32, 0u32);
+    for _ in 0..16 {
+        rem = rem * 4 + (v >> 30);
+        v <<= 2;
+        let trial = root << 2 | 1;
+        root <<= 1;
+        if trial <= rem {
+            rem -= trial;
+            root += 1;
+        }
+    }
+    root.max(1) as i32
+}
+
+/// `FUN_08138c24`: one plane-table row from four consecutive waypoints.
+fn plane(prev: LinePoint, cur: LinePoint, next: LinePoint, next2: LinePoint) -> Plane {
+    let unit = |dx: i32, dz: i32| {
+        let len = isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32);
+        (div(dx.wrapping_mul(0x100), len), div(dz.wrapping_mul(0x100), len), len)
+    };
+    let mut r = [0; 8];
+    let (ux, uz, len) = unit(next.x - cur.x, next.z - cur.z);
+    (r[0], r[1], r[7]) = (ux, uz, len);
+    let (ax, az, _) = unit(next2.x - next.x, next2.z - next.z);
+    let (sx, sz, _) = unit(ax + ux, az + uz);
+    let den = sz * uz + sx * ux;
+    r[3] = div((sz * ux - sx * uz) * 0x1000, if den == 0 { 1 } else { den });
+    let (bx, bz, _) = unit(cur.x - prev.x, cur.z - prev.z);
+    let (nx, nz, _) = unit(bx + ux, bz + uz);
+    (r[4], r[5]) = (nx, nz);
+    r[6] = nx.wrapping_mul(cur.x).wrapping_add(nz.wrapping_mul(cur.z));
+    let den = nz * bz + nx * bx;
+    r[2] = div((nz * bx - nx * bz) * 0x1000, if den == 0 { 1 } else { den });
+    r
 }
 
 /// A selectable wingman (menu order; 0 is "none"). Unlock id `0x127 + index`.
@@ -515,6 +769,60 @@ impl Save {
         })
     }
 
+    /// The game's save buffer for this profile (`FUN_081492c0`, in its write order). The game encodes into a fresh
+    /// `malloc(0x200)` (`save_write_profile`), and the bits it never writes keep the heap's old bytes: pass them
+    /// as `heap` (`0xBF` bit 7, `0xC2` bits 1–7, `0xC3` bits 0–3, `0x11B` bits 6–7, `0x1FD..`).
+    /// [`eeprom_to_buffer`] turns the result into the `.sav` image (it is its own inverse).
+    pub fn encode(&self, heap: &[u8; SAVE_SIZE]) -> [u8; SAVE_SIZE] {
+        let mut b = *heap;
+        b[0x100..0x102].fill(0);
+        b[0xB4..0xBC].copy_from_slice(&self.name);
+        for (i, r) in self.cars.iter().enumerate() {
+            b[0x11C + 15 * i..0x11C + 15 * i + 15].copy_from_slice(&self.car_extra[i]);
+            let bit = (self.car_bits >> i) as u8;
+            b[12 * i..12 * i + 12].copy_from_slice(&[
+                r[7] & 0x7F | r[8] << 7,
+                r[8] >> 1 & 0x3F | r[9] << 6,
+                r[9] >> 2 & 0x1F | r[10] << 5,
+                r[10] >> 3 & 0xF | r[0] << 4,
+                r[11] & 0x7F | r[12] << 7,
+                r[12] >> 1 & 0x3F | r[13] << 6,
+                r[13] >> 2 & 0x1F | r[14] << 5,
+                r[14] >> 3 & 0xF | r[2] << 4,
+                r[15] & 0x1F | r[16] << 5,
+                r[16] >> 3 & 3 | (r[6] & 0x1F) << 2 | r[5] << 7,
+                r[5] >> 1 & 0xF | (r[1] & 7) << 4 | r[3] << 7,
+                r[3] >> 1 & 1 | (r[4] & 0x3F) << 1 | bit << 7,
+            ]);
+        }
+        b[0x108..0x11A].copy_from_slice(&self.events);
+        for (i, t) in self.best_times.iter().enumerate() {
+            b[0xC4 + 2 * i..0xC6 + 2 * i].copy_from_slice(&t.to_le_bytes());
+        }
+        b[0x104..0x108].copy_from_slice(&self.field_f5);
+        let bc = u16_at(&b, 0xBC) & 0xF87F | u16::from(self.car & 0xF) << 7;
+        b[0xBC..0xBE].copy_from_slice(&bc.to_le_bytes());
+        b[0x11A] = self.field_1f8;
+        b[0xC0..0xC2].copy_from_slice(&(self.cash as u16).to_le_bytes());
+        b[0xC2] = b[0xC2] & 0xFE | (self.cash >> 16) as u8 & 1;
+        let be = u16_at(&b, 0xBE) & 0xF87F | u16::from(self.wingman & 0xF) << 7;
+        b[0xBE..0xC0].copy_from_slice(&be.to_le_bytes());
+        b[0xBF] = b[0xBF] & 0x87 | (self.field_254 & 0xF) << 3;
+        let o = self.options;
+        b[0xBD] = b[0xBD] & 0x7F | o.camera << 7;
+        b[0xBE] = b[0xBE] & 0xF8 | o.units & 1 | (o.hud & 1) << 1 | (o.transmission & 1) << 2;
+        b[0xBD] = b[0xBD] & 0x87 | (o.music & 3) << 3 | (o.sfx & 3) << 5;
+        b[0xBE] = b[0xBE] & 0x8F | (o.language & 7) << 4;
+        b[0xBC] = b[0xBC] & 0x80 | self.zone & 7 | (self.slot & 0xF) << 3;
+        b[0x11B] = b[0x11B] & 0xC0 | self.unlock_flags & 0x3F;
+        b[0xBE] = b[0xBE] & 0xF7 | (o.catch_up & 1) << 3;
+        b[0xC3] = b[0xC3] & 0xF | o.mode_flags << 4;
+        b[0x102..0x104].copy_from_slice(&SAVE_VERSION.to_le_bytes());
+        let sum = checksum(&b);
+        b[0x100..0x102].copy_from_slice(&sum.to_le_bytes());
+        b
+    }
+
     /// 1 won, 2 second place, 3 not done (a new profile has every event at 3) (`FUN_08135d4c`).
     pub fn event_status(&self, event: usize) -> u8 {
         self.events[event >> 2] >> ((event & 3) * 2) & 3
@@ -670,6 +978,43 @@ mod tests {
         let line = ptr(&rom, ROUTE_TABLE + 0x14 * 23 + 8);
         assert_eq!(rom[line..line + 8], rom[line + 35 * 0x18..line + 35 * 0x18 + 8]);
         assert_eq!(u32_at(&rom, line + 35 * 0x18 + 0x10), 108_219);
+        assert_eq!(RacingLine::new(&rom, 23, false).unwrap().lap_length(), 108_219);
+    }
+
+    /// The world's racing line and the plane table that `race_load_level` built for the reference race (route 23,
+    /// the first race after boot, so the lapped flag was still 0 when the planes were built).
+    #[test]
+    fn racing_line_and_planes_match_the_reference_race() {
+        let Some(rom) = rom() else { return };
+        let (Some(iw), Some(ew)) = (reference("race.iwram.bin"), reference("race.wram.bin")) else {
+            return;
+        };
+        let at = |p: u32| (p - 0x0200_0000) as usize;
+        let world = |o: usize| at(u32_at(&iw, 0xC0 + o));
+        let line = RacingLine::new(&rom, 23, false).unwrap();
+        let total: usize = line.sections.iter().map(|s| usize::from(s.count)).sum();
+        for (s, sec) in line.sections.iter().enumerate() {
+            let h = world(0x40) + 8 * s;
+            assert_eq!((u16_at(&ew, h), u32_at(&ew, h + 4)), (sec.count, sec.first));
+        }
+        for (k, p) in line.points[..total].iter().enumerate() {
+            let w = world(0x44) + 0x18 * k;
+            let ram = (
+                u32_at(&ew, w) as i32,
+                u32_at(&ew, w + 4) as i32,
+                u16_at(&ew, w + 0xC),
+                u16_at(&ew, w + 0xE),
+            );
+            assert_eq!((p.x, p.z, p.link_section, p.link_index), ram, "point {k}");
+        }
+        let (table, back_table) = (at(u32_at(&iw, 0x5FB4)), at(u32_at(&iw, 0x5FB8)));
+        let (planes, back) = line.planes(false);
+        for (k, row) in planes[..total].iter().enumerate() {
+            let ram: Plane = std::array::from_fn(|i| u32_at(&ew, table + 0x20 * k + 4 * i) as i32);
+            assert_eq!(*row, ram, "plane row {k}");
+        }
+        assert!((0..256).all(|s| back[s] == u32_at(&ew, back_table + 4 * s) as i32));
+        assert_eq!((back[1], line.step(true, &back, 1, -1)), (19, (0, 18))); // the branch start links back to 19
     }
 
     #[test]
@@ -743,6 +1088,9 @@ mod tests {
         };
         let buf = eeprom_to_buffer(&sav);
         let save = Save::parse(&buf).unwrap();
+        // The encoder reproduces the game's image bit for bit (unused bits from the buffer it overwrites).
+        assert_eq!(eeprom_to_buffer(&save.encode(&buf)), sav[..SAVE_SIZE]);
+        assert_eq!(Save::parse(&save.encode(&[0x5A; SAVE_SIZE])).unwrap(), save);
         assert_eq!(&save.name, b"A\0\0\0\0\0\0\0");
         assert!((0..EVENT_COUNT).all(|e| save.event_status(e) == 3));
         let (Some(iw), Some(ew)) = (reference("race.iwram.bin"), reference("race.wram.bin")) else {
