@@ -87,11 +87,11 @@ KIND_SCREENS = {  # kind name -> (index in KIND_HANDLERS, screens)
     "intro": (6, [21, 22, 23, 24, 25, 26, 37, 47, 48]), "kind38": (7, [38, 39, 40, 41, 42, 43]),
 }
 # Ported handlers: every exit (each is only `FUN_081372D8(world)`), the intro kind and those listed per kind.
-PORTED_KINDS = ["intro", "kind7", "event", "career"]
+PORTED_KINDS = ["intro", "kind7", "event", "career", "setup"]
 PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
-    0x08135FDC: 2, 0x0813550C: 1, 0x0812B320: 0,  # sound, message box draw, screen 15
+    0x08135FDC: 2, 0x0813550C: 1,  # sound, message box draw
     0x08160E74: 0, 0x0815E9E8: 2, 0x08139E34: 1, 0x0813A514: 1, 0x0813A954: 1,  # game state step
     0x08135F38: 0, 0x0812EAAC: 1, 0x081396C4: 1, 0x08136054: 1,
     0x08162228: 1, 0x0816223C: 1, 0x081621F0: 4, 0x0812B084: 0, 0x08161F38: 1, 0x0816102C: 0,  # main_frame
@@ -255,6 +255,7 @@ def intro(_gba, rng, n=2400):
 
 
 MENU_SNAPS = ["ui-2d/lang", "ui-2d/n7", "ui-2d/n9", "race-rules/a4", "race-rules/v2"]
+SETUP_COUNTS_GBA = Gba("ui-2d/n7")  # reads the setup screens' item counts from the ROM
 
 
 def menu_state(rng, screens):
@@ -275,7 +276,7 @@ def menu_state(rng, screens):
         (0x03005948, word(pick([0, 1]))),
         (0x030000A0, word(pick([0, 1, 2]))),
         (0x03005600, word(rng.randrange(5))),
-        (0x03005388, word(rng.randrange(44))),
+        (0x03005388, word(rng.randrange(1, 43))),  # route numbers 1..42 (0x7E49C4 has 43 entries)
         (0x03005610, word(pick([0, 1]))),
         (0x030064C8, word(rng.randrange(256))),
         (PROFILE_AT + 0x42D, bytes(pick([0, 0xFF, rng.randrange(256)]) for _ in range(40))),  # unlock bits
@@ -302,6 +303,26 @@ def kind_extra(rng, kind):
              + bytes([pick(list(range(-2, 20))) & 0xFF, pick([0, 1])])),
             (PROFILE_AT + 0x404, bytes([pick([0, 0, 1, 2, 3, 4])])),
             (PROFILE_AT + 0x1FB, bytes([rng.randrange(8)])),
+        ]
+    if kind == "setup":
+        counts = [struct.unpack("<H", SETUP_COUNTS_GBA.read_base(0x087E6260 + 0x10 * i + 10, 2))[0] for i in range(6)]
+        return [
+            (0x030056E0, word(rng.randrange(4))),
+            (PROFILE_AT + 0x368, bytes(rng.randrange(c) for c in counts)),
+            (PROFILE_AT + 0x374, bytes(pick([0, 1, 3, 0xFF]) for _ in range(16))),
+            (PROFILE_AT + 0x3BC, b"".join(word(pick([0, 0, 1, 2, 3, 4, -1, 7])) for _ in range(16))),
+            (PROFILE_AT + 0x200, word(pick([0, 0, 1, 2, 7, 12]))),
+            (PROFILE_AT + 0x1F8, bytes([pick([0, 0, 1, 2]), pick([0, 0, 1]), 0, rng.randrange(6),
+                                        rng.randrange(12)])),  # hints, zone, event slot
+            (PROFILE_AT + 0x10, bytes([rng.randrange(15), rng.randrange(15)])),
+            (0x03005784, word(pick([0, 1, 2, 3]))),
+            (0x03005998, word(pick([0, 1]))),
+            (0x030059F4, word(pick([0, 0, 1, -1]))),
+            (0x030053B4, word(rng.randrange(0x100))),
+            (0x030053E4, word(pick([0, 1, 2]))), (0x03000040, word(pick([0, 1]))), (0x03005698, word(pick([0, 1]))),
+            (0x03005798, word(pick([0, 1]))), (0x0300578C, word(pick([0, 8, 0x10, 0x3F]))),
+            (0x030053A4, word(pick([0, 8, 0x10, 0x3F]))), (0x03000050, word(pick([0, 1]))),
+            (0x030064C0, struct.pack("<H", pick([0, 1, 1, 1, 0x10, 0x20, 0x40, 0x80, 0x200, 0x30]))),
         ]
     if kind == "career":
         keys = [pick([0x31A, 0x194, 0x39A, 0xC6, 0x3CF, 0xA3, 0x3C1, 0x100, 0x2AB]) for _ in range(pick([0, 1, 2, 4]))]
@@ -344,15 +365,21 @@ def kind_extra(rng, kind):
     return []
 
 
+KIND_ENTRIES = {"setup": [(0x0812BB5C, 15)]}  # goto_screen(15)
+
+
 def kind_cases(rng, kind, n):
     """Each handler of `kind` (enter, update, draw with `full`, exit) called directly on random menu states."""
     gbas = {s: Gba(s) for s in MENU_SNAPS}
-    handlers = KIND_HANDLERS[KIND_SCREENS[kind][0]]
+    # The kind's four handlers, plus screen entries that run code outside them (enter_screen: screen 15 picks
+    # the career opponents first).
+    entries = [(h, None) for h in KIND_HANDLERS[KIND_SCREENS[kind][0]]] + KIND_ENTRIES.get(kind, [])
     cases = []
     for i in range(n):
         snap = rng.choice(MENU_SNAPS)
         mem = menu_state(rng, KIND_SCREENS[kind][1]) + kind_extra(rng, kind)
-        fn, arg = handlers[i % 4], rng.choice([0, 1])
+        fn, arg = entries[i % len(entries)]
+        arg = rng.choice([0, 1]) if arg is None else arg
         ret = {0x08149FD8: rng.choice([0, 0, 1])}
         r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
         cases.append(dict(snap=snap, fn=hex(fn), arg=arg, mem=[[a, b.hex()] for a, b in mem],
@@ -371,6 +398,10 @@ def event(_gba, rng, n=1600):
 
 def career(_gba, rng, n=1600):
     return kind_cases(rng, "career", n)
+
+
+def setup(_gba, rng, n=1600):
+    return kind_cases(rng, "setup", n)
 
 
 def main(which):

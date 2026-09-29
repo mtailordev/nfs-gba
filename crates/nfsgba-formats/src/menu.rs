@@ -275,6 +275,9 @@ pub fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
         (Kind::Career, 0) => career_zone_enter(g),
         (Kind::Career, 1) => career_zone_update(g),
         (Kind::Career, 2) => career_zone_draw(g, full),
+        (Kind::Setup, 0) => setup_enter(g),
+        (Kind::Setup, 1) => setup_update(g),
+        (Kind::Setup, 2) => setup_draw(g, full),
         // Every kind's exit handler (`0x08132780`, `0x0812E850`, …) is only this call: the menu scene's teardown.
         (_, 3) => g.unported(SCENE_EXIT, &[WORLD]),
         _ => g.unported(kind.handlers()[phase], args),
@@ -1885,6 +1888,427 @@ fn unlock_messages(g: &mut Gba) {
     }
 }
 
+// The settings screens (Setup: 0x10 options, 0xA Quick Play, 0xF career race; records at `0x7E6260`,
+// `career::setup_screens`). Cursor per screen at profile `+0x368 + index`; arrow delays at `+0x374 + 2·item`.
+const SETUP_SCREENS: u32 = 0x087E_6260;
+const SETTINGS_CHANGED: u32 = 0x0300_5998;
+const SAVE_WRITE_PROFILE: u32 = 0x0814_9FD8;
+
+/// The setup record of the screen: 0x10 → 0, 0xA → 1, 0xF → 2..5 by race mode; −1 for anything else.
+fn setup_index(g: &Gba) -> i32 {
+    match g.u32(SCREEN) {
+        0xF => match g.u32(RACE_MODE) {
+            0 => 2,
+            1 => 3,
+            2 => 4,
+            3 => 5,
+            _ => -1,
+        },
+        0xA => 1,
+        0x10 => 0,
+        _ => -1,
+    }
+}
+
+fn setup_page(index: i32) -> u32 {
+    if index < 0 {
+        0
+    } else {
+        SETUP_SCREENS + 0x10 * index as u32
+    }
+}
+
+/// `setting_variable` (`0x08132790`): setting 0 is the race mode, 1 the wingman (profile `+0x200`), 2..=0x10 the
+/// profile's setting copies `+0x3C0 + 4·(id − 2)`; others none (0).
+fn setting_variable(g: &Gba, id: u32) -> u32 {
+    match id {
+        0 => RACE_MODE,
+        1 => g.u32(PROFILE) + 0x200,
+        2..=0x10 => g.u32(PROFILE) + 0x3C0 + 4 * (id - 2),
+        _ => 0,
+    }
+}
+
+/// The setting globals a settings screen edits through its profile copies (`+0x3C0…`).
+const SETTING_GLOBALS: [(u32, u32); 5] = [
+    (REVERSE, 0x3C0),
+    (0x0300_56E4, 0x3C4), // laps
+    (0x0300_5608, 0x3C8), // difficulty
+    (OPPONENTS, 0x3CC),
+    (0x0300_5604, 0x3D0), // traffic
+];
+
+/// `setup_screen_enter` (`0x081328F4`): the page's background, at most 2 opponents with a wingman, and the
+/// settings copied into the profile (`+0x3BC…+0x3F4`; music and sound volumes / 8).
+pub fn setup_enter(g: &mut Gba) -> u32 {
+    let page = setup_page(setup_index(g));
+    let (m, p) = (
+        g.u16(page + 6) as i16 as i32 as u32,
+        g.u16(page + 8) as i16 as i32 as u32,
+    );
+    menu_scene_setup(g, m, p, 0xFFFF);
+    if g.u32(g.u32(PROFILE) + 0x200) != 0 && g.u32(OPPONENTS) > 2 {
+        g.set_u32(OPPONENTS, 2);
+    }
+    let p = g.u32(PROFILE);
+    g.set_u32(p + 0x3BC, 0);
+    for (global, off) in SETTING_GLOBALS {
+        g.set_u32(p + off, g.u32(global));
+    }
+    for (off, global) in [
+        (0x3D4, 0x0300_580C),
+        (0x3F4, 0x0300_0050),
+        (0x3D8, 0x0300_53E4),
+        (0x3DC, UNITS),
+        (0x3E0, 0x0300_5698),
+        (0x3E4, 0x0300_5798),
+    ] {
+        g.set_u32(p + off, g.u32(global));
+    }
+    g.set_u32(p + 0x3E8, g.u32(0x0300_578C) >> 3);
+    g.set_u32(p + 0x3EC, g.u32(0x0300_53A4) >> 3);
+    g.set_u32(p + 0x3F0, g.u32(LANGUAGE));
+    g.set_u32(0x0300_5994, 0);
+    1
+}
+
+/// `FUN_08135640` (type, text, arg): opens a message box when none is open (and swallows the keys); 1 if opened.
+fn message_box_open(g: &mut Gba, kind: u32, text: u32, arg: u32) -> u32 {
+    let open = g.i32(MESSAGE_BOX) < 0;
+    if open {
+        g.set_u32(MESSAGE_BOX, kind);
+        g.set_u32(0x0300_59F8, text);
+        g.set_u32(0x0300_59EC, arg);
+        g.set_u16(KEYS, 0);
+    }
+    open as u32
+}
+
+/// `setup_screen_update` (`0x08132AB8`). Outside 0xA the profile copies drive the race globals; left/right step
+/// the item's value within its range (at most 2 laps/opponents with a wingman; laps and opponents move together in
+/// an elimination), up/down move the cursor, SELECT on 0xF opens the career menu (9). A runs the item's action:
+/// a screen (Quick Play 0x81 may first show a hint, 0x2B), back when nothing changed, else the save question
+/// (0x87). A "yes" on the options (0x10) writes the settings back and saves the profile.
+pub fn setup_update(g: &mut Gba) -> u32 {
+    let index = setup_index(g);
+    let screen = crate::career::setup_screens(&g.rom[..]).get(index as usize).cloned();
+    let cursor_at = |g: &Gba| g.u32(PROFILE).wrapping_add(0x368).wrapping_add(index as u32);
+    let item_of = |g: &Gba| screen.as_ref().map(|s| s.items[g.i8(cursor_at(g)) as usize].clone());
+    let count = screen.as_ref().map_or(0, |s| s.items.len() as i32);
+    let item = item_of(g).expect("setup item");
+    let (min, mut max) = (item.min as i32, item.max as i32);
+    let var = setting_variable(g, item.setting);
+    if g.u32(SCREEN) != 0xA {
+        let p = g.u32(PROFILE);
+        for (global, off) in SETTING_GLOBALS {
+            g.set_u32(global, g.u32(p + off));
+        }
+        g.set_u32(0x0300_580C, 0);
+        g.set_u32(0x0300_0050, g.u32(p + 0x3F4));
+        if g.u32(SCREEN) == 0xF && g.u16(KEYS) & 0x200 != 0 {
+            g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+            goto_screen(g, 9);
+            mark_screen_changed(g);
+        }
+        let p = g.u32(PROFILE);
+        if ((g.u32(RACE_MODE) == 1 && var == p + 0x3C4) || var == p + 0x3CC) && g.u32(p + 0x200) != 0 {
+            max = 2;
+        }
+        let delay = |g: &Gba, side: u32| g.u32(PROFILE) + 0x374 + side + 2 * g.i8(cursor_at(g)) as i32 as u32;
+        if g.u16(KEYS) & 0x20 != 0 {
+            if g.i32(var) == min {
+                g.set_u32(var, (max + 1) as u32);
+            }
+            g.set_u32(var, (g.i32(var) - 1) as u32);
+            g.set_u8(delay(g, 0), 3);
+            g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+            mark_screen_changed(g);
+        }
+        if g.u16(KEYS) & 0x10 != 0 {
+            let v = g.i32(var) + 1;
+            g.set_u32(var, v as u32);
+            if max < v {
+                g.set_u32(var, min as u32);
+            }
+            g.set_u8(delay(g, 1), 3);
+            g.unported(CARBON_PLAY_SOUND, &[4, 1]);
+            mark_screen_changed(g);
+        }
+        if g.u32(RACE_MODE) == 1 {
+            let p = g.u32(PROFILE);
+            if var == p + 0x3C4 {
+                g.set_u32(p + 0x3CC, g.u32(var));
+            }
+            if var == p + 0x3CC {
+                g.set_u32(p + 0x3C4, g.u32(var));
+            }
+            g.set_u32(0x0300_56E4, g.u32(p + 0x3C4));
+            g.set_u32(OPPONENTS, g.u32(p + 0x3CC));
+        }
+        if g.u16(KEYS) & 0x40 != 0 {
+            let c = cursor_at(g);
+            if g.i8(c) > 0 {
+                g.set_u8(c, g.u8(c).wrapping_sub(1));
+                g.unported(CARBON_PLAY_SOUND, &[1, 1]);
+                mark_screen_changed(g);
+            }
+        }
+        if g.u16(KEYS) & 0x80 != 0 {
+            let c = cursor_at(g);
+            if (g.i8(c) as i32) < count - 1 {
+                g.set_u8(c, g.u8(c).wrapping_add(1));
+                g.unported(CARBON_PLAY_SOUND, &[1, 1]);
+                mark_screen_changed(g);
+            }
+        }
+    }
+    for i in 0..0x10 {
+        let c = g.u32(PROFILE) + 0x374 + i;
+        if g.i8(c) > 0 {
+            g.set_u8(c, g.u8(c) - 1);
+        }
+    }
+    let action = item_of(g).expect("setup item").action as u16 as i16 as i32;
+    if g.u16(KEYS) == 1 && action != -1 {
+        let p = g.u32(PROFILE);
+        let changed = [
+            (0x0300_53E4, 0x3D8),
+            (UNITS, 0x3DC),
+            (0x0300_5698, 0x3E0),
+            (0x0300_5798, 0x3E4),
+        ]
+        .iter()
+        .any(|&(global, off)| g.u32(global) != g.u32(p + off))
+            || g.u32(0x0300_578C) >> 3 != g.u32(p + 0x3E8)
+            || g.u32(0x0300_53A4) >> 3 != g.u32(p + 0x3EC)
+            || g.u32(LANGUAGE) != g.u32(p + 0x3F0)
+            || g.u32(0x0300_0050) != g.u32(p + 0x3F4);
+        g.set_u32(SETTINGS_CHANGED, changed as u32);
+        if action < 0x85 {
+            if action == 0x81 {
+                if g.u32(CAREER) == 1 && hint_due(g, 10, 0) != 0 {
+                    g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+                    goto_screen(g, 0x2B);
+                    mark_screen_changed(g);
+                    return 1;
+                }
+                g.set_u8(BACK_TOP, 1);
+            }
+            goto_screen(g, action);
+            mark_screen_changed(g);
+        } else if g.u32(SETTINGS_CHANGED) == 0 {
+            menu_back(g);
+        } else if action == 0x87 {
+            message_box_open(g, 2, 0x1D8, u32::MAX);
+        }
+        g.unported(CARBON_PLAY_SOUND, &[2, 1]);
+    }
+    if g.i32(MESSAGE_RESULT) > 0 {
+        if g.u32(SCREEN) == 0x10 {
+            if g.u32(SETTINGS_CHANGED) != 0 {
+                let p = g.u32(PROFILE);
+                for (global, off) in SETTING_GLOBALS {
+                    g.set_u32(global, g.u32(p + off));
+                }
+                g.set_u32(0x0300_580C, 0);
+                for (global, off) in [
+                    (0x0300_53E4, 0x3D8),
+                    (UNITS, 0x3DC),
+                    (0x0300_5698, 0x3E0),
+                    (0x0300_5798, 0x3E4),
+                ] {
+                    g.set_u32(global, g.u32(p + off));
+                }
+                g.set_u32(0x0300_578C, g.u32(p + 0x3E8) << 3);
+                g.set_u32(0x0300_53A4, g.u32(p + 0x3EC) << 3);
+                g.set_u32(LANGUAGE, g.u32(p + 0x3F0));
+                g.set_u32(0x0300_0050, g.u32(p + 0x3F4));
+                let save = g.u32(SAVE_BUFFER);
+                g.unported(SAVE_WRITE_PROFILE, &[save]);
+            }
+            menu_back(g);
+        }
+        g.set_u32(MESSAGE_RESULT, 0);
+    }
+    1
+}
+
+/// `setup_screen_draw` (`0x08133074`): heading; on 0xA a summary (track or mode, car, wingman, blinking on bit 7
+/// of the frame counter) and items from the fourth; every item's name and value text (`options[value]` in range,
+/// else the text at `0x087E62C0`), the cursor highlight and, outside 0xA, the arrows; prompts (0xF adds 0xB5).
+pub fn setup_draw(g: &mut Gba, _full: u32) -> u32 {
+    let index = setup_index(g);
+    let page = setup_page(index);
+    let screens = crate::career::setup_screens(&g.rom[..]);
+    let items = screens.get(index as usize).map(|s| s.items.clone()).unwrap_or_default();
+    let count = g.u16(page + 10) as i16 as i32;
+    let slot = g.u32(0x087E_49C4_u32.wrapping_add(g.u32(ROUTE).wrapping_mul(4)));
+    let car = g.i8(g.u32(PROFILE) + 0x10) as i32 as u32;
+    g.set_u32(PLAYER_CAR, car);
+    g.unported(INTRO_PAGE_SETUP, &[g.u32(0x0300_57F0)]);
+    let text = |g: &mut Gba, font: u32, key: u32, x: u32, y: u32, a: u32, c: u32| {
+        g.unported(TEXT_MENU, &[font, key, x, y, a, c]);
+    };
+    let alt = |g: &mut Gba, m: u32, x: u32, y: u32| {
+        g.unported(MENU_BLIT_MATERIAL_ALT, &[WORLD, m, x, y]);
+    };
+    text(g, 0xC, g.u16(page) as i16 as i32 as u32, 0xEC, 2, u32::MAX, 0);
+    let (first, top, pitch) = if g.u32(SCREEN) == 0xA {
+        for (m, x, y) in [
+            (0xD2, 2, 0xF),
+            (0xD5, 0x52, 0xF),
+            (0xD2, 2, 0x1F),
+            (0xD5, 0x52, 0x1F),
+            (0xD2, 8, 0x2F),
+            (0xD4, 0x78, 0x2F),
+        ] {
+            alt(g, m, x, y);
+        }
+        if g.u32(FLASH) & 0x80 == 0 {
+            text(g, 0xE, 0x2E3, 3, 0x14, 0, 0);
+            text(
+                g,
+                0xE,
+                g.u16(0x087E_4A70_u32.wrapping_add(slot.wrapping_mul(4))) as u32,
+                0x55,
+                0x14,
+                0,
+                0,
+            );
+        } else {
+            text(g, 0xE, 0x131, 3, 0x14, 0, 0);
+            text(g, 0xE, g.u32(0x0879_9B6C + 4 * g.u32(RACE_MODE)), 0x55, 0x14, 0, 0);
+        }
+        text(g, 0xE, items[1].text_key, 3, 0x24, 0, 0);
+        let car = if g.u32(CAREER) == 0 {
+            g.i8(g.u32(PROFILE) + 0x11) as i32
+        } else {
+            g.i32(PLAYER_CAR)
+        };
+        text(
+            g,
+            0xE,
+            g.u16(0x087E_517C_u32.wrapping_add((car * 8) as u32)) as i16 as i32 as u32,
+            0x55,
+            0x24,
+            0,
+            0,
+        );
+        text(g, 0xE, 0x3A5, 0xC, 0x34, 0, 0);
+        let w = g.u32(g.u32(PROFILE) + 0x200);
+        let (key, width) = if w == 0 {
+            (0x3A6, 0x60)
+        } else if g.u32(FLASH) & 0x80 == 0 {
+            (if w & 1 == 0 { 0x113 } else { 0x90 }, 0x70)
+        } else {
+            (w + 0x3A6, 0x60)
+        };
+        g.unported(TEXT_BOX, &[0xE, key, 0xB0, 0x34, width, 2, 0]);
+        (3, 0x13, 0x10)
+    } else {
+        (0, 0x18, 0x11)
+    };
+    let cursor_at = g.u32(PROFILE).wrapping_add(0x368).wrapping_add(index as u32);
+    for i in first..count {
+        let it = &items[i as usize];
+        let on = |g: &Gba| i == g.i8(cursor_at) as i32;
+        let y = pitch * i + top;
+        if on(g) {
+            alt(g, 0xD9, 8, (y - 4) as u32);
+            alt(g, 0xD7, 0x78, (y - 4) as u32);
+        } else {
+            alt(g, 0xD2, 8, (y - 4) as u32);
+            alt(g, 0xD4, 0x78, (y - 4) as u32);
+        }
+        let colour = if on(g) { 8 } else { 0 };
+        text(g, 0xE, it.text_key, 0xC, (y + 1) as u32, 0, colour);
+        let var = setting_variable(g, it.setting);
+        let key = if var == 0 {
+            it.options[0]
+        } else {
+            let v = g.i32(var);
+            if (it.min as i32..=it.max as i32).contains(&v) {
+                it.options[v as usize]
+            } else {
+                0x087E_62C0
+            }
+        };
+        let colour = if on(g) { 8 } else { 0 };
+        g.unported(TEXT_BOX, &[0xE, key, 0xB0, (y + 1) as u32, 0x70, 2, colour]);
+        if g.u32(SCREEN) != 0xA && g.i32(MESSAGE_BOX) < 0 {
+            let p = g.u32(PROFILE);
+            let lit = |g: &Gba, off: u32| g.i8(p + off + 2 * i as u32) >= 1;
+            let m = if lit(g, 0x374) { 0xAE } else { 0xAD };
+            g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 0x76, (y - 4) as u32]);
+            let m = if lit(g, 0x375) { 0xB0 } else { 0xAF };
+            g.unported(MENU_BLIT_MATERIAL, &[WORLD, m, 0xDA, (y - 4) as u32]);
+        }
+    }
+    let (l, r) = (
+        g.u16(page + 2) as i16 as i32 as u32,
+        g.u16(page + 4) as i16 as i32 as u32,
+    );
+    let third = if g.u32(SCREEN) == 0xF { 0xB5 } else { u32::MAX };
+    g.unported(MENU_BUTTON_PROMPTS, &[l, r, third]);
+    0
+}
+
+/// `setup_screen_15_prepare` (`FUN_0812B320`, entering screen 15): the career race's opponents, ids in the results
+/// slots `0x03005655..=57`: three different random picks (`rand & 7`) of the zone's eight (`0x40 + 8·zone`, zone 5:
+/// `0x60`), the first replaced by the zone's boss (`0x10 + 2·zone`, `+1`) on its boss events (and event 0x41), and
+/// the wingman (`0x20 +` wingman) in the last opponent slot. In a two-player career before the first hint the
+/// first opponent is fixed (0x2D).
+fn career_opponents(g: &mut Gba) {
+    let p = g.u32(PROFILE);
+    let zone = g.u8(p + ZONE) as u32;
+    let event = g.u8(p + 0x1FC) as i32 + (zone * 12) as i32;
+    if g.u32(CAREER) == 2 && g.u8(p + 0x1F8) == 0 {
+        g.set_u8(RESULTS + 5, 0x2D);
+        return;
+    }
+    let a = rand_table(g) as u8 & 7;
+    let b = loop {
+        let v = rand_table(g) as u8 & 7;
+        if v != a {
+            break v;
+        }
+    };
+    let c = loop {
+        let v = rand_table(g) as u8 & 7;
+        if v != b && v != a {
+            break v;
+        }
+    };
+    let p = g.u32(PROFILE);
+    let z = g.i8(p + ZONE);
+    let base = if z == 5 {
+        0x60
+    } else {
+        (z as u8).wrapping_mul(8).wrapping_add(0x40)
+    };
+    let twice = (zone * 2) as u8;
+    let mut first = a.wrapping_add(base);
+    if g.u16(0x087E_4714 + zone * 4) as i16 as i32 == event {
+        first = twice.wrapping_add(0x10);
+    }
+    if g.u16(0x087E_4714 + (zone * 2 + 1) * 2) as i16 as i32 == event {
+        first = twice.wrapping_add(0x11);
+    }
+    if event == 0x41 {
+        first = twice.wrapping_add(0x11);
+    }
+    g.set_u8(RESULTS + 5, first);
+    g.set_u8(RESULTS + 6, b.wrapping_add(base));
+    g.set_u8(RESULTS + 7, c.wrapping_add(base));
+    let w = g.u32(p + 0x200);
+    if w != 0 {
+        g.set_u8(
+            RESULTS.wrapping_add(g.u32(OPPONENTS)).wrapping_add(5),
+            (w as u8).wrapping_add(0x20),
+        );
+    }
+}
+
 /// `rand_table` (`0x0815FCFC`): the next of the 256 numbers at `0x7C03F0`.
 pub fn rand_table(g: &mut Gba) -> u32 {
     let i = (g.u32(RAND_INDEX) + 1) & 0xFF;
@@ -1920,9 +2344,7 @@ pub fn enter_screen(g: &mut Gba) {
             g.set_u32(REVERSE, 0);
             g.set_u8(profile + 0x404, 0);
         }
-        15 => {
-            g.unported(0x0812_B320, &[]);
-        }
+        15 => career_opponents(g),
         40 => g.set_u32(FADE, -0x10i32 as u32),
         _ => {}
     }
@@ -2335,6 +2757,12 @@ mod tests {
     #[test]
     fn race_results_match_the_game() {
         replay("career");
+    }
+
+    /// The settings screens (10, 15, 16): `tools/ui_menu_oracle.py setup`.
+    #[test]
+    fn settings_screens_match_the_game() {
+        replay("setup");
     }
 
     const KINDS: [Kind; 8] = [
