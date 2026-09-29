@@ -19,8 +19,7 @@ What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 - **Checks:** `tools/gate.py` (rustfmt, clippy `-D warnings`, all tests with data required, Python tests, fixture manifest, notes, `NOT 1:1` markers) passes 7/7. The ledger has 36 open entries and 35 closed.
 - **Not yet:** boot → menus → race in our code (the menus port has logic but no drawing: U3, U7); the garage screens (Kind18); coverage of the 415 functions never reached; the high-resolution view agrees with the reference frame only 49% exactly (R27).
 - **Structural debt still open (from the 2026-09-29 audit):**
-  - most of the sim and game still keep state in a GBA-layout RAM image (the typed `World` step; the camera is typed, the car step in progress);
-  - two racing-line models (D16);
+  - `Game` still holds the GBA RAM image, with typed subsystems loading and storing their state at each call (the flip is left);
   - ROM data read by hard-coded BN7E offsets (`GameData` exists; each migrated subsystem moves its offsets into `data::bn7e`);
   - several Closed claims have no test in the repo.
 
@@ -51,7 +50,7 @@ Done: the test kit and merge gate (`tools/gate.py`, `docs/engine/testkit.md`, `d
 
 Left, in order:
 1. ~~**One viewer path**~~ (done 2026-09-29, R28 closed): every race mode runs through `nfsgba-game`; routes are built in Rust (`race_init::apply_setup` + `race_start`).
-2. **Typed `World`** (the IW4L / Skate 3 style the user wants): each subsystem rewritten on typed `World` state, with the existing exact Rust port as its reference (differential tests on every trace state; the contract no longer asks for bit-exact RAM). Conventions and the order: `docs/engine/typed-state.md` (`layout!`, `state/`, `GameData`, adapters in `view/`). Done: the camera. In progress: the car step (with D16). Then AI and traffic, the matrix slots, `race_init` (also move its `RaceView` readers into `view/`), the rest of the HUD, the menus (their own RAM image `menu::Gba` lives in `nfsgba-formats`, below `layout!` in `nfsgba-sim`: plan where `Mem` and `layout!` live first). Last, `Game` holds the `World` and RAM images exist only in tests.
+2. **Typed `World`** (the IW4L / Skate 3 style the user wants): each subsystem rewritten on typed `World` state, with the existing exact Rust port as its reference (differential tests on every trace state; the contract no longer asks for bit-exact RAM). Conventions and the order: `docs/engine/typed-state.md` (`layout!`, `state/`, `GameData`, adapters in `view/`). Done: the camera, the car step (D16), AI and traffic (D19), the matrix slots, effects and HUD adapters, the menus' top level and three screen kinds (moved to `nfsgba-game/src/menu/`). Left (`typed-state.md`, "Order"): the menus' List, Intro, Setup and Kind38 screens; the flip: `race_start` builds a typed `World`, `Game` holds it, heap blocks and sector lists become typed, RAM images only in tests.
 
 ### 3. Milestones after that
 

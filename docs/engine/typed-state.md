@@ -77,8 +77,14 @@ few RAM twins left in `nfsgba_sim::ram` (`route::lap`, `wingman_command`, `conta
 
 ## Order
 
-Done: the camera, the car step, the AI and traffic. Next: the matrix slots and
-effects (`slots.rs`) with the rest of the HUD, the menus, then `race_init` (it builds the whole `World`), then the
-flip: `Game` holds the `World`.
+Done:
+- the camera; the car step (`CarWorld`); the AI and traffic (on `CarWorld`, spawn inside the car step);
+- the matrix slots and effect sprites (`slots.rs`, `oam.rs`; `view/slots.rs`, `state/slots.rs`, `slot_data.rs`), the
+  HUD adapters (`view/hud.rs`, `state/hud.rs`), the race readers (`view/race.rs`);
+- the menus' top level and the map, event and results screens (`nfsgba-game/src/menu/`, `state/menu.rs`; the typed
+  code reaches the rest through the `Host` trait, `menu/adapt.rs`).
 
-Done: the matrix slots and effect sprites (`slots.rs`, `oam.rs`; adapters `view/slots.rs`, state `state/slots.rs`, ROM tables `slot_data.rs`), the HUD adapters (`view/hud.rs`, `state/hud.rs`) and the race setup readers (`view/race.rs`). The rim redraw still takes the heap as a byte slice (it reads the real heap around the rim buffer, R24); `wheel_points` keeps only its last query (its other results were never used).
+Still on RAM: the menus' List, Intro, Setup and Kind38 screens and their scene/palette/VRAM helpers; `race_init`;
+heap alloc/free and the sector lists (recorded by typed code, replayed by `ram::with_world`); the rim redraw's heap
+reads (R24). Next: the remaining menu screens, and the flip: `race_start` builds a typed `World` and `Game` holds it,
+with RAM images only in tests.
