@@ -18,7 +18,7 @@ layout! {
         0x0300_56E0 race_mode: u32,
         0x0300_56E4 laps: u32,
         /// Per-racer start slot bytes (indexed by the player's slot) and the value written.
-        0x0300_538C slot_bytes: [u8; 16],
+        0x0300_538C slot_bytes: [u8; 12],
         0x0300_53BC start_slot: u32,
         0x0300_57F0 unpack_buffer: u32,
         /// The interface language (0 English … 4).
