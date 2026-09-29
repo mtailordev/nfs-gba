@@ -28,7 +28,7 @@ What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 
 ## Working rules (from the user)
 
-- **The contract (binding, `docs/DECISIONS.md`):** the core (assets, mechanics, rules, AI, physics, audio, save, the 240×160 reference frame) is exact; presentation adapts (any resolution; any framerate by interpolating between simulation steps). Byte-equal RAM is a test oracle, not the contract. Frame timing is a deterministic input.
+- **The contract (binding, `docs/DECISIONS.md`, simplified 2026-09-29):** the mechanics, physics, rules, AI, audio and calculations are exact (the game's integer maths, function for function), and the assets are used the same way for the same look (the 240×160 reference frame); presentation adapts (any resolution; any framerate by interpolating between simulation steps). Not required: bit-exact replication (the GBA memory layout, pointers, scratch bytes, where interrupts land). Frame timing is a deterministic model. The engine is typed Rust in the IW4L / Skate 3 style.
 - **No game code at runtime, no emulator.** mGBA and unicorn are test oracles only. New code uses typed state; RAM images live only in tests.
 - **Every deviation is tracked.** `NOT 1:1 (ID)` in code, the matching row in `docs/FIDELITY.md`; an entry is closed only with a test in the repo that checks it.
 - **Never find anything twice.** Every ROM offset, RAM address and function goes into `docs/engine/address-map.md` and `docs/engine/symbols.csv` (applied to Ghidra by `tools/ghidra/ApplySymbols.java`).
@@ -51,7 +51,7 @@ Done: the test kit and merge gate (`tools/gate.py`, `docs/engine/testkit.md`, `d
 
 Left, in order:
 1. ~~**One viewer path**~~ (done 2026-09-29, R28 closed): every race mode runs through `nfsgba-game`; routes are built in Rust (`race_init::apply_setup` + `race_start`).
-2. **Typed `World`** (the IW4L / Skate 3 style the user wants): each subsystem off the GBA RAM image onto typed state behind the replay tests. Conventions and the order: `docs/engine/typed-state.md` (`layout!`, `state/`, `GameData`, adapters in `view/`). Done: the camera. In progress: the car step (with D16). Then AI and traffic, the matrix slots, `race_init` (also move its `RaceView` readers into `view/`), the rest of the HUD, the menus (their own RAM image `menu::Gba` lives in `nfsgba-formats`, below `layout!` in `nfsgba-sim`: plan where `Mem` and `layout!` live first). Last, `Game` holds the `World` and RAM images exist only in tests.
+2. **Typed `World`** (the IW4L / Skate 3 style the user wants): each subsystem rewritten on typed `World` state, with the existing exact Rust port as its reference (differential tests on every trace state; the contract no longer asks for bit-exact RAM). Conventions and the order: `docs/engine/typed-state.md` (`layout!`, `state/`, `GameData`, adapters in `view/`). Done: the camera. In progress: the car step (with D16). Then AI and traffic, the matrix slots, `race_init` (also move its `RaceView` readers into `view/`), the rest of the HUD, the menus (their own RAM image `menu::Gba` lives in `nfsgba-formats`, below `layout!` in `nfsgba-sim`: plan where `Mem` and `layout!` live first). Last, `Game` holds the `World` and RAM images exist only in tests.
 
 ### 3. Milestones after that
 
@@ -71,7 +71,7 @@ Rules:
 - **Right model for the job.** A cheaper model (Sonnet-class) for mechanical porting against the oracle, tests, tools and doc tidying; the top model only for hard reverse engineering, design and review.
 - **At most 2–3 agents at once**, with disjoint files. Infrastructure first, one at a time.
 - **Oracle first, emulator last.** Port function by function against `tools/oracle/cases.py` on real or synthesized states. Whole-frame checks use the tool the bake-off picks. Nobody navigates menus by hand to reach a state.
-- **Exact where it is observable** (the contract in `docs/DECISIONS.md`): gameplay state, rules, AI, physics, audio samples, save bytes, the 240×160 frame. Invisible internals (heap neighbour bytes, stale registers, mid-frame IRQ timing) are documented once as a ledger row and not chased further unless they change something observable.
+- **Exact where it is observable** (the contract in `docs/DECISIONS.md`): gameplay state, rules, AI, physics, audio, save data, the 240×160 frame. Traces are compared on typed gameplay state, not raw RAM. Invisible internals (heap bytes, stale registers, mid-frame IRQ timing) are not reproduced and not chased.
 - **Minimal docs.** Code comments, one `docs/FIDELITY.md` row and address/symbol rows per finding (`docs/engine/notes/*.<agent>.csv` → `tools/notes_merge.py --write`). No prose write-ups, no "Integration notes" sections, no long reports.
 - **Better code, not just more.** New code on typed state, one copy of each helper (`nfsgba-fixed`, `nfsgba-testkit`), small modules; no new RAM-image code.
 - **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; each worktree builds into its own `target/` (never a shared `CARGO_TARGET_DIR`: cargo then reuses another worktree's build of a crate and tests the wrong code) and is removed after merging; an emulator session is stopped by its own PID.

@@ -2,6 +2,16 @@
 
 Newest first. Each entry: what, why, alternatives.
 
+## 2026-09-29 (the contract, simplified; the user's decision)
+
+- **Exact:** the mechanics, physics, rules, AI, audio and every calculation (the game's integer maths, function for function, checked against the original in the oracle); the assets decoded and used as the game uses them, so the look is the same (the 240×160 reference frame); save data in the game's format. In the user's words: exact same mechanics, physics and calculations, the assets used the same way for the same look, but "we don't need an absolutely perfect bit-exact replication".
+- **Not required:** the GBA memory layout, heap addresses and pointers, scratch and unused bytes, and where the interrupts land inside a frame. Frame timing is a deterministic model; recorded timing is only a test input.
+- **Architecture: the IW4L / Skate 3 approach.** The ROM is the asset source, parsed once into `GameData`. The engine is typed Rust designed for reading: a `World` of cars, drivers, traffic, camera, race, HUD and menus, with vectors and indices, enums and named fields. There is no RAM image at runtime.
+- **Verification:** per function, the oracle (exact on the values the function produces); per frame, the replay traces loaded into typed state and compared on the gameplay state (positions, speeds, race, AI, HUD values, sound commands) and the reference frame, not on raw RAM.
+- **For the migration:** each remaining subsystem is rewritten on typed `World` state with the existing exact Rust port as its reference (differential tests on every trace state), instead of a byte-preserving refactor. `layout!` loads test states. `store`, `u_<offset>` fields and the RAM round trip are only needed while a subsystem still hands state to RAM-image code. The car step already in progress finishes under the old, stricter rules.
+- Why: the byte-level check doubled the work (a port in the RAM layout, then a byte-preserving conversion) and forced every internal byte into the typed state, none of which the player can see.
+- This supersedes the "What 1:1 means" entry of the project review below where they differ.
+
 ## 2026-09-29 (tooling bake-off)
 
 - **The toolchain** (measurements in `docs/engine/harness.md` "Tool bake-off"):
