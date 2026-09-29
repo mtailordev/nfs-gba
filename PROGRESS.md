@@ -43,6 +43,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **career-events:** done and merged. Save format, career tables, unlocks and Quick Play setup exact (`career.rs`, `docs/formats/career.md`); race rules transcribed (D5). Its racing-line sections closed D1 (`routes()` now returns the exact lap and branches).
 - **viewer-sky-paint** (started after the first merges): viewer parts of R3/R5/R6. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
 - **car-atlas:** R13, the player's decals and overlays, and how opponents' cars, paints and materials are chosen. Owns `paint.rs` (+ `atlas.rs`), `docs/formats/car-paint.md`.
+- **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
