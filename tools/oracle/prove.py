@@ -1,9 +1,9 @@
 """Prove the oracle against functions that are already ported and verified: run each on many inputs, check the
-oracle's own invariants, and write the cases to $NFSGBA_DATA/work/<sha8>/harness/oracle/*.jsonl for the Rust
-checker (tools/oracle/rust-check) to compare with the Rust ports. Prints calls per second.
+oracle's own invariants, and write the cases to $NFSGBA_DATA/work/<sha8>/harness/oracle/*.jsonl, which the
+workspace test crates/nfsgba-formats/tests/oracle_cases.rs compares with the Rust ports. Prints calls per second.
 
     .venv/Scripts/python.exe tools/oracle/prove.py [--n 20000]
-    cargo run --release --manifest-path tools/oracle/rust-check/Cargo.toml
+    cargo test --release -p nfsgba-formats --test oracle_cases
 """
 import argparse
 import json
