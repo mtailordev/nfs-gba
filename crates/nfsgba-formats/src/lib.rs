@@ -309,12 +309,18 @@ pub struct Wall {
     /// Floor texture coordinates at this corner; 16,384 = one texture width/height (hypothesis: one 512×512
     /// roundabout texture spans exactly one road width).
     pub floor_uv: [i32; 2],
-    /// Wall texture: u start in texels (`+0x28`), u span in 1/256 textures (`+0x40`), v at the top and bottom
-    /// of both ends (`+0x10`/`+0x18` start, `+0x14`/`+0x1C` end; 16,384 = one texture), flags (`+0x2E`).
+    /// Wall texture: u start in texels (`+0x28`), u span in 1/256 textures (`+0x40`), and v in 1/128 texel rows
+    /// (16,384 = 128 rows): `+0x10` top, `+0x14` end top, `+0x18` span, `+0x1C` end span, in that order. The end
+    /// values only count with flag `0x80` (perspective v), which no wall has. Flags at `+0x2E`.
     pub tex_u: u16,
     pub tex_span: u16,
     pub tex_v: [i32; 4],
+    /// `+0x42`: v offset in whole texel rows (the renderer adds `+0x42 · 128`).
+    pub v_offset: i16,
     pub flags: u16,
+    /// `+0x38`/`+0x3A`: floor and ceiling height at this corner (the flats use these, not `bottom`/`top`).
+    pub floor_y: i16,
+    pub ceiling_y: i16,
     /// Light at this corner, red/green/blue (`+0x3C..+0x3E`, BGR555 channel scale); see `light_factor`.
     pub light: [u8; 3],
 }
@@ -322,8 +328,10 @@ pub struct Wall {
 impl Wall {
     /// Normalised (u, v) for the start-top, end-top, end-bottom and start-bottom corners of a solid wall,
     /// following `FUN_030013ac` / `FUN_03000304`: u in texels is `u >> 7` with `u0 = +0x28 << 7`,
-    /// `u1 = u0 + (+0x40 << (log2 width - 1))`; flag bit 1 runs u the other way.
-    pub fn uv(&self, texture_width: usize) -> [[f32; 2]; 4] {
+    /// `u1 = u0 + (+0x40 << (log2 width - 1))`; flag bit 1 runs u the other way. v is the same at both ends:
+    /// rows `(+0x10 + +0x42·128) >> 7` at the top, plus `+0x18 >> 7` at the bottom (`docs/engine/renderer.md`).
+    /// NOT 1:1: the material's runtime v scroll (world `+0x48`) is not applied; its writers are not decoded.
+    pub fn uv(&self, texture_width: usize, texture_height: usize) -> [[f32; 2]; 4] {
         let w = texture_width as f32;
         let (mut u0, mut u1) = (
             self.tex_u as f32 / w,
@@ -332,8 +340,10 @@ impl Wall {
         if self.flags & 2 != 0 {
             std::mem::swap(&mut u0, &mut u1);
         }
-        let v = self.tex_v.map(|v| v as f32 / 16384.0);
-        [[u0, v[0]], [u1, v[1]], [u1, v[3]], [u0, v[2]]]
+        let rows = 128.0 * texture_height as f32;
+        let top = (self.tex_v[0] + 128 * self.v_offset as i32) as f32 / rows;
+        let bottom = top + self.tex_v[2] as f32 / rows;
+        [[u0, top], [u1, top], [u1, bottom], [u0, bottom]]
     }
 }
 
@@ -575,6 +585,9 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                         tex_u: u16_at(rom, w + 0x28),
                         tex_span: u16_at(rom, w + 0x40),
                         tex_v: [0x10, 0x14, 0x18, 0x1C].map(|k| u32_at(rom, w + k) as i32),
+                        v_offset: i16_at(rom, w + 0x42),
+                        floor_y: i16_at(rom, w + 0x38),
+                        ceiling_y: i16_at(rom, w + 0x3A),
                         flags: u16_at(rom, w + 0x2E),
                         light: [rom[w + 0x3C], rom[w + 0x3D], rom[w + 0x3E]],
                     }
@@ -718,10 +731,22 @@ mod tests {
             assert!((s.floor as usize) < textures.len());
             assert!(s.walls.iter().all(|w| (w.material as usize) < textures.len()));
         }
+        // Wall v: no wall uses perspective v (flag 0x80), and drawn walls span their texture in 1/128 rows.
+        let walls: Vec<Wall> = city(&rom).into_iter().flat_map(|s| s.walls).collect();
+        assert!(walls.iter().all(|w| w.flags & 0x80 == 0));
+        let drawn = walls.iter().filter(|w| w.material != 0 && w.flags & 1 == 0);
+        let (spans, all) = drawn.fold((0, 0), |(n, a), w| {
+            (
+                n + (w.tex_v[2] == 128 * textures[w.material as usize].height as i32) as usize,
+                a + 1,
+            )
+        });
+        assert_eq!((spans, all), (2119, 2305)); // most drawn walls span exactly one texture height
         assert_eq!(city_palette(&rom, 0)[0][3], 0);
         let environments = environments(&rom);
         assert_eq!(environments.len(), 12);
-        assert_eq!(environments[1].palette, 3); // the reference race's base palette (checked against its RAM)
+        // The reference race is environment 11 (palette 13, byte-identical to palette 3 of environment 1).
+        assert_eq!((environments[1].palette, environments[11].palette), (3, 13));
         assert!(environments.iter().all(|e| e.palette < 14
             && e.sky.gradient.len() == 64
             && (e.sky.skyline.width, e.sky.skyline.height) == (240, 64)));

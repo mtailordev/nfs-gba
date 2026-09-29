@@ -6,7 +6,7 @@ address,name,kind,comment
 0x081372e4,race_menu_palette_setup,function,sets world palettes from level record +0x00 + (+0x5A)*2 (menu/event screen)
 0x081370d4,menu_scene_setup_a,function,menu palette setup (0x33EF14 palettes)
 0x081371a4,menu_scene_setup_b,function,menu palette setup (0x33EF14 palettes)
-0x08138a9c,race_load_palettes,function,loads city palette rec+0x00 + (rec+0x5A)*2 and second palette rec+0x04 + (rec+0x58)*2
+0x08138a9c,race_load_palettes,function,loads city palette rec+0x00 + (rec+0x5A)*2 and second palette rec+0x04 + (rec+0x58)*2; also initialises the view struct (near 64, focal 150)
 0x08139454,race_load_level,function,copies level descriptor pointers into the world struct and allocates buffers
 0x081397d8,race_init,function,race start: load level/route, spawn entities, palettes
 0x08139e34,race_start_from_table_a,function,calls race_init path with record index*0x68 + 0x7F2B08
@@ -16,11 +16,11 @@ address,name,kind,comment
 0x0813b190,draw_model_param_block,function,packs model bank pointers into a draw parameter block
 0x03000304,raster_wall_columns,function,wall rasteriser: column-mapped textures via map[u] << log2h
 0x03000978,transform_walls,function,rotates wall points by the camera matrix and fills the wall draw buffer
-0x03000b44,draw_sector_pass_b,function,sector draw pass (road surface?)
+0x03000b44,clip_flat_outline,function,clips the floor/ceiling outline to the portal's columns
 0x030013ac,setup_wall_spans,function,projects wall ends and heights; wall u0/u1 and v setup
 0x03001ae4,sort_sector_entities,function,depth-sorts a sector's entity list
 0x03001cf0,draw_sector_entities,function,draws entities (vehicles) of a sector: LOD and material selection
-0x03002084,draw_sector_overlay,function,second pass per sector
+0x03002084,draw_sector_walls,function,draws the sector's walls; defers span-flag-2 walls (8-bit mask)
 0x0300224c,draw_sector,function,scene: draws a sector (walls, floor, ceiling, entities) and recurses containers
 0x03002da0,draw_flat_textured,function,floor/ceiling textured pass
 0x03003180,draw_flat_fill,function,floor/ceiling solid-colour pass
@@ -31,10 +31,10 @@ address,name,kind,comment
 0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)
 0x0816a708,__divsi3,function,libgcc signed divide (truncating; x/0 = 0)
 0x0816a7e4,__modsi3,function,libgcc signed remainder
-0x03004d48,draw_wall_column_pair_transparent,function,wall column pair; writes only when both texels are non-zero (texture first texel 0)
-0x03004db0,draw_wall_column_pair_opaque,function,wall column pair; always writes
-0x03004fa8,draw_floor_span,function,floor/ceiling span; byte store every 2 bytes (half horizontal resolution)
-0x03002c40,draw_floor_span_long,function,splits floor spans into 16-pixel pieces for draw_floor_span
+0x03004d48,wall_column_transparent,function,wall column pair; skips pairs with a colour-0 texel
+0x03004db0,wall_column_opaque,function,wall column pair
+0x03004fa8,flat_span_affine,function,textured flat span: byte writes every 2 bytes (120-wide floors)
+0x03002c40,flat_span_perspective,function,long flat span in 16-pair perspective segments
 0x03004a74,blit_scaled_transparent,function,scaled 8bpp blit skipping index 0; writes two buffers
 0x0813b6d0,load_car_palettes,function,copies car paint ramps to base palette slots 160/176/208 (16) and 240/248 (8)
 0x0812b1d8,copy_to_base_palettes,function,copies n colours to slot k of both base palette buffers; sets dirty 0x0300563C
@@ -70,8 +70,8 @@ address,name,kind,comment
 0x0816a2a4,call_via_r3,function,bx r3
 0x0813867c,camera_toggle_view,function,camera view 0 <-> 2 (SELECT)
 0x081378cc,camera_init,function,camera init: view 4/5, shake = 0, yaw from player
-0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre
-0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre
+0x08137ac8,camera_look_at_player,function,(name tentative) yaw = atan2 to the player; matrix; focal 0x96; projection centre; fixed camera looking at the player (focal 150)
+0x08137cb0,camera_update,function,chase/bumper camera; horizon clamp +-32; projection centre; chase camera: matrix, focal effect, screen centre, start sector, list entry 0
 0x0814bc30,draw_vehicle,function,(name tentative) vehicle draw; sets the horizon shift from the player's pitch in views < 2
 0x08149b94,save_probe_profile,function,boot: read EEPROM slot, checksum+version 9, copy name and language
 0x08149d84,save_load_profile,function,read EEPROM, checksum, decode (save_decode) and rebuild unlocks
@@ -159,3 +159,21 @@ address,name,kind,comment
 0x08136028,carbon_stop_sound,function,stop a sound id
 0x08136054,carbon_play_music,function,music id -> module (0x087ee238)
 0x081360b4,carbon_set_sound_rate,function,rate = x*8 Hz on the sound's slot
+0x03004828,build_visible_sectors,function,visible-sector list from the camera sector (<=25 entries, portal depth <5)
+0x03002614,expand_portal,function,appends the sectors seen through one list entry's portal walls
+0x03004ef0,merge_portal_spans,function,unions spans of repeated sectors via the sector map (never called in Carbon)
+0x030048c8,draw_visible_sectors,function,pass 0 draw_sector back to front then pass 1 entities
+0x03000800,find_camera_sector,function,sector of world+0xC0/+0xC8 from world+0xEA or its +0x32 neighbours
+0x030047a8,point_in_sector,function,edge cross-product test against a sector's walls
+0x0300121c,clip_wall_span,function,moves a wall span's start or end to the near plane by a 2.24 fraction
+0x03004ca4,recip_div,function,(a*recip[b])>>24 = a/(b+1)
+0x03004ccc,mul_frac24,function,(a*(u32)t)>>24
+0x03004cf8,recip_div_8,function,(a*recip[b])>>16 = (a<<8)/(b+1)
+0x03004d20,recip_div_16,function,(a*recip[b])>>8 = (a<<16)/(b+1)
+0x03004c40,recip_wide,function,recip[n] or recip[n>>1]>>1 above 0x7FFE
+0x03004c1c,fill_blocks16,function,stores a word into n>>4 16-byte blocks
+0x03002a0c,flat_edge_step,function,steps a flat polygon's left or right edge to its next vertex
+0x03005008,flat_top_vertex,function,finds a flat polygon's top vertex and rejects it outside E6..E8
+0x03005094,fill_span,function,solid-colour span at full resolution
+0x0815e674,iwram_call,function,calls IWRAM function *0x03006490+0xE4+index*4
+0x0815e690,iwram_call_ret,function,iwram_call with a return value

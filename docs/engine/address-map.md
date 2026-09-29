@@ -47,13 +47,14 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x77A000–0x78E000` | | route data: template entities, racing lines | formats/race-routes |
 | `0x797D10–0x7E53EC` | | text strings | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
+| `0x7BFC68` | | camera probe vector (0, 0, 72) for the start-sector search | engine/renderer |
 | `0x7BFD0C` / `0x7BFD18` | | EEPROM 4 Kbit / 64 Kbit descriptors (`eeprom_select_type`) | formats/career |
 | `0x7BFD40` | 32 B | vibrato half sine | formats/audio |
 | `0x7BFD60` | 768 × u16 | frequency table, one octave (period mode) | formats/audio |
 | `0x7C0390` / `0x7C03A2` / `0x7C03B4` | 8 × u16 / 8 × u16 / 8 × u32 | mixing rates: timer 0 reload / samples per frame / Hz (index 0: 10512 Hz, 176) | formats/audio |
 | `0x7C03F0` | 256 × u16 | random table (`rand_table`, index `0x030064C8`) | formats/car-paint |
 | `0x7C05F0` | 0x2000 × i16 | sine table, half wave, 0x4000 = 1.0 (`sin_q14`) | formats/car-paint |
-| `0x7C45F0` | 32,767 × 4 | reciprocal table: entry k = 2^24/(k+1) (light interpolation, likely more) | FIDELITY R2 |
+| `0x7C45F0` | 32,767 × 4 | reciprocal table: `recip[k] = 2^24/(k+1)`; every projection and divide, and the light interpolation | engine/renderer |
 | `0x7E4714` | 6 × 2 u16 | boss event pairs per zone | formats/career |
 | `0x7E4744` | 66 × 8 | career event table (mode, track, reverse, laps, traffic, AI skill, reward) | formats/career |
 | `0x7E4954` | 16 × u16 | boss name keys | formats/career |
@@ -151,9 +152,14 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030061A4` | someone finished |
 | `0x030061B0…0x030061F4`, `0x0300617C` | hunter tuning |
 | `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
-| `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre, `+0x1C` focal (0x96) |
-| `0x03000214` | camera yaw (0x4000 per turn) |
-| `0x03005390` / `0x03005392` | s16 screen shake x / y (always 0 in play) |
+| `0x03000080` | view struct (world `+0x50`): `+0` draw page, `+8`/`+0xA` centre (120, 79), `+0x0C` pitch 240, `+0x10` near 64, `+0x1C` focal 150 |
+| `0x03000214` | camera yaw (0x4000 per turn; the skyline scrolls by it) |
+| `0x03005F9C` | camera yaw, 14-bit (renderer camera) |
+| `0x03005FA4` | camera height offset (8.8) |
+| `0x03006148` | when set, the camera sits `0x82` above the player instead of 16 |
+| `0x030057A0` | camera matrix in the race |
+| `0x03006920` | 32 bytes cleared each frame by `draw_visible_sectors` |
+| `0x03005390` / `0x03005392` | s16 screen shake x / y, added to the screen centre (always 0 in play) |
 | `0x030056B8` | horizon shift in rows (bumper view: car pitch, ±32; 0 otherwise) |
 | `0x030055F8` | camera view (0 bumper, 2 chase; per-view tables `0x7F39BC`/`0x7F39D4`/`0x7F39EC`) |
 | `0x030053A0` | extra projection-centre y offset (8.8) |
@@ -187,6 +193,11 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x0201431C` | entity array in the reference race (world `+0x3C`) |
 | `0x0201EC24` | vehicle matrix buffer in the reference race (world `+0xFC`) |
 | `0x02001008` / `0x02000E04` | the two base palette buffers (0x200 bytes each) |
+| `0x02012404` / `0x020123F8` / `0x02013348` | moving pieces (world `+0x18`) / sector offsets (`+0x1C`) / material runtime table (`+0x48`) |
+| `0x02017288` | wall draw buffer (world `+0x68`) |
+| `0x02018C8C` | visible-sector list, 64 × 16 bytes (world `+0x60`) |
+| `0x02019090` | sector map, 8 bytes per sector, never cleared, unused (world `+0x64`) |
+| `0x0201B094` | flat vertex buffer (world `+0x6C`) |
 | palette RAM `0x05000000` | BG palette. Entry 0 = backdrop (`0x4A2E` in the race; opaque index-0 wall texels show it). Slots 1–143 and 149–255 are tinted by light (`FUN_0813a514`). 160–175 / 176–191: ramps `paints[1]` / `paints[2]`; 192 and 208: glass shades; 193–207: city trim; 208–223: player ramp (atlas pixel `i` → `192 + (i ^ 16)`); 240–247 / 248–255: extra car rows (`load_car_palettes`) |
 
 ### World struct (`0x030000C0`)
@@ -197,26 +208,33 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x04` | vehicle texel base |
 | `+0x0C` | u16 per sector: sector → entity list head (`0xFFFF` = none) |
 | `+0x10` / `+0x14` | walls / sectors |
-| `+0x18` | 0x20-byte records (wall `+0x2A`: moving pieces?) |
-| `+0x1C` | 0x14-byte records (sector `+0x0A`) |
+| `+0x18` | moving wall pieces, 0x20 bytes, by wall `+0x2A`: dx, dz, ceiling dy, floor dy, top dy, bottom dy, material offset, flags |
+| `+0x1C` | sector offsets, 0x14 bytes, by sector `+0x0A`: `+4` ceiling dy, `+6` floor dy, `+8` flags replacing sector `+0x12` (`0x40` = hidden) |
 | `+0x20` / `+0x24` | city / vehicle materials |
 | `+0x30` / `+0x34` | loaded palettes |
 | `+0x38` | route template entities |
 | `+0x3C` | entity array (0xA4 each) |
 | `+0x40` / `+0x44` | racing-line section table / racing line (0x1800) |
-| `+0x48` | per-material runtime entries (8 bytes: `+4`, `+6` texture scroll) |
-| `+0x50` | view struct (`+0x08`/`+0x0A` screen centre, `+0x10` near limit, `+0x1C` focal) |
+| `+0x48` | per-material runtime entries (8 bytes: `+2` animation frame, `+4`/`+6` u/v scroll) |
+| `+0x50` | view struct (`0x03000080`) |
 | `+0x54` | camera matrix: 12 × i32, 3×3 rotation in 2.14 fixed point then translation |
 | `+0x68` | wall draw buffer (0x1A00; 0x34 bytes per wall) |
-| `+0x6C` | floor span buffer (0x780) |
+| `+0x58…+0x5E` | screen rectangle (0, 240, 0, 159) |
+| `+0x60` | visible-sector list |
+| `+0x64` | sector map |
+| `+0x6C` | flat vertex buffer (0x18 per vertex: x, floor y, ceiling y, recip, u/z, v/z) |
 | `+0x78` | entity handler table (`FUN_03001ae4` calls `[+0x78][entity +0x4E]`) |
 | `+0x7C…+0x9C` | vehicle model bank arrays |
 | `+0xA0` | projected vertex buffer (x, y shorts) |
 | `+0xD8`, `+0xDA`, `+0xDC` | counts: materials, sectors, walls |
-| `+0xE2…+0xE8` | screen clip bounds |
-| `+0xF2` | floor span count |
+| `+0xC0` / `+0xC8` | point searched by `find_camera_sector`; scratch shared by the camera and entity code |
+| `+0xE2…+0xE8` | current portal span (left, right, top, bottom) |
+| `+0xEA` | camera sector |
+| `+0xEE` | visible count |
+| `+0xF0` | 0 each frame |
+| `+0xF2` / `+0xF4` | flat outline / clipped outline lengths |
 | `+0xF8`, `+0xFA` | entity count (4) and extra entity slots (0x20) |
-| `+0xF6` | sky enabled |
+| `+0xF6` | sky visible |
 | `+0xFC` | vehicle matrix buffer (0x30 per slot: rotation, translation) |
 
 ### Entity (0xA4 bytes, world `+0x3C`)
@@ -224,9 +242,10 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | Offset | What |
 |---|---|
 | `+0x00` | index |
-| `+0x04` | next in the sector's draw list (`0xFFFF` ends it) |
+| `+0x02` | next in the sector's list |
+| `+0x04` | next in the frame's sorted draw list (`0xFFFF` ends it) |
 | `+0x08` | flags? |
-| `+0x0A` | flags (bit 0: use world `+0x58/+0x5A`; bits 1, 3, 4, 6: LOD and texture) |
+| `+0x0A` | flags (bit 0: use world `+0x58/+0x5A`; bit 2: drawn this frame; bits 1, 3, 4, 6: LOD and texture) |
 | `+0x0C/+0x10/+0x14` | position x, y, z in 8.8 fixed point, city units |
 | `+0x28` | depth-sort key (distance squared) |
 | `+0x2C` | heading, 8.8 fixed point (`>> 8`: 0x4000 per turn) |

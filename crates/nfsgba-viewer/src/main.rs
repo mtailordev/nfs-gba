@@ -235,7 +235,8 @@ fn setup(
         for (k, a) in w.iter().enumerate().filter(|(_, a)| a.link < 0 && a.material != 0) {
             let b = &w[(k + 1) % w.len()];
             let (ax, az, bx, bz) = (a.x as f32, a.z as f32, b.x as f32, b.z as f32);
-            let uv = a.uv(textures[a.material as usize].width).map(Vec2::from);
+            let t = &textures[a.material as usize];
+            let uv = a.uv(t.width, t.height).map(Vec2::from);
             let quad = [
                 (world(ax, a.top[0], az), uv[0]),
                 (world(bx, a.top[1], bz), uv[1]),
