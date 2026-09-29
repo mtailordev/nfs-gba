@@ -13,7 +13,7 @@ tests, loaded and stored through the layouts to compare with traces. The integer
 | Every typed RAM struct and global block, declared once with its offsets | `nfsgba_sim::state` (split into `state/<area>.rs` when it grows) |
 | `GameData` and `bn7e`, the table of every ROM offset typed code uses | `nfsgba_sim::data` |
 | Subsystem logic on typed state: no `Mem`, no GBA address | its module, e.g. `nfsgba-game/src/camera.rs` |
-| Adapters: `<area>_frame(&Mem)` and `store_<area>_frame(&mut Mem, &Frame)` | `nfsgba-game/src/view.rs` |
+| Adapters: `<area>_frame(&Mem)` and `store_<area>_frame(&mut Mem, &Frame)` | `nfsgba-game/src/view/<area>.rs`; when RAM-image code in `nfsgba-sim` (the AI, traffic) still calls the area, in `nfsgba_sim::ram` with the RAM twins of its functions (the car step: `carworld.rs` + `ram.rs`) |
 | Round-trip and overlap tests over every replay-trace state | `nfsgba-game/tests/layout.rs`; `state.rs` tests |
 
 ## Declaring state
@@ -56,6 +56,14 @@ tests, loaded and stored through the layouts to compare with traces. The integer
 **Done** means: no `Mem` and no address in the logic module; replay and layout tests green; `tools/gate.py` 7/7.
 When a whole frame is typed, the per-subsystem adapters merge into `World::load` / `World::store` (tests only),
 and `Game` holds the `World`.
+
+## Steps that need RAM-image code mid-way
+
+A typed step that must call code still on the RAM image (the car step's traffic spawn) returns a `Flow` to the
+adapter at that point; the adapter stores the state, runs the RAM code, loads again and calls the step with
+`resume` (`car::handler`; what the step had computed travels in `CarWorld::pending`). The RAM twins in
+`nfsgba_sim::ram` (`route`, `car`, `init`, `contact`, `walls`, `body`) load the racers, run the typed function and
+store, for the AI and traffic until they are typed; they load the whole `CarWorld`, so they are slow.
 
 ## Order after the camera
 

@@ -1,6 +1,8 @@
 //! What the exact subsystems read, taken from (and written back to) the game's RAM: the renderer's frame,
 //! runtime tables, entities and root portal; the sky's camera; the HUD's globals, racers and objects.
 
+pub mod car;
+
 use nfsgba_formats::{
     LEVEL_TABLE, hud,
     render::{self, Entity, Frame, MaterialState, Piece, Portal, Runtime, Scene, View},

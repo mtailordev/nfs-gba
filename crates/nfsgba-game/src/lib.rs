@@ -520,7 +520,7 @@ impl Game {
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
                     // the IRQs themselves run after it, between the sound commands they fell between.
                     let at = t.gap_reads.first().copied().or(t.gap);
-                    self.lend(at, |sim| nfsgba_sim::ram::car_handler(sim, e))?;
+                    self.lend(at, |sim| view::car::step(sim, e))?;
                     // route_gap reads the race time again after its division (split = rt₂ − x·rt₁ / y); the sim
                     // reads it once, so an IRQ in between adds its tick afterwards.
                     if let [first, second, ..] = t.gap_reads[..]
