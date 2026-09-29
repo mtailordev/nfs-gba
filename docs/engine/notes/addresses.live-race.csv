@@ -17,3 +17,9 @@ driver,+0x434,2,exhaust flame animation (−1 off),engine/game-loop
 driver,+0x436,2,nitro flame animation (−1 while nitro is off),engine/game-loop
 profile,+0x318,4 per racer,sparks: the car's matrix code spawns two sparks while it is > 0,engine/game-loop
 profile,+0x400,1,the camera sector has a ceiling (camera_update; +0x401 last frame's),engine/game-loop
+ram,0x030064B0,12,debug text console: buffer pointer; +8 column; +0xA row (FUN_0815e850),engine/game-loop
+ram,0x030000AC,4,also the countdown accumulator: race_start_from_table_b adds 50000/frame time; each 0x4000 advances 0x03005714; phases 6-8 count it down by timer-3 ticks to the race end,engine/game-loop
+ram,0x03005714,4,countdown digit 0..2 (3 = GO: phase 2; the next frame's set-up uploads four tile sets and sets 4),engine/game-loop
+ram,0x03005398,4,race paused (set by the START block of race_frame_update; stops the race time),engine/game-loop
+ram,0x030057D0,4,index of the car whose finish ended the race (car_handler at phase 3),engine/game-loop
+ram,0x03005750,16,per-car result places tie-broken by distance at the race end (FUN_0812e9e8),engine/game-loop
