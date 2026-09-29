@@ -249,6 +249,7 @@ pub fn enter_kind(screen: u32) -> Option<Kind> {
 /// `Gba::unported` calls.
 fn run_handler(g: &mut Gba, kind: Kind, phase: usize, args: &[u32]) -> u32 {
     match (kind, phase) {
+        (Kind::Intro, 0) => intro_enter(g),
         (Kind::Intro, 1) => intro_update(g),
         _ => g.unported(kind.handlers()[phase], args),
     }
@@ -335,6 +336,97 @@ pub fn goto_screen(g: &mut Gba, s: i32) {
         g.set_u32(EXIT_SCREEN, g.u32(SCREEN));
     }
     g.set_u32(SCREEN, s as u32);
+}
+
+/// The intro page record (`0x7E5DA8`, 0x14 bytes) of an intro screen: `+6`/`+8` the background passed to the
+/// menu scene setup, `+0x10` the item list (`+8`: the next screen).
+fn intro_page(screen: u32) -> Option<u32> {
+    let p = match screen {
+        0x15..=0x1A => screen - 0x15,
+        0x25 => 6,
+        0x2F | 0x30 => 7,
+        _ => return None,
+    };
+    Some(0x087E_5DA8 + 0x14 * p)
+}
+
+/// `intro_enter` (`0x081315A0`, `menu_screen_setup` in earlier notes): the screen's background (menu scene setup
+/// `b` after a screen was entered, else `a`), its deadline (tick counter + 0x5A on 0x2F, 0x1E0 on 0x18, else 0xF0)
+/// and per-screen state.
+pub fn intro_enter(g: &mut Gba) -> u32 {
+    let screen = g.u32(SCREEN);
+    let page = intro_page(screen).expect("intro_enter on a screen without an intro page");
+    if screen != 0x30 {
+        let (a, b) = (
+            g.u16(page + 6) as i16 as i32 as u32,
+            g.u16(page + 8) as i16 as i32 as u32,
+        );
+        let setup = if g.u32(SCREEN_ENTERED) != 0 {
+            0x0813_71A4
+        } else {
+            0x0813_70D4
+        };
+        g.unported(setup, &[WORLD, a, b, 0xFFFF]); // menu_scene_setup_b / _a
+    }
+    let deadline = g.u32(PROFILE) + 0x3B0;
+    if g.u32(SCREEN) == 0x2F {
+        // Health and safety: colours 0..4 from 0x7E5E48, the language's text image.
+        let second = g.u32(SECOND_PALETTE);
+        for i in 0..5 {
+            let c = g.u16(0x087E_5E48 + 2 * i);
+            g.set_u16(second + 2 * i, c);
+        }
+        let image = match g.u32(LANGUAGE) {
+            0 => Some(7),
+            1 => Some(8),
+            2 => Some(0xA),
+            3 => Some(9),
+            4 => Some(0xB),
+            _ => None,
+        };
+        if let Some(n) = image {
+            g.unported(0x0813_644C, &[WORLD, n]);
+        }
+        g.set_u32(deadline, g.u32(TICKS).wrapping_add(0x5A));
+    } else {
+        g.set_u32(deadline, g.u32(TICKS).wrapping_add(0xF0));
+    }
+    match g.u32(SCREEN) {
+        0x15 => {
+            g.set_u32(0x0300_5984, 0);
+            g.set_u32(0x0300_5980, 0);
+            g.set_u32(CREDITS, 0x0879_9882);
+        }
+        0x16 => {
+            g.set_u32(KEYBOARD_COLUMN, 0);
+            g.set_u32(KEYBOARD_ROW, 0);
+            g.set_u32(NAME_LEN, 0);
+            g.unported(0x0813_56DC, &[]); // profile_reset
+            for i in 0..9 {
+                g.set_u8(NAME + i, 0);
+            }
+            // Start from the profile's current name.
+            while g.u8(g.u32(PROFILE) + g.u32(NAME_LEN)) != 0 {
+                let len = g.u32(NAME_LEN);
+                g.set_u8(NAME + len, g.u8(g.u32(PROFILE) + len));
+                g.set_u32(NAME_LEN, len + 1);
+            }
+            let profile = g.u32(PROFILE);
+            if g.u16(profile + 0x494) != 2 {
+                for off in [0x478, 0x480, 0x484, 0x47C, 0x488, 0x48C] {
+                    g.set_u32(profile + off, 0);
+                }
+            }
+        }
+        0x17 => {
+            g.unported(0x0813_6054, &[0]); // carbon_play_music: the title music
+        }
+        0x18 => {
+            g.set_u32(deadline, g.u32(TICKS).wrapping_add(0x1E0));
+        }
+        _ => {}
+    }
+    1
 }
 
 /// `intro_update` (`0x081318E4`): the boot and intro screens. Timed screens move on once the tick counter passes
@@ -1086,6 +1178,10 @@ mod tests {
                 }
                 "0x812ae64" => {
                     main_frame(&mut g);
+                    None
+                }
+                "0x812bb5c" => {
+                    goto_screen(&mut g, c["arg"].as_u64().unwrap() as i32);
                     None
                 }
                 _ => panic!("{f}"),
