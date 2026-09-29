@@ -74,6 +74,9 @@ impl flow::Host for GbaHost<'_> {
     }
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32 {
         if flow::is_typed(kind, phase) {
+            // The drawing primitives read the language and the text pointers they are given (the name buffer) from
+            // the RAM image; an earlier typed handler may have changed them.
+            store_state(self.0, st);
             return flow::run_typed(st, self, kind, phase, args);
         }
         self.on_ram(st, |g| run_handler(g, kind, phase, args))
@@ -253,7 +256,7 @@ impl Gba {
         }
     }
 
-    /// Runs `f` on the primitives' context and the page at `addr`; `f` also learns whether it is BG VRAM.
+    /// Runs `f` on the primitives' context and the page at `addr` (`f` also learns whether byte stores duplicate).
     fn on_page<R>(&mut self, addr: u32, f: impl FnOnce(&draw::Ctx, &mut [u8], bool) -> R) -> R {
         let (language, pitch) = (self.u32(LANGUAGE), self.u16(0x0300_6410) as i16 as i32);
         let rom = std::mem::take(&mut self.rom);
@@ -267,7 +270,7 @@ impl Gba {
                 pitch,
             },
             &mut buf[at..],
-            addr >> 24 == 6,
+            false, // no BG VRAM duplication of byte stores here: the oracle (unicorn) does not model it; `Screen` does
         );
         self.rom = rom;
         r

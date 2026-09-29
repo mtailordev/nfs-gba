@@ -178,7 +178,9 @@ def run(gba, fn, mem, ret, regs=None, stack=()):
                 k, size = STRUCT_ARGS[addr]
                 args[k] = ["s", bytes(uc.mem_read(_r(uc, k), size)).hex()]
             calls.append([addr, args])
-            if addr == UNPACK_TO_BUFFER:  # into the snapshot itself: the buffer is scratch, not a result
+            # A material blit's unpack goes into the snapshot itself (the buffer is scratch, not a result). Other
+            # unpack targets (the scene setup's) are left alone: they are U7b's.
+            if addr == UNPACK_TO_BUFFER and _r(uc, 1) == int.from_bytes(uc.mem_read(0x030057F0, 4), "little") + 0x9608:
                 gba.poke(_r(uc, 1), game_unpack(gba.read_base, _r(uc, 0)))
             _w(uc, 0, ret.get(addr, 0))
         return f

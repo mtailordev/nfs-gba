@@ -331,7 +331,7 @@ inputs (`after()` in `tools/oracle/cases.py menus`).
 ## Menus, continued (menus-2: `menu.rs`)
 
 The other screen kinds, ported from the disassembly and checked against the game's code through the oracle like the
-intro kind (`tools/oracle/cases.py menus`, cases under `$NFSGBA_DATA/work/<sha8>/menus2/`).
+intro kind (`tools/oracle/cases.py menus`, cases under `$NFSGBA_DATA/work/<sha8>/menus3/` (menus2 stubbed the drawing primitives; `draw` and `fill-rect-hw` check them, `menu/draw.rs`)).
 
 ### The screens
 

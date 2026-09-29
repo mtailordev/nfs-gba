@@ -620,7 +620,12 @@ mod tests {
                     (k[0].as_u64().unwrap() as u32, args.collect::<Vec<_>>())
                 })
                 .collect();
-            let got = changed(&pre, &g);
+            // NOT 1:1 (N1): a blit above the top row lands in the invisible gap below the previous page, which the
+            // port drops; both sides are compared without the gaps between the mode 4 pages.
+            let visible = |a: &u32| !(0x0600_9600..0x0600_A000).contains(a) && !(0x0601_3600..0x0601_4000).contains(a);
+            let want: std::collections::BTreeMap<u32, u8> = want.into_iter().filter(|(a, _)| visible(a)).collect();
+            let got: std::collections::BTreeMap<u32, u8> =
+                changed(&pre, &g).into_iter().filter(|(a, _)| visible(a)).collect();
             let diff: Vec<_> = got.iter().filter(|(a, b)| want.get(a) != Some(b)).take(8).collect();
             let missing: Vec<_> = want.iter().filter(|(a, b)| got.get(a) != Some(b)).take(8).collect();
             assert!(

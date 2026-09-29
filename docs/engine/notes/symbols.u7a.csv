@@ -1,0 +1,3 @@
+address,name,kind,comment
+0x08162b6c,text_draw_centred,function,(font; text; page; pitch; x; y; max width; max lines; colour) word-wrapped lines centred on x (breaks at the last space that fits); no range check; used by text_box and text_menu_7
+0x08169880,blit_rows,function,ARM overlay code (ROM image at 0x08165218 + 0x4668): copies w x h bytes by halfwords with source stride w and destination stride pitch; menu_blit_material_alt runs it through iwram_call_7
