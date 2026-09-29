@@ -1,7 +1,7 @@
 """Test for tools/notes_merge.py. Run: python -m unittest test_notes_merge (from tools/)."""
 import unittest
 
-from notes_merge import merge_symbols, read_rows
+from notes_merge import insert_addresses, merge_symbols, read_rows
 
 BASE = read_rows("address,name,kind,comment\n0x0816a708,__divsi3,function,div\n0x0815f948,sin_q14,function,sine\n")
 
@@ -32,6 +32,40 @@ class MergeTest(unittest.TestCase):
              ("symbols.b.csv", "other_name", "symbols.a.csv"), ("symbols.b.csv", "new_fn", "symbols.a.csv")],
         )
         self.assertEqual(new[0]["address"], "0x08000200")  # addresses normalised
+
+
+MAP = """# Map
+## ROM
+| Offset | Size | What | Doc |
+|---|---|---|---|
+| `0x000100` | 4 | a | x |
+| `0x000300` | 4 | c | x |
+## RAM (race)
+| Address | What |
+|---|---|
+| `0x03000010` | ram a |
+| palette RAM | not an address |
+| `0x03000030` | ram c |
+### Driver (`*x`)
+| Offset | What |
+|---|---|
+| `+0x10` | d a |
+"""
+
+
+class InsertTest(unittest.TestCase):
+    def test_sorted_into_the_region_table(self):
+        rows = [
+            {"region": "rom", "address": "0x000200", "size": "8", "what": "b", "doc": "y"},
+            {"region": "ram", "address": "0x03000020", "size": "4", "what": "ram b", "doc": "y"},
+            {"region": "ram", "address": "0x03000040", "size": "", "what": "ram d", "doc": "y"},
+            {"region": "driver", "address": "+0x08", "size": "2", "what": "d first", "doc": "y"},
+        ]
+        out = insert_addresses(MAP, rows).split("\n")
+        self.assertEqual(out[out.index("| `0x000100` | 4 | a | x |") + 1], "| `0x000200` | 8 | b | y |")
+        self.assertEqual(out[out.index("| `0x03000010` | ram a |") + 1], "| `0x03000020` | ram b (4) |")
+        self.assertEqual(out[out.index("| `0x03000030` | ram c |") + 1], "| `0x03000040` | ram d |")
+        self.assertEqual(out[out.index("| `+0x10` | d a |") - 1], "| `+0x08` | d first (2) |")
 
 
 if __name__ == "__main__":

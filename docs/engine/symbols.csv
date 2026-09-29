@@ -236,9 +236,9 @@ address,name,kind,comment
 0x0813bc38,setup_player_car,function,(tentative) player-only dressing: material or look, unpack_player_atlas, load_car_palettes(1)
 0x0813ff48,reload_player_car,function,(tentative) frees the decal, setup_player_car, unpack_decal
 0x0813ff44,empty_0813ff44,function,empty; called at the end of setup_race_cars
-0x0814a2a0,entity_update_rim,function,(tentative) race entity update; redraws the player's rim when rim_side_visible
+0x0814a2a0,opponent_handler,function,entity handler 0x29 (opponents and the wingman): state 0 opponent_init; 1/2 ai_drive between sector-list unlink/link; opponent_effects when visible
 0x0814b168,car_racing_step,function,nitro drain; dynamics; visibility flags; rim redraw; suspension step when 0x0300610C is 0
-0x0814a390,entity_reset_rim,function,(tentative) calls unpack_decal for the player
+0x0814a390,opponent_init,function,opponent setup: physics struct; upgrades (player's / skill / wingman entry); handling twice around ai_speed_curve; wingman_setup; race_start_setup
 0x0814b98c,car_init,function,car handler state 0: physics struct; handling; upgrades; settling; route tables
 0x0814f9d0,rim_side_visible,function,0 when |angle_diff(a, b)| < 0x400 or in (0x1C00, 0x2400), else 1
 0x0815fc38,angle_diff,function,(tentative) signed difference of two angles (0x4000 per turn)
@@ -415,3 +415,32 @@ address,name,kind,comment
 0x08139c8c,load_menu_descriptor,function,(tentative) menu_scene_setup_a: (world; 0x087F2FE8) loads the menu level descriptor into the world
 0x08141b40,text_menu_wrapped_colour,function,(tentative) (font; key; x; y; width 0xE0/0xEE; lines 0xF; colour): the PSA text and the credits lines
 0x081419c0,text_menu_7,function,(tentative) (font 0xC; key 0x159; x 0x78; y 0x32; 0xDC; 2; 0): the title's text before loading the save
+0x0813c5a8,ai_drive_car,function,AI driving model: steer to driver +0x94; curve braking; lane changes; boost; catch-up or wingman throttle; wheel spin; ai_wheel_contact; walls without portals; one integration of 2*dt
+0x081489dc,ai_wheel_contact,function,AI wheels on the ground: every wheel on the car's own sector; front wheels turn by +0x20 >> 8; no slip record
+0x0813c394,ai_speed_curve,function,AI drive force at 20 wheel speeds into profile +0x26C (runs car_auto_shift with race phase 1; leaves phase 9)
+0x0814dd24,seed_wheel_heights,function,floor height under n points around the car into driver +0x4C.. and +0x6C.. (sector via find_camera_sector)
+0x081410c0,wingman_setup,function,wingman globals 0x030061D4..0x03006200 for the race; gap per wingman 0x087F4284
+0x0814059c,start_lane,function,lane 0..4 from the car's offset across the route (route_lateral)
+0x0815fe5c,nearest_on_line,function,point of segment a-b nearest a point (64-bit products; __divdi3)
+0x0816a2d4,__divdi3,function,libgcc 64-bit signed divide
+0x081401d4,race_gap,function,how far an entity is ahead of a car along the lap; wrapped into -lap/4..3*lap/4
+0x081412ac,wingman_steer,function,non-racer steering: +-0x400 towards the lane of *0x03006178 while 0x030061F0 is set
+0x0813c240,mark_blocked_lanes,function,AI: lanes blocked by traffic just ahead on the main route and by racers close ahead after 0xB4 frames; returns its 3rd argument
+0x08146754,next_racer,function,next entity while the index is below the racer count 0x030057EC; else null
+0x081403b4,curve_lookup,function,piecewise-linear curve (count; x0; x1; ys)
+0x08143a64,is_mode_e,function,race mode 0x030056E0 == 0xE
+0x08143a78,is_mode_f,function,race mode 0x030056E0 == 0xF
+0x0814f874,place_on_floor,function,entity y = floor height; +0x88 = 0xFF; +0x64 = 0
+0x0813f530,ai_resync_segment,function,AI stuck for 0x32 steps: route segment from the car's sector (track_segment without visited marks or side-to-side switches)
+0x08140cf4,wingman_throttle,function,the wingman's throttle from the player's lead; follow; attacker and drafter commands
+0x08140c8c,wingman_follow_branch,function,the wingman follows the player into a side segment from the fork
+0x08140ba8,wingman_keep_gap,function,wingman throttle keeping its gap to the player; a lateral gap over 0x200 ends the phase
+0x081408c4,attacker_command,function,wingman attacker: catch the car at *0x03006178; then full throttle for 6 steps
+0x08140a10,drafter_command,function,wingman drafter: run ahead of the player in its lane and refill the player's nitro (+0x2AAA per step)
+0x081443fc,traffic_handler,function,entity handler 0x36: traffic (0 new; 1 lane driving; 2 removal; 3 knocked away)
+0x08144b7c,traffic_find_sector,function,sector of the query point: the query sector or one through a portal (dynamic walls never solid; solid only with material 0)
+0x08146094,traffic_contact,function,traffic car against the racers: bit 0 a racer near; swept tests; bit 1 hit (traffic_hit_response)
+0x08145dac,traffic_hit_response,function,a racer hits a traffic car: impulse along the centres split by the traffic type's shifts; wobble; hunter drain; crash sounds for the player
+0x0814658c,traffic_bounce_walls,function,knocked-away traffic car: its velocity bounces off solid walls within 100 units
+0x08141298,clear_61f0,function,*0x030061F0 = 0 if set (a non-racer hit a traffic car)
+0x0814c49c,effect_handler,function,(tentative) entity handler 0x34: the effect entities spawned in races (not ported)

@@ -6,16 +6,17 @@ region,address,size,what,doc; region is rom, ram, or a struct name such as world
 the address spelled as the map spells it: ROM file offsets like 0x7F2B08, RAM like 0x03005614). Then:
 
     python tools/notes_merge.py [NOTES ...]            # default: docs/engine/notes/*.csv; dry run
-    python tools/notes_merge.py --write [NOTES ...]    # also append the clean symbol rows to symbols.csv
+    python tools/notes_merge.py --write [NOTES ...]    # also write the clean symbol and address rows
 
 Symbols: a row already present (same address and name) is a duplicate; the same address under another name, or
 the same name at another address (also between two agents' notes), is a conflict and is never written. Exit
 code 1 when there are conflicts. Addresses: rows whose address already appears in docs/engine/address-map.md
-are listed for a manual edit; the rest are printed as markdown rows to paste (the map is edited by hand).
+are listed for a manual edit; with --write the new ones are inserted into their region's table, sorted by address.
 """
 import argparse
 import csv
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -63,6 +64,52 @@ def merge_symbols(base: list[dict], notes: dict[str, list[dict]]):
     return new, dups, conflicts
 
 
+# Region -> the address map heading its table sits under.
+SECTIONS = {"rom": "## ROM", "level": "### Level descriptor", "ram": "## RAM", "world": "### World struct",
+            "entity": "### Entity", "driver": "### Driver", "profile": "### Profile"}
+KEY = re.compile(r"^\| `\+?(0x[0-9a-fA-F]+)")
+
+
+def table_lines(lines: list[str], region: str) -> range:
+    """Line numbers of the region's table (header and separator included)."""
+    start = next(i for i, l in enumerate(lines) if l.startswith(SECTIONS[region.lower()]))
+    first = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("|"))
+    end = first
+    while end + 1 < len(lines) and lines[end + 1].startswith("|"):
+        end += 1
+    return range(first, end + 1)
+
+
+def in_table(text: str, r: dict) -> bool:
+    """Whether the region's table already has a row mentioning this address."""
+    lines = text.split("\n")
+    return any(f"`{r['address'].lower()}" in lines[i].lower() for i in table_lines(lines, r["region"]))
+
+
+def insert_addresses(text: str, rows: list[dict]) -> str:
+    """Inserts address rows into their region's table in the map `text`, after the last row with a smaller or
+    equal address (rows without a leading hex address are skipped when comparing). The row takes the table's shape:
+    `| address | size | what | doc |` in the ROM table, `| address | | what |` in the level descriptor's,
+    `| address | what (size) |` in the others."""
+    lines = text.split("\n")
+    for r in rows:
+        table = list(table_lines(lines, r["region"]))
+        cols = lines[table[0]].count("|") - 1
+        addr = f"`{r['address']}`"
+        if cols >= 4:
+            row = f"| {addr} | {r['size']} | {r['what']} | {r['doc']} |"
+        elif cols == 3:
+            row = f"| {addr} | | {r['what']} |"
+        else:
+            size = r["size"].strip()
+            row = f"| {addr} | {r['what']}{f' ({size})' if size else ''} |"
+        key = int(r["address"].lstrip("+"), 16)
+        body = table[2:]  # after the header and the |---| line
+        before = [i for i in body if (m := KEY.match(lines[i])) and int(m[1], 16) <= key]
+        lines.insert(before[-1] + 1 if before else body[0], row)
+    return "\n".join(lines)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("notes", nargs="*", type=Path)
@@ -87,13 +134,18 @@ def main(argv):
         SYMBOLS.write_text(base_text.rstrip("\n") + "\n" + "\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         print(f"appended {len(lines)} rows to {SYMBOLS.relative_to(ROOT)}")
 
-    known = ADDRESS_MAP.read_text(encoding="utf-8").lower()
+    map_text = ADDRESS_MAP.read_text(encoding="utf-8").replace("\r\n", "\n")
+    fresh = []
     for source, rows in addr_notes.items():
         for r in rows:
-            a = r["address"].lower()
-            state = "EDIT (already in the map)" if f"`{a}" in known else "new"  # the map's own spelling
+            state = "EDIT (already in the map)" if in_table(map_text, r) else "new"  # the map's own spelling
             print(f"address {state:26} {source}: | `{r['address']}` | {r['size']} | {r['what']} | {r['doc']} |  "
                   f"({r['region']})")
+            if state == "new":
+                fresh.append(r)
+    if args.write and fresh:
+        ADDRESS_MAP.write_text(insert_addresses(map_text, fresh), encoding="utf-8", newline="\n")
+        print(f"inserted {len(fresh)} rows into {ADDRESS_MAP.relative_to(ROOT)}; edit the EDIT rows by hand")
     return 1 if conflicts else 0
 
 

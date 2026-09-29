@@ -25,6 +25,7 @@ Done and committed:
 
 ## Working rules (from the user)
 
+- **Merging notes:** `PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe tools/notes_merge.py [--write] docs/engine/notes/*.<agent>.csv` appends clean symbols and inserts new address rows into their region's (sorted) table; conflicts and rows already in a table are listed for a hand edit.
 - **Port against the oracle first** (`tools/oracle`, `docs/engine/harness.md`): run the game's function on generated inputs over a snapshot, save the cases as JSONL, and have a Rust test replay them. Use mGBA only for new snapshots and whole-frame traces. Agents write `docs/engine/notes/symbols.<agent>.csv` and `addresses.<agent>.csv`; the parent runs `tools/notes_merge.py`.
 
 - **Absolute 1:1 rewrite, no compromise.** Every approximation is marked `NOT 1:1` in code and listed in `docs/FIDELITY.md`, with the game function that holds the exact behaviour. Close entries only after checking them against the reference build.
@@ -50,7 +51,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **viewer-geometry:** done and merged. The viewer uses the game's chase camera, projection and per-frame visible list; racers from `atlas`; an original-resolution mode equal to s15 on every non-HUD pixel (R8, R15, R19, R22, R23 closed; R10, R11, R14 narrowed; R27 high-res differences).
 - **hud-logic:** done and merged. `hud.rs`: every HUD element, the messages and the minimap, exact over 7,096 traced frames (U1, U2 closed). The HUD arrow is the off-route warning `0x0300601C`.
 - **harness:** done and merged. `tools/oracle` (unicorn function oracle; `trace_oracle.py` runs on it; 93,169 cases vs the Rust ports, 0 mismatches), `coverage.py` (465 of 880 functions run in 4 scenarios; 200 of those unnamed), `rom_attribution.py` (98.907% of the ROM claimed), `notes_merge.py`. See `docs/engine/harness.md`.
-- **ai-traffic:** D4's AI part: opponent handler 0x29 and traffic handler 0x36, trace-exact. Owns new `nfsgba-sim` modules (`ai.rs`, `traffic_ai.rs`), `docs/engine/ai.md`.
+- **ai-traffic:** done and merged. Opponents, wingman and traffic exact (12,376 byte-exact calls, 12 traced races, free replay); `docs/engine/ai.md`. Remaining stops are D9–D11 (physics-paths).
 - **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
 - **menus:** done and merged (first part). `menu.rs`: `main_frame`, the game state machine, the 49-screen menu machine, all six fades and the whole intro flow, exact on 5,400 oracle cases. Open: 7 of 8 screen kinds (U3), drawing onto VRAM (U7).
 - **game-loop:** new crate `nfsgba-game`: one exact game frame (main_frame order, IRQs) composing sim, render, paint, sky, hud and audio; a drivable race from a dump in the viewer (`NFSGBA_PLAY=1`), verified frame by frame against a recorded mGBA input run. Owns `crates/nfsgba-game`, `crates/nfsgba-viewer`, `docs/engine/game-loop.md`.
