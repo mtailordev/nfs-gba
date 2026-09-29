@@ -49,7 +49,7 @@ use bevy::{
 };
 use game::GbaProjection;
 use nfsgba_formats::{self as rom, atlas, paint, render, sky};
-use nfsgba_game::{race_init, view};
+use nfsgba_game::view;
 
 /// Raw units to metres. The engine draws cars and city in one unit (vehicle matrices are pure rotations,
 /// translations are city positions), and all 15 car models measure ~48 units per real-world metre, so the
@@ -525,7 +525,7 @@ fn setup(
         None => play::Play::grid(data.clone(), env as u32, start_route.unwrap_or(23), hud.clone())
             .unwrap_or_else(|e| panic!("race start: {e} (needs the race-init/circuit_pre capture)")),
     };
-    let setup = race_init::RaceView::read(race_game.game.mem());
+    let setup = view::RaceView::read(race_game.game.mem());
     let env = if dump.is_some() { setup.env % envs.len() } else { env };
     let current = setup.route % routes.len();
     let active = dump.is_some() || start_route.is_some();
@@ -543,7 +543,7 @@ fn setup(
     // materials already in their palette slots (`look`).
     let player_car = setup.cars[0] as usize;
     let player_first = &vehicle_textures[cars[player_car].first_material];
-    let player_pixels = race_init::player_atlas(race_game.game.mem(), player_first.pixels.len())
+    let player_pixels = view::player_atlas(race_game.game.mem(), player_first.pixels.len())
         .unwrap_or_else(|| player_first.pixels.clone());
     for (slot, racer) in setup.racers.iter().enumerate().filter(|(_, r)| r.model > 0) {
         let atlas = if slot == 0 {
@@ -709,7 +709,7 @@ struct Race {
     /// The visible-sector list of `frame` (unfiltered, as `draw_world` takes it).
     visible: Option<render::Visibility>,
     /// The game's racers, cars and route (`play::play` reads them back every frame).
-    setup: race_init::RaceView,
+    setup: view::RaceView,
     /// The portal texture every city material reads.
     portals: Handle<Image>,
 }
@@ -723,7 +723,7 @@ impl Race {
         world(w.x as f32, 0.0_f32, w.z as f32).with_y(self.floors[w.sector])
     }
 
-    fn player(&self) -> &race_init::Racer {
+    fn player(&self) -> &view::Racer {
         &self.setup.racers[0]
     }
 }
@@ -875,7 +875,7 @@ fn visibility(
     for (car, mut t, mut v) in &mut cars {
         let r = &race.setup.racers[car.slot];
         if r.slot != 0xFF {
-            t.set_if_neq(pose_from_matrix(&eye, &race_init::matrix(mem, r.slot)));
+            t.set_if_neq(pose_from_matrix(&eye, &view::matrix(mem, r.slot)));
         }
         // The entity's camera depth as `draw_sector_entities` computes it.
         let depth = {
@@ -1012,7 +1012,7 @@ fn tint(
     // NOT 1:1 (R17): for 1–7 scanlines per game frame the game shows the tinted glass instead.
     let base = if race.active {
         let setup = &race.setup;
-        let mut base = race_init::base_palette(play.game.mem());
+        let mut base = view::base_palette(play.game.mem());
         [base[192], base[208]] = paint::glass_shades(&tint.rom, setup.record[5], setup.racers[0].heading);
         base
     } else {
@@ -1254,7 +1254,7 @@ mod tests {
             let (frame, root, visible) = play::frame(p, &data);
             assert_eq!(frame.camera, view::frame(mem).camera, "{name}");
             assert_eq!(visible.portals.first().map(|p| p.sector), Some(root.sector), "{name}");
-            let setup = race_init::RaceView::read(mem);
+            let setup = view::RaceView::read(mem);
             let eye = game::frame_transform(&frame, world);
             let player = world(
                 setup.racers[0].pos[0] as f32 / 256.0,
@@ -1270,7 +1270,7 @@ mod tests {
             );
             let mut posed = 0;
             for r in setup.racers.iter().filter(|r| r.slot != 0xFF) {
-                let pose = pose_from_matrix(&eye, &race_init::matrix(mem, r.slot));
+                let pose = pose_from_matrix(&eye, &view::matrix(mem, r.slot));
                 let at = world(
                     r.pos[0] as f32 / 256.0,
                     r.pos[1] as f32 / 256.0,

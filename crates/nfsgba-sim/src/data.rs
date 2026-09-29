@@ -132,6 +132,7 @@ pub struct GameData {
     pub views: [CameraView; 8],
     pub camera_probe: [i32; 3],
     pub car: CarTables,
+    pub effects: crate::slot_data::EffectTables,
 }
 
 impl GameData {
@@ -151,6 +152,7 @@ impl GameData {
             }),
             camera_probe: std::array::from_fn(|k| word(bn7e::CAMERA_PROBE + 4 * k) as i32),
             car: CarTables::parse(rom),
+            effects: crate::slot_data::EffectTables::parse(rom),
         }
     }
 }

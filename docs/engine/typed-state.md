@@ -81,3 +81,5 @@ store, for the AI and traffic until they are typed; they load the whole `CarWorl
 Done: the camera, the car step. Next: AI and traffic (they remove the `ram` twins; D19), the matrix slots and
 effects (`slots.rs`) with the rest of the HUD, the menus, then `race_init` (it builds the whole `World`), then the
 flip: `Game` holds the `World`.
+
+Done: the matrix slots and effect sprites (`slots.rs`, `oam.rs`; adapters `view/slots.rs`, state `state/slots.rs`, ROM tables `slot_data.rs`), the HUD adapters (`view/hud.rs`, `state/hud.rs`) and the race setup readers (`view/race.rs`). The rim redraw still takes the heap as a byte slice (it reads the real heap around the rim buffer, R24); `wheel_points` keeps only its last query (its other results were never used).

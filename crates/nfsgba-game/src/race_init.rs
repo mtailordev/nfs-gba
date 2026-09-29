@@ -506,13 +506,11 @@ fn sprite_bank(m: &Mem) -> SpriteBank {
 
 /// `sprite_screen_update(world + 0xA4, 1)` through `ui::update_sprites`, with its VRAM uploads.
 fn sprite_screen_init(g: &mut Machine) {
-    let m = &g.mem;
-    let bank = sprite_bank(m);
-    let screen = m.u16(view::HUD_SCREEN + 0x18) as usize;
-    let (mut objects, mut shadow) = (view::hud_objects(m), view::shadow_oam(m));
-    let uploads = ui::update_sprites(&m.rom, &bank, screen, &mut objects, &mut shadow, true, m.u16(TILE_BASE));
-    view::store_hud_objects(&mut g.mem, &objects);
-    view::store_shadow_oam(&mut g.mem, &shadow);
+    let bank = sprite_bank(&g.mem);
+    let mut h = view::hud::load(&g.mem);
+    let (screen, tile_base) = (h.vars.screen as usize, h.vars.tile_base);
+    let uploads = ui::update_sprites(&g.mem.rom, &bank, screen, &mut h.objects, &mut h.oam, true, tile_base);
+    view::hud::store(&mut g.mem, &h);
     for u in uploads {
         let at = 0x1_0000 + 32 * u.tile;
         g.vram[at..at + u.len].copy_from_slice(&g.mem.rom[u.src..u.src + u.len]);
@@ -535,12 +533,10 @@ fn hud_off(m: &mut Mem) {
 
 fn hud_with(m: &mut Mem, f: impl FnOnce(&[u8], &hud::Globals, &mut [ui::Object], usize, &mut hud::Messages)) {
     let bank = sprite_bank(m);
-    let count = bank.screens[m.u16(view::HUD_SCREEN + 0x18) as usize].count;
-    let g = view::hud_globals(m);
-    let (mut objects, mut messages) = (view::hud_objects(m), view::messages(m));
-    f(&m.rom, &g, &mut objects, count, &mut messages);
-    view::store_hud_objects(m, &objects);
-    view::store_messages(m, &messages);
+    let mut h = view::hud::load(m);
+    let count = bank.screens[h.vars.screen as usize].count;
+    f(&m.rom, &h.g, &mut h.objects, count, &mut h.messages);
+    view::hud::store(m, &h);
 }
 
 /// `race_spawn_template_entities(world, route entities)`: every sector's entity list emptied, the route's
@@ -995,114 +991,6 @@ pub fn load_pre(rom: Vec<u8>, prefix: &std::path::Path) -> std::io::Result<(Mach
     let io = std::fs::read(io)?;
     let io = io.get(..0x400).and_then(|b| b.try_into().ok());
     Ok((g, io.ok_or(std::io::ErrorKind::InvalidData)?))
-}
-
-/// A racer as `draw_sector_entities` and the viewer see it (entities are 0xA4 bytes at world `+0x3C`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Racer {
-    /// `+0x0C/+0x10/+0x14`: position, 8.8 fixed point, city units (`-y` is up).
-    pub pos: [i32; 3],
-    /// `+0x2C >> 8`: heading, 0x4000 per turn.
-    pub heading: i32,
-    /// `+0x78`: the sector the racer is in.
-    pub sector: u16,
-    /// `+0x88`: vehicle matrix slot; 0xFF = not drawn.
-    pub slot: u8,
-    /// `+0x0A`: draw flags (bit 0 whole-screen clip, bit 1 always the near model, bit 6 far model beyond 0x1000).
-    pub flags: u16,
-    /// `+0x36`: the far model (drawn at depth >= 0x200; the one before it nearer).
-    pub model: i16,
-    /// `+0x64`: the spoiler model on the next matrix slot (0: none).
-    pub extra: i16,
-}
-
-impl Racer {
-    /// The models `draw_sector_entities` draws for this racer at camera depth `d` (`render::entities`), body
-    /// then spoiler; none beyond depth 0x2000, nor beyond 0x1000 without flag bit 6, nor without a matrix slot.
-    pub fn models_at(&self, d: i32) -> Vec<usize> {
-        let mut d = d;
-        if d as u32 >= 0x2000 || self.slot == 0xFF || self.model == 0 {
-            return Vec::new();
-        }
-        if self.flags & 2 != 0 {
-            d = 0;
-        }
-        if d > 0x1000 {
-            if self.flags & 0x40 == 0 {
-                return Vec::new();
-            }
-            d = 0x200;
-        }
-        let body = (self.model + (d >= 0x200) as i16 - 1) as usize;
-        let spoiler = self.extra.unsigned_abs() as usize;
-        match self.extra {
-            0 => vec![body],
-            n if n < 0 => vec![spoiler, body],
-            _ => vec![body, spoiler],
-        }
-    }
-}
-
-/// Who races and how they look: the four racers (the player first), car and paint per racer, the player's car
-/// record, the route and the environment.
-#[derive(Debug, Clone)]
-pub struct RaceView {
-    pub racers: [Racer; 4],
-    pub cars: [i8; 4],
-    pub paints: [i8; 4],
-    /// The player's car record (0x11 bytes at `*0x0300539C + 0x11*car`).
-    pub record: [u8; 0x11],
-    pub route: usize,
-    pub env: usize,
-}
-
-impl RaceView {
-    pub fn read(m: &Mem) -> RaceView {
-        let entities = m.u32(WORLD + 0x3C);
-        let racer = |i: u32| {
-            let e = entities + 0xA4 * i;
-            Racer {
-                pos: [0x0C, 0x10, 0x14].map(|k| m.i32(e + k)),
-                heading: m.i32(e + 0x2C) >> 8,
-                sector: m.u16(e + 0x78),
-                slot: m.u8(e + 0x88),
-                flags: m.u16(e + 0x0A),
-                model: m.i16(e + 0x36),
-                extra: m.i16(e + 0x64),
-            }
-        };
-        let player = m.u32(PLAYER);
-        let cars = racer_bytes(m, CARS);
-        RaceView {
-            racers: [0, 1, 2, 3].map(|k| racer((player + k) % 4)),
-            cars,
-            paints: racer_bytes(m, PAINTS),
-            record: m
-                .bytes(m.u32(RECORDS) + 0x11 * cars[0] as u32, 0x11)
-                .try_into()
-                .unwrap(),
-            route: m.u32(ROUTE_INDEX) as usize,
-            env: m.u32(0x0300_006C) as usize,
-        }
-    }
-}
-
-/// Vehicle matrix slot `s` (world `+0xFC`, 0x30 bytes each), built for the frame's camera.
-pub fn matrix(m: &Mem, s: u8) -> [i32; 12] {
-    let at = m.u32(WORLD + 0xFC) + 0x30 * s as u32;
-    std::array::from_fn(|k| m.i32(at + 4 * k as u32))
-}
-
-/// The player's atlas as the race holds it in EWRAM (entity `+0x84`, when draw flag bit 3), `len` bytes, rim and all.
-pub fn player_atlas(m: &Mem, len: usize) -> Option<Vec<u8>> {
-    let e = m.u32(WORLD + 0x3C) + 0xA4 * m.u32(PLAYER);
-    (m.u16(e + 0x0A) & 8 != 0).then(|| m.bytes(m.u32(e + 0x84), len).to_vec())
-}
-
-/// The race's base palette (`0x030055F0`'s buffer: the city's with the racers' car ramps, before the light tint).
-pub fn base_palette(m: &Mem) -> Vec<u16> {
-    let at = m.u32(0x0300_55F0);
-    (0..256).map(|i| m.u16(at + 2 * i)).collect()
 }
 
 /// Game state 5 (the race) after `race_start`, which `game_state_step` runs in state 4. A `Game::frame` on it then

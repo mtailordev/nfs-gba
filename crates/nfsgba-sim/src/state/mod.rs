@@ -5,6 +5,10 @@
 
 pub mod car;
 pub use car::*;
+pub mod hud;
+pub mod slots;
+pub use hud::*;
+pub use slots::*;
 
 use nfsgba_formats::render::Piece;
 
@@ -26,6 +30,8 @@ layout! {
         0x14 sectors: u32,
         0x18 pieces: Ptr<Piece>,
         0x1C sector_offsets: Ptr<SectorOffset>,
+        /// The city's material table (0x24 bytes each; in the ROM, so not part of the RAM image the tests compare).
+        0x24 material_info: Ptr<MaterialInfo>,
         0x3C entities: Ptr<Entity>,
         /// Racing-line section table and racing line.
         0x40 sections: u32,
@@ -233,6 +239,8 @@ layout! {
         /// Car-to-car contact this frame (set by the car steps).
         0x2E0 contact: [u32; 2],
         0x2EF engine_sound: i8,
+        /// Per racer: the car-to-car contact (sparks fly while it is positive).
+        0x318 racer_hits: [i32; 4],
         /// The camera sector has a ceiling: this frame, last frame.
         0x400 ceiling: [u8; 2],
         0x402 needle_scale: u8,
@@ -277,6 +285,16 @@ mod tests {
         assert_disjoint::<CarGlobals>("CarGlobals");
         assert_disjoint::<SectionRec>("SectionRec");
         assert_disjoint::<WaypointRec>("WaypointRec");
+        assert_disjoint::<SlotGlobals>("SlotGlobals");
+        assert_disjoint::<SpritePool>("SpritePool");
+        assert_disjoint::<Sprite>("Sprite");
+        assert_disjoint::<CarRecord>("CarRecord");
+        assert_disjoint::<RaceSetup>("RaceSetup");
+        assert_disjoint::<MaterialInfo>("MaterialInfo");
+        assert_disjoint::<HudVars>("HudVars");
+        assert_disjoint::<HudMessages>("HudMessages");
+        assert_disjoint::<ShadowOam>("ShadowOam");
+        assert_disjoint::<nfsgba_formats::ui::Object>("Object");
         assert!(<Camera as crate::layout::Layout>::FIELDS.contains(&("matrix", CAMERA_MATRIX, 48)));
     }
 }

@@ -24,6 +24,7 @@ pub mod math;
 pub mod mem;
 pub mod ram;
 pub mod route;
+pub mod slot_data;
 pub mod sound;
 pub mod state;
 pub mod traffic;

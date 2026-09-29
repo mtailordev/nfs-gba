@@ -1,117 +1,92 @@
-//! The effect-sprite list (`FUN_08161f38`, list header at `0x03000058`): 20-byte sprite objects written into the
-//! shadow OAM (`0x030064F0`) from entry `start` downwards, through the game's OAM attribute setters.
+//! The effect-sprite list (`FUN_08161f38`): 20-byte sprite objects written into the shadow OAM from entry `first`
+//! downwards, through the game's OAM attribute setters. It runs on typed state: the pool ([`Sprite`]) and the
+//! shadow OAM ([`Oam`]); `view::hud::draw_effect_sprites` loads and stores them.
 
-use nfsgba_sim::Mem;
+use nfsgba_formats::ui::Oam;
+use nfsgba_sim::state::Sprite;
 
-pub const SHADOW_OAM: u32 = 0x0300_64F0;
-const TILE_BASE: u32 = 0x0300_64E0;
-
-fn entry(i: u32) -> u32 {
-    SHADOW_OAM + 8 * i
+/// `attr = attr & !mask | bits` on the halfword `j` of OAM entry `i`.
+fn set(oam: &mut Oam, i: u32, j: usize, mask: u16, bits: u16) {
+    let v = &mut oam[i as usize][j];
+    *v = *v & !mask | bits & mask;
 }
 
-fn set_byte(m: &mut Mem, at: u32, keep: u8, bits: u8) {
-    let v = m.u8(at) & keep | bits;
-    m.set_u8(at, v);
-}
-
-/// `FUN_08161f38(list)`: `list` = {u32 objects, i16 first OAM entry, i16 count}; object = {u16 x, u16 y,
-/// u16 active, u16 ?, u16 tile, i16 scale x, i16 scale y, u16 angle, u16 size code, u8 flags, i8 palette}.
-pub fn draw_effect_sprites(rom: &[u8], m: &mut Mem, list: u32) {
-    let (mut p, mut i, mut n) = (m.u32(list), m.i16(list + 4) as i32 as u32, m.i16(list + 6) as i32);
-    while n != 0 {
-        let h = |m: &Mem, k: u32| m.u16(p + 2 * k);
-        if h(m, 2) == 1 {
-            let e = entry(i);
-            if i < 0x80 {
+/// `FUN_08161f38(list)`: `sprites` are the pool's objects, `first` its first OAM entry.
+pub fn draw_effect_sprites(rom: &[u8], sprites: &mut [Sprite], first: i16, tile_base: u16, oam: &mut Oam) {
+    let mut i = first as i32 as u32;
+    for p in sprites.iter_mut() {
+        // (The game writes past the OAM for an entry above 0x7F; that never happens in a race.)
+        if i < 0x80 {
+            if p.used == 1 {
                 // FUN_081611c4: x into attr1 bits 0..8, y into attr0's low byte.
-                let a1 = m.u16(e + 2) & 0xFE00 | h(m, 0) & 0x1FF;
-                m.set_u16(e + 2, a1);
-                m.set_u8(e, h(m, 1) as u8);
+                set(oam, i, 1, 0x1FF, p.x as u16);
+                set(oam, i, 0, 0xFF, p.y as u16);
                 // FUN_08161384: tile + the OBJ tile base into attr2 bits 0..9.
-                let a2 = m.u16(e + 4) & 0xFC00 | h(m, 4).wrapping_add(m.u16(TILE_BASE)) & 0x3FF;
-                m.set_u16(e + 4, a2);
+                set(oam, i, 2, 0x3FF, (p.frame as u16).wrapping_add(tile_base));
                 // FUN_08160f10: shape (attr0 bits 14..15) and size (attr1 bits 14..15) from the size code.
-                let (shape, size) = match h(m, 8) {
+                let (shape, size) = match p.size as u16 {
                     c @ 0..=3 => (0, c),
                     c @ 4..=7 => (1, c - 4),
                     c @ 8..=11 => (2, c - 8),
                     _ => (0, 0),
                 };
-                set_byte(m, e + 1, 0x3F, (shape as u8) << 6);
-                set_byte(m, e + 3, 0x3F, (size as u8) << 6);
-            }
-            let flags = m.u8(p + 0x12);
-            // FUN_08161204: OBJ mode (attr0 bits 10..11): semi-transparent when flag bit 1.
-            if i < 0x80 {
-                set_byte(m, entry(i) + 1, 0xF3, ((flags >> 1) & 1) << 2);
-            }
-            if flags & 4 == 0 {
-                let matrix = i & 0x1F;
-                set_affine_index(m, i, matrix);
-                set_affine(
-                    rom,
-                    m,
-                    matrix,
-                    h(m, 5) as i16 as i32,
-                    h(m, 6) as i16 as i32,
-                    h(m, 7) as u32,
-                );
-                set_affine_mode(m, i, 3);
-            } else {
-                set_affine_mode(m, i, 0);
-                set_affine_index(m, i, 0);
-            }
-            let palette = m.u8(p + 0x13);
-            if i < 0x80 {
-                // FUN_08161264 (256 colours, attr0 bit 13) and FUN_081613f4 (palette bank, attr2 bits 12..15).
-                if palette == 0xFF {
-                    set_byte(m, entry(i) + 1, 0xDF, 1 << 5);
+                set(oam, i, 0, 0xC000, shape << 14);
+                set(oam, i, 1, 0xC000, size << 14);
+                // FUN_08161204: OBJ mode (attr0 bits 10..11): semi-transparent when flag bit 1.
+                set(oam, i, 0, 0x0C00, ((p.kind as u16 >> 1) & 1) << 10);
+                if p.kind & 4 == 0 {
+                    let matrix = i & 0x1F;
+                    set_affine_index(oam, i, matrix);
+                    set_affine(
+                        rom,
+                        oam,
+                        matrix,
+                        p.scale_x as i32,
+                        p.scale_y as i32,
+                        p.angle as u16 as u32,
+                    );
+                    set(oam, i, 0, 0x0300, 3 << 8);
                 } else {
-                    set_byte(m, entry(i) + 1, 0xDF, 0);
-                    set_byte(m, entry(i) + 5, 0x0F, palette << 4);
+                    set(oam, i, 0, 0x0300, 0);
+                    set_affine_index(oam, i, 0);
                 }
+                // FUN_08161264 (256 colours, attr0 bit 13) and FUN_081613f4 (palette bank, attr2 bits 12..15).
+                if p.palette == 0xFF {
+                    set(oam, i, 0, 0x2000, 0x2000);
+                } else {
+                    set(oam, i, 0, 0x2000, 0);
+                    set(oam, i, 2, 0xF000, (p.palette as u16) << 12);
+                }
+            } else {
+                // FUN_081610c8: y = 160, affine mode off.
+                set(oam, i, 0, 0xFF, 0xA0);
+                set(oam, i, 0, 0x0300, 0);
             }
-            if flags & 1 != 0 {
-                m.set_u16(p + 4, 0);
-            }
-        } else {
-            // FUN_081610c8: y = 160, affine mode off. It has no range check on the entry.
-            m.set_u8(entry(i), 0xA0);
-            set_affine_mode(m, i, 0);
         }
-        p += 20;
+        if p.used == 1 && p.kind & 1 != 0 {
+            p.used = 0;
+        }
         i = i.wrapping_sub(1);
-        n -= 1;
-    }
-}
-
-/// `FUN_08161000`: affine mode, attr0 bits 8..9.
-fn set_affine_mode(m: &mut Mem, i: u32, mode: u8) {
-    if i < 0x80 {
-        set_byte(m, entry(i) + 1, 0xFC, mode & 3);
     }
 }
 
 /// `FUN_08160ebc`: affine matrix index, attr1 bits 9..13 (only indices below 0x20).
-fn set_affine_index(m: &mut Mem, i: u32, matrix: u32) {
-    if i < 0x80 && matrix < 0x20 {
-        let v = ((matrix & 7) << 1 | (matrix >> 3 & 1) << 4 | (matrix >> 4 & 1) << 5) as u8;
-        set_byte(m, entry(i) + 3, 0xC1, v);
+fn set_affine_index(oam: &mut Oam, i: u32, matrix: u32) {
+    if matrix < 0x20 {
+        let v = ((matrix & 7) << 1 | (matrix >> 3 & 1) << 4 | (matrix >> 4 & 1) << 5) as u16;
+        set(oam, i, 1, 0x3E00, v << 8);
     }
 }
 
 /// `oam_set_affine` (`0x0816144c`): matrix `k` = scale × rotation, in the fourth halfword of entries 4k..4k+3.
-fn set_affine(rom: &[u8], m: &mut Mem, k: u32, sx: i32, sy: i32, angle: u32) {
+fn set_affine(rom: &[u8], oam: &mut Oam, k: u32, sx: i32, sy: i32, angle: u32) {
     let (c, s) = (
         nfsgba_fixed::cos_q14(rom, angle as i32),
         nfsgba_fixed::sin_q14(rom, angle as i32),
     );
-    if k < 0x20 {
-        let at = SHADOW_OAM + 0x20 * k;
-        m.set_i16(at + 6, (sx.wrapping_mul(c) >> 14) as i16);
-        m.set_i16(at + 0xE, (sx.wrapping_mul(s) >> 14) as i16);
-        m.set_i16(at + 0x16, (sy.wrapping_mul(-s) >> 14) as i16);
-        m.set_i16(at + 0x1E, (sy.wrapping_mul(c) >> 14) as i16);
-    }
+    let at = 4 * k as usize;
+    oam[at][3] = (sx.wrapping_mul(c) >> 14) as i16 as u16;
+    oam[at + 1][3] = (sx.wrapping_mul(s) >> 14) as i16 as u16;
+    oam[at + 2][3] = (sy.wrapping_mul(-s) >> 14) as i16 as u16;
+    oam[at + 3][3] = (sy.wrapping_mul(c) >> 14) as i16 as u16;
 }

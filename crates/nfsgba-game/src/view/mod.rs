@@ -1,13 +1,18 @@
 //! What the exact subsystems read, taken from (and written back to) the game's RAM: the renderer's frame,
-//! runtime tables, entities and root portal; the sky's camera; the HUD's globals, racers and objects.
+//! runtime tables, entities and root portal; the sky's camera; the camera's frame. The matrix slots, the HUD and
+//! the race's setup have their own adapters (`slots`, `hud`, `race`).
 
 pub mod car;
+pub mod hud;
+pub mod race;
+pub mod slots;
+
+pub use race::{RaceView, Racer, base_palette, matrix, player_atlas};
 
 use nfsgba_formats::{
-    LEVEL_TABLE, hud,
+    LEVEL_TABLE,
     render::{self, Entity, Frame, MaterialState, Piece, Portal, Runtime, Scene, View},
     sky::SkyCamera,
-    ui,
 };
 use nfsgba_sim::{
     Mem,
@@ -15,14 +20,9 @@ use nfsgba_sim::{
     state::{self, CAMERA_MATRIX, Camera, Input, Race, Screen, WorldHeader},
 };
 
-use crate::camera::{CameraFrame, Racer};
+use crate::camera::{CameraFrame, Racer as CamRacer};
 
 pub use nfsgba_sim::state::WORLD;
-/// Sprite screen of the race HUD (world `+0xA4`).
-pub const HUD_SCREEN: u32 = WORLD + 0xA4;
-pub const HUD_OBJECTS: usize = 55;
-pub const MESSAGES: u32 = 0x0300_6210;
-pub const TILE_BASE: u32 = 0x0300_64E0;
 
 pub fn frame(m: &Mem) -> Frame {
     let (view, cam) = (m.u32(WORLD + 0x50), m.u32(WORLD + 0x54));
@@ -136,7 +136,7 @@ pub fn camera_frame(m: &Mem) -> CameraFrame {
     let racer = |e: Ptr<state::Entity>| {
         let entity = e.read(m);
         let car = entity.driver.read(m);
-        Racer { entity, car }
+        CamRacer { entity, car }
     };
     CameraFrame {
         camera: Camera::load(m, 0),
@@ -173,116 +173,6 @@ pub fn store_camera_frame(m: &mut Mem, f: &CameraFrame) {
     let mut p = profile.read(m);
     p.ceiling = f.ceiling;
     profile.write(m, &p);
-}
-
-pub fn hud_globals(m: &Mem) -> hud::Globals {
-    let w = |a: u32| m.u32(a);
-    hud::Globals {
-        hud: w(0x0300_5698),
-        mode: w(0x0300_56E0) as i32,
-        language: w(0x0300_5600),
-        units: w(0x0300_0040),
-        frames: w(0x0300_5800) as i32,
-        split: w(0x0300_615C) as i32,
-        opponents: w(0x0300_5784),
-        ai_cars: w(0x0300_57EC),
-        laps: w(0x0300_56E4),
-        wingman: w(0x0300_6104),
-        portrait: w(0x0300_61DC) as i32,
-        portrait_blink: w(0x0300_61D4),
-        bar: w(0x0300_61E4) as i32,
-        bar_max: w(0x0300_6188) as i32,
-        arrow: w(0x0300_601C) as i32,
-        route: w(0x0300_5388),
-        needle_scale: m.u8(m.u32(0x0300_56EC) + 0x402),
-        player: w(0x0300_57F8) as usize,
-        race_state: w(0x0300_0048),
-        race_state_changed: w(0x0300_00AC),
-    }
-}
-
-/// The globals `hud_update` changes (the race state past the time limit, the portrait and bar animation).
-pub fn store_hud_globals(m: &mut Mem, g: &hud::Globals) {
-    m.set_u32(0x0300_0048, g.race_state);
-    m.set_u32(0x0300_00AC, g.race_state_changed);
-    m.set_i32(0x0300_61DC, g.portrait);
-    m.set_u32(0x0300_61D4, g.portrait_blink);
-    m.set_i32(0x0300_61E4, g.bar);
-}
-
-pub fn hud_racers(m: &Mem) -> [hud::Racer; 4] {
-    let ents = m.u32(WORLD + 0x3C);
-    std::array::from_fn(|i| {
-        let e = ents + 0xA4 * i as u32;
-        let d = m.u32(e + 0x8C);
-        hud::Racer {
-            x: m.i32(e + 0x0C),
-            z: m.i32(e + 0x14),
-            heading: m.i32(e + 0x2C),
-            driver: (d != 0).then(|| hud::Driver {
-                revs: m.i32(d + 0x3C),
-                gear: m.i32(d + 0x40),
-                speed: m.i32(d + 0x44),
-                position: m.i32(d + 0xA8),
-                laps_left: m.i8(d + 0xC5),
-                rev_scale: m.i32(d + 0x454),
-                dial: m.i32(d + 0x4C8),
-                flags: m.u16(d + 0x4D8),
-                hunter_life: m.i32(d + 0x4E8),
-            }),
-        }
-    })
-}
-
-pub fn hud_objects(m: &Mem) -> Vec<ui::Object> {
-    let at = m.u32(HUD_SCREEN + 0x14);
-    (0..HUD_OBJECTS as u32)
-        .map(|k| ui::Object::from_bytes(m.bytes(at + 16 * k, 16)))
-        .collect()
-}
-
-pub fn store_hud_objects(m: &mut Mem, objects: &[ui::Object]) {
-    let at = m.u32(HUD_SCREEN + 0x14);
-    for (k, o) in objects.iter().enumerate() {
-        let a = at + 16 * k as u32;
-        for (j, v) in [
-            o.flags,
-            o.scale[0] as u16,
-            o.scale[1] as u16,
-            o.frame as u16,
-            o.loaded as u16,
-            o.dy as u16,
-            o.dx as u16,
-            o.angle,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            m.set_u16(a + 2 * j as u32, v);
-        }
-    }
-}
-
-pub fn messages(m: &Mem) -> hud::Messages {
-    std::array::from_fn(|i| m.bytes(MESSAGES + 4 * i as u32, 4).try_into().unwrap())
-}
-
-pub fn store_messages(m: &mut Mem, msgs: &hud::Messages) {
-    for (i, b) in msgs.iter().enumerate() {
-        m.set_bytes(MESSAGES + 4 * i as u32, b);
-    }
-}
-
-pub fn shadow_oam(m: &Mem) -> ui::Oam {
-    std::array::from_fn(|i| std::array::from_fn(|j| m.u16(crate::oam::SHADOW_OAM + 8 * i as u32 + 2 * j as u32)))
-}
-
-pub fn store_shadow_oam(m: &mut Mem, oam: &ui::Oam) {
-    for (i, e) in oam.iter().enumerate() {
-        for (j, v) in e.iter().enumerate() {
-            m.set_u16(crate::oam::SHADOW_OAM + 8 * i as u32 + 2 * j as u32, *v);
-        }
-    }
 }
 
 /// The visible-sector list the camera builds (`build_visible_sectors`, called at the end of `camera_update`).

@@ -207,7 +207,7 @@ pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<
         }
         play.frames += 1;
     }
-    race.setup = race_init::RaceView::read(play.game.mem());
+    race.setup = view::RaceView::read(play.game.mem());
     race.current = race.setup.route % race.routes.len();
 }
 

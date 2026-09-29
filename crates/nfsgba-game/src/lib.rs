@@ -239,9 +239,9 @@ impl Game {
             "game states other than the race (state machine FUN_0812acec)",
         )?;
         self.race_frame(t, assist)?;
-        oam::draw_effect_sprites(&self.rom, &mut self.sim.mem, 0x0300_0058);
+        view::hud::draw_effect_sprites(&self.rom, &mut self.sim.mem);
         // FUN_0816102c: the shadow OAM to OAM.
-        self.oam.copy_from_slice(self.sim.mem.bytes(oam::SHADOW_OAM, 0x400));
+        self.oam.copy_from_slice(&view::hud::shadow_oam_bytes(&self.sim.mem));
         let m = &mut self.sim.mem;
         m.set_u32(FRAME_COUNT, m.u32(FRAME_COUNT).wrapping_add(1));
         if m.u32(GAME_STATE) == 5 {
@@ -416,8 +416,8 @@ impl Game {
             self.audio.carbon_play_sound(Rom(&self.rom), id, opt);
         }
         self.shade_car_paint();
+        view::slots::reset_counter(&mut self.sim.mem); // FUN_0814f8a0
         let m = &mut self.sim.mem;
-        m.set_u32(0x0300_5394, 0); // FUN_0814f8a0: the matrix slot counter
         let profile = m.u32(PROFILE);
         m.set_u32(profile + 0x2E0, 0);
         m.set_u32(profile + 0x2E4, 0);
@@ -439,7 +439,7 @@ impl Game {
             self.sim.mem.set_u16(WORLD + 0xF6, 1);
         }
         if !assist(Checkpoint::Slots, self) {
-            slots::race_slots(&mut self.sim.mem)?;
+            view::slots::race_slots(&self.rom, &self.data, &mut self.sim.mem)?;
         }
         let page = (self.sim.mem.u32(0x0300_0080) - 0x0600_0000) as usize;
         if self.sim.mem.u16(WORLD + 0xF6) != 0 {
@@ -483,15 +483,13 @@ impl Game {
         let m = &self.sim.mem;
         is(over != 0 && fade == 0, "the race end")?;
         if phase != 1 {
-            let g = view::hud_globals(m);
-            let (mut objects, mut messages) = (view::hud_objects(m), view::messages(m));
-            if m.u32(0x0300_5384) == 0 {
-                hud::message_cancel(&self.rom, &g, &mut objects, &mut messages, 2);
+            let mut h = view::hud::load(m);
+            if h.vars.message_flag == 0 {
+                hud::message_cancel(&self.rom, &h.g, &mut h.objects, &mut h.messages, 2);
             } else {
-                hud::message_show(&self.rom, &g, &mut messages, 2, 0x3C, false);
+                hud::message_show(&self.rom, &h.g, &mut h.messages, 2, 0x3C, false);
             }
-            view::store_hud_objects(&mut self.sim.mem, &objects);
-            view::store_messages(&mut self.sim.mem, &messages);
+            view::hud::store(&mut self.sim.mem, &h);
         }
         let m = &self.sim.mem;
         is(
@@ -514,7 +512,7 @@ impl Game {
             match m.u16(e + 0x4E) {
                 0..=3 => {
                     if matches!(m.u16(e + 0x4A), 2 | 0x100) {
-                        slots::rim_redraw(&mut self.sim.mem, e)?;
+                        view::slots::rim_redraw_for(&self.rom, &self.data, &mut self.sim.mem, i as usize)?;
                     }
                     // The step reads the race time (route_gap, lap crossing) with the IRQs before route_gap
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
@@ -538,11 +536,19 @@ impl Game {
                     let effects = self.lend(at, |sim| ai::handler(sim, e))?;
                     self.play_commands(t, &mut sounds)?;
                     if let Some(f) = effects {
-                        let m = &mut self.sim.mem;
-                        slots::opponent_effects(m, e, f.heading as i32, f.view as i32, f.size);
+                        let (rom, data, m) = (&self.rom, &self.data, &mut self.sim.mem);
+                        view::slots::opponent_effects(
+                            rom,
+                            data,
+                            m,
+                            i as usize,
+                            f.heading as i32,
+                            f.view as i32,
+                            f.size,
+                        );
                     }
                 }
-                0x34 => slots::effect_handler(&mut self.sim.mem, e),
+                0x34 => view::slots::effect_handler(&self.rom, &self.data, &mut self.sim.mem, i as usize),
                 0x36 => {
                     traffic_ai::handler(&mut self.sim, e)?;
                     self.play_commands(t, &mut sounds)?;
@@ -615,34 +621,30 @@ impl Game {
 
     /// `hud_update(world + 0xA4)` then `sprite_screen_update(world + 0xA4, 0)`.
     fn hud(&mut self) {
-        let m = &self.sim.mem;
-        let mut g = view::hud_globals(m);
-        let racers = view::hud_racers(m);
-        let (mut objects, mut messages) = (view::hud_objects(m), view::messages(m));
+        let mut h = view::hud::load(&self.sim.mem);
         let mut obj_palette: Vec<u16> = (0..256)
             .map(|i| u16::from_le_bytes([self.palette[0x200 + 2 * i], self.palette[0x201 + 2 * i]]))
             .collect();
         let minimap = hud::update(
             &self.rom,
-            &mut g,
-            &racers,
-            &mut objects,
-            &mut messages,
+            &mut h.g,
+            &h.racers,
+            &mut h.objects,
+            &mut h.messages,
             &mut obj_palette,
         );
-        let (screen, tile_base) = (m.u16(view::HUD_SCREEN + 0x18) as usize, m.u16(view::TILE_BASE));
+        let (screen, tile_base) = (h.vars.screen as usize, h.vars.tile_base);
         if let Some(tiles) = minimap {
             let e = self.bank.elements[self.bank.screens[screen].first + 38];
             let at = 0x1_0000 + 32 * e.tile.wrapping_add(tile_base) as usize;
             self.vram[at..at + tiles.len()].copy_from_slice(&tiles);
         }
-        let mut shadow = view::shadow_oam(m);
         for u in ui::update_sprites(
             &self.rom,
             &self.bank,
             screen,
-            &mut objects,
-            &mut shadow,
+            &mut h.objects,
+            &mut h.oam,
             false,
             tile_base,
         ) {
@@ -652,24 +654,19 @@ impl Game {
         for (i, c) in obj_palette.into_iter().enumerate() {
             self.palette[0x200 + 2 * i..0x202 + 2 * i].copy_from_slice(&c.to_le_bytes());
         }
-        // The HUD's digits divide through the IWRAM routine (0x03000220), which stores its remainder at
-        // 0x03006480; the frame's last such division is the speed's ones digit (`hud_speed`).
+        // The HUD's digits divide through the IWRAM routine, which keeps its remainder; the frame's last such
+        // division is the speed's ones digit (`hud_speed`).
+        let g = &h.g;
         if g.hud != 0 && (0..=3).contains(&g.mode) {
-            let speed = racers[g.player].driver.map_or(0, |d| d.speed);
+            let speed = h.racers[g.player].driver.map_or(0, |d| d.speed);
             let mut v = nfsgba_formats::div(speed, 0x163C);
             if g.units == 0 {
                 v = nfsgba_fixed::iwram_divmod(v << 8, 0x19B).0;
             }
             let rest = nfsgba_fixed::iwram_divmod(v, 100).1;
-            self.sim
-                .mem
-                .set_i32(0x0300_6480, nfsgba_fixed::iwram_divmod(rest, 10).1);
+            h.vars.digit = nfsgba_fixed::iwram_divmod(rest, 10).1;
         }
-        let m = &mut self.sim.mem;
-        view::store_hud_globals(m, &g);
-        view::store_hud_objects(m, &objects);
-        view::store_messages(m, &messages);
-        view::store_shadow_oam(m, &shadow);
+        view::hud::store(&mut self.sim.mem, &h);
     }
 
     /// `FUN_0813ea04`: race positions (driver `+0xA8`), 1-based, from the race progress.

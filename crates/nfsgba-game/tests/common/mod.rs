@@ -5,8 +5,9 @@ use nfsgba_sim::{
     Mem,
     layout::{Field, Layout},
     state::{
-        Camera, Car, CarGlobals, CarProfile, Entity, Input, ListEntry, Profile, Query, Race, Screen, SectionRec,
-        SectorOffset, ViewPort, WORLD, WaypointRec, WorldHeader,
+        Camera, Car, CarGlobals, CarProfile, CarRecord, Entity, HudMessages, HudVars, Input, ListEntry, Profile, Query,
+        Race, RaceSetup, Screen, SectionRec, SectorOffset, ShadowOam, SlotGlobals, Sprite, SpritePool, ViewPort, WORLD,
+        WaypointRec, WorldHeader,
     },
 };
 
@@ -47,7 +48,17 @@ pub fn instances(m: &Mem) -> Vec<Instance> {
         at::<ViewPort>(w.view.addr),
         at::<ListEntry>(w.visible.addr),
         at::<Profile>(race.profile.addr),
+        at::<SlotGlobals>(0),
+        at::<SpritePool>(0),
+        at::<RaceSetup>(0),
+        at::<HudVars>(0),
+        at::<HudMessages>(0),
+        at::<ShadowOam>(0),
     ];
+    let pool = SpritePool::load(m, 0);
+    all.extend((0..pool.count.max(0) as u32).map(|k| at::<Sprite>(pool.objects.at(k).addr)));
+    all.extend((0..15).map(|k| at::<CarRecord>(SlotGlobals::load(m, 0).records.at(k).addr)));
+    all.extend((0..55).map(|k| at::<nfsgba_formats::ui::Object>(HudVars::load(m, 0).objects.at(k).addr)));
     all.extend((0..10).map(|k| at::<SectionRec>(w.sections + 8 * k)));
     all.extend((0..0x100).map(|k| at::<WaypointRec>(w.racing_line + 0x18 * k)));
     all.extend((0..w.piece_count as u32).map(|k| at::<nfsgba_formats::render::Piece>(w.pieces.at(k).addr)));
