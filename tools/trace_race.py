@@ -23,7 +23,8 @@ MENU_TO_RACE = ["load mainmenu", "wait 30", "hold A 10", "wait 60", "hold A 10",
 # The autopilot (tools/trace_autopilot.lua) drives the longer scenarios; each starts from its defaults.
 AUTOPILOT = [f"lua {Path(__file__).resolve().with_name('trace_autopilot.lua').as_posix()}", "luax AUTOPILOT.reset()"]
 # Race-info screens saved from a fresh profile (docs/engine/physics.md, "Scenarios"): hunter-info (Quick Play
-# Random: hunter, Southside, Mazda RX-7, easy, 3 opponents, heavy traffic).
+# Random: hunter, Southside, Mazda RX-7, easy, 3 opponents, heavy traffic), easy-info (Quick Play Custom: Longpoint
+# circuit, 2 laps, easy, 3 opponents, no traffic, catch-up on, VW Golf GTI).
 
 SCENARIOS = {
     "accel": ["hold A 240"],
@@ -46,6 +47,10 @@ SCENARIOS = {
     # (Chaotic: A pressed one frame earlier or later and the car stays upright, hence this command order.)
     "tipped": [AUTOPILOT[0], "load hunter-info", "trace", AUTOPILOT[1], "hold A 5", "wait 60", "luax AUTOPILOT.hunt=4000",
                'luax AUTOPILOT.mode="race"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
+    # Longpoint circuit (easy-info): the autopilot takes the shortcut (section 1) at lap waypoint 12, breaking the
+    # barrier wall in front of it, then rejoins the lap (side route segments, breakable walls).
+    "shortcut": ["load easy-info", *AUTOPILOT[:1], "luax AUTOPILOT.reset();AUTOPILOT.branch=1;AUTOPILOT.branch_at=12",
+                 "trace", "hold A 10", "wait 5", 'luax AUTOPILOT.mode="race"', "wait 7000", 'luax AUTOPILOT.mode="off"'],
     # The same drive; once tipped for 20 steps the counter is raised to 100 (RAM test input, same frame timing),
     # so the stuck reset (FUN_0814efa8) puts the car back on the road.
     "stuck": [AUTOPILOT[0], "load hunter-info", "trace", "luax AUTOPILOT.reset();AUTOPILOT.tipped=20", "hold A 5",

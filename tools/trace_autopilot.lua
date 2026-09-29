@@ -7,7 +7,9 @@
 --   AUTOPILOT.extra = key mask OR'd in (e.g. 0x200 L for nitro with A); AUTOPILOT.gas = false releases A;
 --   AUTOPILOT.section / AUTOPILOT.index: follow that racing-line section from that waypoint (a shortcut branch);
 --   AUTOPILOT.recover = false: no reversing out when stuck;
---   AUTOPILOT.tipped = N: after N tipped-over steps, raise the tipped counter to 100 (test input for the reset).
+--   AUTOPILOT.tipped = N: after N tipped-over steps, raise the tipped counter to 100 (test input for the reset);
+--   AUTOPILOT.branch = S, AUTOPILOT.branch_at = N: on the lap at waypoint N, drive racing-line section S (a
+--   shortcut, often behind a breakable wall), then rejoin the lap.
 -- Steering: heading and target angles are 0x4000 per turn, measured from +z towards +x (the game's atan2);
 -- LEFT turns towards smaller angles, RIGHT towards larger (measured in the recorded traces).
 AUTOPILOT = AUTOPILOT or {}
@@ -17,7 +19,7 @@ function ap.reset()
   ap.mode, ap.ahead, ap.extra, ap.dead, ap.gas = "off", 1, 0, 0x60, true
   ap.hunt, ap.target, ap.section, ap.index, ap.recover, ap.log = nil, nil, nil, nil, nil, nil
   ap.reverse, ap.stuck, ap.diff = 0, 0, 0
-  ap.tipped, ap.tipped_done = nil, nil
+  ap.tipped, ap.tipped_done, ap.branch, ap.branch_at = nil, nil, nil, nil
   emu:setKeys(0)
 end
 if not ap.loaded then ap.reset() end
@@ -50,12 +52,18 @@ function ap.step()
   end
   local x, z = s32(emu:read32(e + 0x0C)) // 256, s32(emu:read32(e + 0x14)) // 256
   local tx, tz
+  if ap.branch and not ap.section and emu:read16(e + 0x72) == 0 and emu:read16(e + 0x90) == ap.branch_at then
+    -- Take the shortcut: follow section ap.branch from its first waypoint (once).
+    ap.section, ap.index, ap.branch = ap.branch, 0, nil
+  end
   if ap.mode == "ram" then
     local t = entity(ap.target or 1)
     tx, tz = s32(emu:read32(t + 0x0C)) // 256, s32(emu:read32(t + 0x14)) // 256
   elseif ap.section then
     tx, tz = waypoint(ap.section, ap.index + ap.ahead)
     if tx and (tx - x) ^ 2 + (tz - z) ^ 2 < 1500 ^ 2 then ap.index = ap.index + 1 end
+    -- Past the section's last waypoint: back to the racing line.
+    if ap.index + ap.ahead >= emu:read16(emu:read32(WORLD + 0x40) + ap.section * 8) then ap.section = nil end
   else
     tx, tz = waypoint(emu:read16(e + 0x72), emu:read16(e + 0x90) + ap.ahead)
   end
