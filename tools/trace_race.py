@@ -38,9 +38,10 @@ SCENARIOS = {
              "hold A 150", "hold A,RIGHT 30", "hold A 200", "hold A,LEFT 40", "hold A 150"],
     # From the race info screen: the car's init step, the intro, the launch among the opponents, traffic.
     "start": [*MENU_TO_RACE, "trace", "hold A 10", "wait 100", "hold A 700"],
-    # Hunter race: the autopilot rams the nearest opponent (car-to-car response, hunter hits, tipping over).
-    "hunter": ["load hunter-info", *AUTOPILOT, "luax AUTOPILOT.hunt=4000", "wait 30", "trace", "hold A 10", "wait 60",
-               'luax AUTOPILOT.mode="race"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
+    # Hunter race: the autopilot rams opponent 3 (car-to-car responses, hunter hits and wall hits; traffic hits
+    # the player twice between steps).
+    "hunter": ["load hunter-info", *AUTOPILOT, "wait 30", "trace", "hold A 10", "wait 60", "luax AUTOPILOT.target=3",
+               'luax AUTOPILOT.mode="ram"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
 }
 
 # Entity 0 fields for --summary: name, offset, size (see docs/engine/physics.md)
