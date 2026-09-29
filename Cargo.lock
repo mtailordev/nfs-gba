@@ -3579,7 +3579,6 @@ name = "nfsgba-viewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "nfsgba-fixed",
  "nfsgba-formats",
  "nfsgba-game",
  "nfsgba-testkit",

@@ -1,7 +1,14 @@
-//! Play mode (`NFSGBA_PLAY=1` with `NFSGBA_DUMP`): the keyboard drives `nfsgba_game::Game`, one game frame every
-//! four video frames (59.7275 Hz), from the dump's machine state. The viewer's race state (racers, camera, visible
-//! list, palette, original frame) is read back from the game's RAM after every game frame, and the HUD is the
-//! game's OAM drawn as a 2D layer. `docs/engine/game-loop.md`.
+//! The race, in every viewer mode, is an `nfsgba_game::Game`: the viewer's race state (racers, camera, visible list,
+//! palette, original frame) is read back from it (`nfsgba_game::{view, race_init}`), and the HUD is the game's OAM
+//! drawn as a 2D layer. Three ways to get one:
+//! - `NFSGBA_PLAY=1` with `NFSGBA_DUMP`: the keyboard drives the game, one game frame every four video frames
+//!   (59.7275 Hz), from the dump's machine state (`docs/engine/game-loop.md`);
+//! - `NFSGBA_DUMP` alone: the same machine, paused;
+//! - a route (`NFSGBA_ROUTE`, R, K): `race_init::race_start` on the pre-race capture with the setup poked in
+//!   (`apply_setup`), paused.
+//!
+//! NOT 1:1 (G1): a route's race start is paused; the handover to `Game::frame` (intro, countdown, fades) is not
+//! ported. The camera and matrix slots are the game's (`race_init::pose`), the light tint the viewer's.
 //!
 //! Keys: arrows = D-pad, X = A (accelerate), Z = B (brake), A = L, S = R, Enter = START, Backspace = SELECT.
 //! `NFSGBA_PLAY_KEYS=A*40,A+LEFT*12,...` plays a script instead (GBA key names, counts in game frames).
@@ -23,13 +30,14 @@ use bevy::{
     prelude::*,
 };
 use nfsgba_formats as rom;
-use nfsgba_game::{Game, Machine, Timing, view};
+use nfsgba_game::{Game, Machine, Timing, race_init, view};
 
-use crate::{
-    Race,
-    game::{Dump, RaceSetup},
-    texture_2d,
-};
+use crate::{Race, texture_2d};
+
+/// The car of a route's Quick Play race (the reference race's Cobalt).
+pub const PLAYER_CAR: u8 = 2;
+/// The VBlanks before `setup_race_cars` reads the tick counter (6 or 7 in the recorded race starts).
+const SEED_VBLANKS: u32 = 7;
 
 pub const VIDEO_HZ: f32 = 59.7275;
 const KEYS: [&str; 10] = ["A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L"];
@@ -37,6 +45,10 @@ const KEYS: [&str; 10] = ["A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "D
 #[derive(Resource)]
 pub struct Play {
     pub game: Game,
+    /// The game does not run (a dump without `NFSGBA_PLAY`, a route's race start).
+    pub paused: bool,
+    /// (environment, route) of a route's race start; `None` for a dump.
+    pub grid: Option<(u32, u32)>,
     clock: f32,
     pub frames: u64,
     /// Why play stopped (a game code path that is not ported), if it did.
@@ -90,8 +102,30 @@ pub fn start_sound(mut commands: Commands, play: Res<Play>, mut sounds: ResMut<A
 }
 
 impl Play {
-    pub fn load(rom_bytes: Vec<u8>, prefix: &str, hud: Handle<Image>) -> io::Result<Play> {
+    /// A race dump (`prefix` under `$NFSGBA_DATA/work/e5298b24/`), running or paused.
+    pub fn load(rom_bytes: Vec<u8>, prefix: &str, hud: Handle<Image>, running: bool) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24").join(prefix);
+        Ok(Play::new(Machine::load_dump(rom_bytes, &path)?, hud, !running, None))
+    }
+
+    /// A Quick Play race start on `route` in environment `env`, paused (`race_init::start`).
+    pub fn grid(rom_bytes: Vec<u8>, env: u32, route: u32, hud: Handle<Image>) -> io::Result<Play> {
+        let path = rom::data_dir().join("work/e5298b24/race-init/circuit_pre");
+        let (mut machine, mut io) = race_init::load_pre(rom_bytes, &path)?;
+        race_init::apply_setup(&mut machine, env, route, 0, PLAYER_CAR);
+        race_init::race_start(&mut machine, &mut io, SEED_VBLANKS).map_err(|e| io::Error::other(e.to_string()))?;
+        race_init::enter_race(&mut machine.mem);
+        let mut play = Play::new(machine, hud, true, Some((env, route)));
+        // The first race frame runs up to the countdown, which is not ported (G1): the drivers, camera, matrix slots
+        // and the world are the game's; anything else that stops it is an error.
+        match play.game.frame(0, &Timing::steady()) {
+            Err(e) if e.to_string().contains("countdown") => Ok(play),
+            Err(e) => Err(io::Error::other(e.to_string())),
+            Ok(()) => Ok(play),
+        }
+    }
+
+    fn new(machine: Machine, hud: Handle<Image>, paused: bool, grid: Option<(u32, u32)>) -> Play {
         let script = std::env::var("NFSGBA_PLAY_KEYS").ok().map(|s| {
             s.split(',')
                 .flat_map(|step| {
@@ -104,15 +138,17 @@ impl Play {
                 })
                 .collect()
         });
-        Ok(Play {
-            game: Game::new(Machine::load_dump(rom_bytes, &path)?),
+        Play {
+            game: Game::new(machine),
+            paused,
+            grid,
             clock: 0.0,
             frames: 0,
             stopped: None,
             script,
             hud,
             sound: Arc::default(),
-        })
+        }
     }
 }
 
@@ -146,15 +182,13 @@ fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
         .fold(0, |m, (_, b)| m | 1 << b)
 }
 
-/// Runs the game frames that are due and reads the race back from the game's RAM.
+/// Runs the game frames that are due (unless paused) and reads the race back from the game's RAM.
 pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<Play>, mut race: ResMut<Race>) {
-    if play.stopped.is_some() {
-        return;
+    if !play.paused && play.stopped.is_none() {
+        play.clock += time.delta_secs();
     }
-    play.clock += time.delta_secs();
     let step = 4.0 / VIDEO_HZ;
-    let mut ran = false;
-    while play.clock >= step {
+    while play.clock >= step && !play.paused && play.stopped.is_none() {
         play.clock -= step;
         let keys = match &play.script {
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
@@ -172,14 +206,9 @@ pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<
             q.drain(..excess);
         }
         play.frames += 1;
-        ran = true;
     }
-    if ran {
-        let m = play.game.mem();
-        let dump = Dump::from_ram(m.iwram.clone(), m.ewram.clone());
-        race.setup = RaceSetup::from_dump(&dump);
-        race.dump = Some(dump);
-    }
+    race.setup = race_init::RaceView::read(play.game.mem());
+    race.current = race.setup.route % race.routes.len();
 }
 
 /// The game's frame, camera and visible list, straight from its RAM (play mode).
@@ -215,7 +244,7 @@ pub fn hud_layer(play: Res<Play>, race: Res<Race>, mut images: ResMut<Assets<Ima
             let [r, g, b, _] = rom::bgr555(c);
             [r, g, b]
         };
-        let px: Option<[u8; 4]> = match (o, race.original) {
+        let px: Option<[u8; 4]> = match (o, race.original && !play.paused) {
             (Some((c, true)), true) => {
                 let ch = |s: u16| {
                     let (a, b) = (((c >> s) & 31) as u32, ((bg >> s) & 31) as u32);

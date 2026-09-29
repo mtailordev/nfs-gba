@@ -44,7 +44,7 @@ The GBA draws the 3D scene into a mode 4 bitmap: one palette index per pixel, sh
 This reproduces `apply_sector_light_to_palette` (`FUN_0813a514`):
 
 1. **Observer position** in city units, the game's `position >> 8`:
-   - In race mode (`NFSGBA_ROUTE` set, or R pressed), the player's grid position `route.grid[0]` is used as is: integers from the ROM entity template, with no float round trip.
+   - In a race, the player's entity position (`race_init::RaceView`, integers from the game's RAM).
    - Otherwise the camera is used: `floor(x / SCALE)`, `floor(-z / SCALE)`.
 2. **Observer sector:**
    - The current sector is kept while its outline still contains the point.
@@ -118,7 +118,7 @@ This section supersedes the car and sky rows of "What uses which palette", the `
 2. Glass: slots 192 and 208 = `paint::glass_shades` for the player's heading.
 3. `paint::race_palette(base, m)`: the light tint (R2), with 192 and 208 left raw. Before the first light the palette is `base`.
 
-**Race cars.** They stand on the route's grid, facing the template entity heading (`+0x2C >> 8`, read by `grid_headings`).
+**Race cars.** They stand where the game's entities and matrix slots put them (see "One path").
 - The player uses car 2, material 8 (car table `+0x0C` + record `[3]`), remapped by `paint::remap_atlas(.., 0xD0, 0xC0)`.
 - The opponents use materials 140, 141 and 142 (entity `+0x48` in the reference race), drawn raw because their pixels are already final slots.
 - All four draw model car table `+0x14` (our `models[1]`). This is `draw_sector_entities`' close model `+0x36 − 1`, the same for all four entities in the dump.
@@ -181,16 +181,15 @@ This part makes the race view the game's view: the camera, the projection, what 
 
 ### Modes and inputs
 
-- **Race setups** (`src/game.rs`, `RaceSetup`):
-  - `NFSGBA_DUMP=<dir/name>` loads an mGBA race dump from `$NFSGBA_DATA/work/e5298b24/`. It provides the racers' entities (`+0x0C`…`+0x88`), the cars, paints and player record, and the camera state; the reference race is `mgba/race`.
-  - `NFSGBA_ROUTE=<n>` (or R) builds a Quick Play race on a route's grid with a new profile. The player drives car 2 with its default record. The opponents are dealt by `atlas::pick_opponent_cars` from rand index `0x11` (the only index of the 256 that deals the reference race's racers; derived, not traced) and dressed by `atlas::look`.
-  - `nfsgba_formats::Route` now carries the template entities' 8.8 `positions`, `headings` (`+0x2C >> 8`) and start `sectors` (`+0x78`). `Wall::piece` exposes `+0x2A`.
+- **One path (R28):** every mode that shows a race is an `nfsgba_game::Game` (`play::Play`); the viewer reads the camera (`play::frame`: `view::frame`, `view::root`, `view::visible`), the racers (`race_init::RaceView`), the vehicle matrix slots (`race_init::matrix`), the sky camera (`view::sky_camera`) and, for the original-resolution frame, the scene (`view::scene`) from it, never from RAM addresses. There is no viewer-side camera, slot or racer model.
+  - `NFSGBA_DUMP=<dir/name>`: an mGBA race dump from `$NFSGBA_DATA/work/e5298b24/` (palette, VRAM and OAM too; the reference race is `mgba/race`, a `tools/game_trace.py` state such as `game-loop/s18` also works). Paused; with `NFSGBA_PLAY=1` the keyboard drives `Game::frame` (`play.rs`).
+  - `NFSGBA_ROUTE=<n>` (R: next route, K: next environment): `race_init::apply_setup` on `race-init/circuit_pre` (environment, route, mode 0, car 2), `race_start`, then one `Game::frame` from game state 5, which runs the first race frame up to the countdown (drivers, camera, matrix slots, the world) and stops there (G1). Paused. The opponents and their looks are what `race_start` deals (`tools/oracle/synth.py` checks it against the game's code). The light tint is applied by the viewer to the game's base palette.
 - **Game camera and free camera:** the game camera is the default in a race. G switches to the free camera (Bevy `FreeCamera`), which is a non-game mode; without a race the viewer starts in it.
-- **Original-resolution frame:** O shows the game's own frame, drawn on the CPU with `render::draw_world` into the sky layer's 240×160 index screen, over the skyline. With a dump the frame includes the cars, from the dump's `render::Scene` (entities, sector heads, matrix slots, EWRAM atlases). On a grid it shows the world alone.
+- **Original-resolution frame:** O shows the game's own frame, drawn on the CPU with `render::draw_world` into the sky layer's 240×160 index screen, over the skyline. The frame includes the cars, from `view::scene` (entities, sector heads, matrix slots, EWRAM atlases). Running play shows the page the game drew.
 
 ### Game camera (R11)
 
-`game::Chase::step` is one frame of `camera_update` (`0x08137cb0`) in the chase view (view 2). Its literals are resolved from the ROM:
+The game's `camera_update` (`nfsgba-game` `camera.rs`; the viewer's former copy `game::Chase` is gone) is one frame of `camera_update` (`0x08137cb0`) in the chase view (view 2). Its literals are resolved from the ROM:
 
 1. **Focal:** it eases back up to 150 by 4 per frame. The speed effect is not modelled (driver `+0x4D1`; see NOT 1:1).
 2. **Teleport:** a camera more than 1024 units from the player jumps onto it.
@@ -212,8 +211,7 @@ This part makes the race view the game's view: the camera, the projection, what 
 
 **Checked:**
 - From the reference race's own state, one step leaves the camera state unchanged (`0x03005F94`, `0x03000214`, `0x030056A0`, `0x030000A4`, `0x03005614`). It gives the dump's matrix `0x030057A0` exactly (`[18, 0, 16383, 0, 16384, 0, −16383, 0, 18, −118039, −30, 64321]`) and camera sector 760.
-- A camera settled from scratch behind the dump's player (`Chase::behind`) is the same state.
-- Test: `game::tests::chase_camera_reproduces_the_race`.
+- Test: `nfsgba-game`'s replay tests (`camera.rs` against the traces); the viewer's `every_race_mode_reads_the_game` checks that both modes use it.
 
 **Projection** (`game::GbaProjection`, a Bevy custom projection, in free mode too):
 - `sx = 120 + focal·x/(d + 1)` and `sy = 79 + focal·y/(d + 1)` on the 240×160 screen, which the window shows whole (960×640 = 4×).
@@ -271,8 +269,8 @@ This part makes the race view the game's view: the camera, the projection, what 
 
 ### Racers (R23)
 
-- **Dealt as the game deals them:** `RaceSetup::grid` deals cars, paints and the new-profile record (`0x7EEA33`), the far model (`+0x36`: car table `+0x14` + 1 for the player, `0x7EEA44` for opponents) and the spoiler (`+0x64`: `i16 0x7F0636[car·0x10 + record[0]]`). For route 23 all of these equal the dump's (test).
-- **Player atlas:** `atlas::player_atlas` plus the rim at angle 0 (race start). With a dump, the atlas is taken from EWRAM (entity `+0x84`).
+- **Dealt as the game deals them:** `race_start` (`setup_race_cars`) deals cars, paints and the new-profile record (`0x7EEA33`), the far model (`+0x36`: car table `+0x14` + 1 for the player, `0x7EEA44` for opponents) and the spoiler (`+0x64`: `i16 0x7F0636[car·0x10 + record[0]]`). For route 23 all of these equal the dump's (test).
+- **Player atlas:** taken from EWRAM (entity `+0x84`, `race_init::player_atlas`): the rim at the angle the game drew last.
 - **Opponents:** their raw `look` material.
 - **Models:** each racer has meshes for its near body (`+0x36 − 1`), far body (`+0x36`) and spoiler.
   - `Racer::models_at(depth)` picks per frame as `draw_sector_entities` does:
@@ -281,8 +279,8 @@ This part makes the race view the game's view: the camera, the projection, what 
     - the far body from 0x200.
   - A racer shows only when its sector is in the drawn list.
   - The high model is never used in a race.
-- **Poses:** with a dump, cars stand exactly as their vehicle matrix slot (world `+0xFC`) puts them relative to the game camera (pitch and roll included). On a grid they stand level on the floor fan (D2).
-- **Light tint (R15):** `apply_sector_light_to_palette` reads the player's position with the **camera** sector `0x03005614`, not a player sector. The viewer now takes that sector from the chase camera, so the tint's sector is exact in the game camera.
+- **Poses:** cars stand exactly as their vehicle matrix slot (world `+0xFC`) puts them relative to the game camera (pitch and roll included), in every mode and whichever camera is shown.
+- **Light tint (R15):** `apply_sector_light_to_palette` reads the player's position with the **camera** sector `0x03005614`, not a player sector. The viewer takes it from the game (`view::root`); running play uses the game's own tint.
 
 ### Pixel agreement at the reference camera
 
@@ -315,12 +313,10 @@ Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160
   - the sector search's second fallback `find_sector_far` is not applied;
   - the free camera pitches (a non-game mode).
 - **R12 in the viewer:**
-  - cars are not clipped to their portal span, and the screen-row cull is not applied;
-  - on a grid the original frame has no cars (the vehicle matrices come from `draw_vehicle` / `FUN_0814eba0`).
-- **R13 in race:** the rim is at angle 0 on a grid (the game redraws it by wheel angle); a dump's atlas is as dumped. R24 is unchanged.
+  - cars are not clipped to their portal span, and the screen-row cull is not applied (R29; the original frame does both).
+- **R13 in race:** the atlas is the game's, rim as drawn (angle 0 at a race start, wheel spin in play). R24 is unchanged.
 - **R14:** at high resolution a fragment keeps its own texel, and the pair test uses its row. Index 0 on car models is dropped per pixel.
 - **R21:** the runtime tables are as every captured race has them; their writers are not decoded.
-- **D2:** grid racers stand on the floor fan; the camera then sits a few units off.
 - **Grid assumptions:**
   - the rand index `0x11` is derived, not traced (the seed `*0x03000044 & 0xFF` = 3 is 14 draws earlier; open);
   - the draw flags are the reference race's (player 0x0D, opponents 0x22).

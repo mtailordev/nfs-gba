@@ -1105,9 +1105,9 @@ pub fn base_palette(m: &Mem) -> Vec<u16> {
     (0..256).map(|i| m.u16(at + 2 * i)).collect()
 }
 
-/// The camera and matrix slots of one race frame on the current state (`camera_dispatch`, `race_slots`), without
-/// stepping the entities: a paused race start drawn through the game's own camera and slot code.
-pub fn pose(m: &mut Mem) -> Result<()> {
-    crate::camera::dispatch(m)?;
-    crate::slots::race_slots(m)
+/// Game state 5 (the race) after `race_start`, which `game_state_step` runs in state 4. A `Game::frame` on it then
+/// runs `race_frame_update` up to the countdown (the racers' drivers, the camera, the matrix slots, the world drawn)
+/// and stops there with `Unported` (the handover after `race_start` is open, FIDELITY G1): a race start to look at.
+pub fn enter_race(m: &mut Mem) {
+    m.set_u32(0x0300_5808, 5);
 }
