@@ -19,6 +19,7 @@ pub mod mem;
 pub mod route;
 pub mod sound;
 pub mod traffic;
+pub mod traffic_ai;
 pub mod walls;
 pub mod world;
 

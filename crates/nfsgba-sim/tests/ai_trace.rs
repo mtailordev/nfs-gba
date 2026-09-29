@@ -8,7 +8,7 @@
 //! traces are absent.
 
 use nfsgba_sim::sound::Command;
-use nfsgba_sim::{Mem, Sim, ai};
+use nfsgba_sim::{Mem, Sim, ai, traffic_ai};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -148,7 +148,7 @@ fn run(sim: &mut Sim, handler: u32, e: u32) -> Option<Result<Vec<String>, String
     let effects = match handler {
         0x29 => ai::handler(sim, e)
             .map(|fx| fx.map(|f| format!("effects({},{},{},{})", f.entity, f.heading, f.view, f.size))),
-
+        0x36 => traffic_ai::handler(sim, e).map(|()| None),
         _ => return None,
     };
     Some(match effects {
