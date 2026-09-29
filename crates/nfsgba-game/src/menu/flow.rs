@@ -57,6 +57,11 @@ pub trait Host {
     fn profile_reset(&mut self, _st: &mut MenuState) {
         self.call(0x0813_56DC, &[]);
     }
+    /// `map_zone_palettes` (`0x08143284`): the default logs the call; [`super::boot::BootHost`] runs
+    /// [`super::map::zone_palettes`], which the `save` oracle set checks against the game's code.
+    fn zone_palettes(&mut self, _st: &mut MenuState) {
+        self.call(0x0814_3284, &[]);
+    }
     /// `save_load_profile` (`0x08149D84`) of the slot in `g.save_buffer`.
     fn save_load(&mut self, st: &mut MenuState) -> u32 {
         self.call(0x0814_9D84, &[st.g.save_buffer])

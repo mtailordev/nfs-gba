@@ -15,6 +15,7 @@ from common import data_dir
 
 PROFILE_AT, PROFILE_PTR, BUF = 0x0200_0808, 0x0300_56EC, 0x0201_0000
 DECODE, ENCODE, RESET = 0x0814_9820, 0x0814_92C0, 0x0813_56DC
+MAP_PALETTES = 0x0814_3284  # map_zone_palettes, in the same file: it is the map screens' colours (menu/map.rs)
 SNAPS = ["ui-2d/lang", "ui-2d/n7", "ui-2d/n9", "race-rules/a4"]
 GLOBALS = [0x0300_53E4, 0x0300_0040, 0x0300_5698, 0x0300_5798, 0x0300_578C, 0x0300_53A4, 0x0300_5600, 0x0300_0050,
            0x0300_0070]
@@ -50,6 +51,19 @@ def main(argv: list[str]) -> None:
         r = gbas[snap].call(fn, r0=BUF if fn != RESET else 0, mem=mem, align="ignore")
         assert r.stop == "return", (hex(fn), r.stop)
         cases.append(dict(snap=snap, fn=hex(fn), mem=[[a, b.hex()] for a, b in mem],
+                          writes=[[a, b.hex()] for a, b in r.writes]))
+    for i in range(n):  # map_zone_palettes: screens, cursor, grid, unlock bits, flash, map mode
+        snap = rng.choice(SNAPS)
+        screen = rng.choice([7, 8, 0xE, 0x11, 0x11, 8, 7, 0xE, 3])
+        mem = [(PROFILE_PTR, word(PROFILE_AT)), (0x0300_5944, word(screen)),
+               (0x0300_6238, bytes([rng.choice([0, 1, 2, 3, 5, 8, 11, 12, 17, 0xFF, rng.randrange(18)])])),
+               (0x0300_53B4, word(rng.choice([0, 0x20, 0x30, rng.randrange(1 << 16)]))),
+               (PROFILE_AT + 0x254, rng.choice([0, 0, 1, 2, 3]).to_bytes(2, "little")),
+               (PROFILE_AT + 0x404, bytes([rng.randrange(4)])),
+               (PROFILE_AT + 0x42D, bytes(rng.choice([0, 0xFF, rng.randrange(256)]) for _ in range(48)))]
+        r = gbas[snap].call(MAP_PALETTES, mem=mem, align="ignore")
+        assert r.stop == "return", r.stop
+        cases.append(dict(snap=snap, fn=hex(MAP_PALETTES), mem=[[a, b.hex()] for a, b in mem],
                           writes=[[a, b.hex()] for a, b in r.writes]))
     out = data_dir() / "work" / "e5298b24" / "menus3"
     out.mkdir(parents=True, exist_ok=True)

@@ -3,13 +3,89 @@
 
 use nfsgba_sim::state::MenuState;
 
-use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16};
+use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
 use super::{MENU_BLIT_MATERIAL, TEXT_MENU, WORLD};
 
-const MAP_PALETTES: u32 = 0x0814_3284; // (): the map's zone colours into the second base palette
 const MAP_DRAW: u32 = 0x0814_35C4; // (): scrolls the view towards the cursor and draws the map and its markers
 /// Page records of the map screens (`0x7E50A4`, 0x14 bytes: `+2`/`+4` button prompts).
 const MAP_PAGES: u32 = 0x087E_50A4;
+
+const ZONE_TABLE: u32 = 0x087F_53BC; // pointers to the zone colour sets, by set number
+const ZONE_SETS: u32 = 0x087F_5374; // set number per (map grid, zone row): 6 bytes per grid
+const TINTS: u32 = 0x087F_45C4; // 16 colours per marked zone (0x20 bytes)
+
+/// `map_zone_palettes` (`0x08143284`): the map's colours in the second base palette. Colours 0x40.. come from the
+/// world palette; rows 0xA0.. hold the six zones' colours of the profile's map grid (a district that is still locked
+/// keeps its grey on the career maps); the cursor's zone blinks (halved channels while the flash counter has bit 5),
+/// and the marked zone's tint set is copied into row `0x40 + 16 * zone`.
+pub fn zone_palettes(st: &mut MenuState, h: &mut impl Host) {
+    let cursor = st.g.map_cursor as i32;
+    let screen = st.g.screen;
+    let world = h.world_palette();
+    for k in 0..0xC0 {
+        let c = h.peek16(world.wrapping_add(0x80 + 2 * k));
+        h.set_second_colour(0x40 + k, c);
+    }
+    let grid = st.profile.map_grid as i16 as i32;
+    for r in 0..6u32 {
+        let set = h.rom()[((ZONE_SETS.wrapping_add((grid * 6) as u32) + r) & 0x1FF_FFFF) as usize] as u32;
+        let ptr = rom_u32(h.rom(), ZONE_TABLE + 4 * set);
+        copy_colours(h, 0xA0 + 16 * r, ptr + 0x20 * r);
+    }
+    if screen == 0x11 || screen == 0xE {
+        let ptr = rom_u32(h.rom(), ZONE_TABLE.wrapping_add((grid * 4) as u32));
+        for r in (0..5u32).filter(|&r| st.profile.is_locked(r as i32 + 0x118) == 0) {
+            copy_colours(h, 0xA0 + 16 * r, ptr + 0x20 * r);
+        }
+        if st.profile.is_locked(0x134) == 0 {
+            copy_colours(h, 0xA0 + 16 * 5, ptr + 0x20 * 5);
+        }
+    }
+    if screen != 0x11 {
+        let zone = if screen == 8 {
+            nfsgba_fixed::div(cursor, 3)
+        } else {
+            cursor >> 1
+        };
+        if (0..6).contains(&zone) && st.g.flash & 0x20 != 0 {
+            for k in 0..16 {
+                let i = 0xA0 + 16 * zone as u32 + k;
+                let c = h.second_colour(i) as u32;
+                let half = |shift: u32| ((c >> shift & 0x1F) >> 1).min(0x1F);
+                h.set_second_colour(i, ((c >> 11).min(0x1F) << 10 | half(5) << 5 | half(0)) as u16);
+            }
+        }
+    }
+    // The marked zone's tint set: by grid cell (sprints, career) or by pair (circuits).
+    let cell = (
+        nfsgba_fixed::div(cursor, 3),
+        nfsgba_fixed::div(cursor, 3) * 5 + cursor % 3 + 2,
+    );
+    let pair = (cursor >> 1, (cursor >> 1) * 5 + (cursor & 1));
+    let tint = match screen {
+        8 => Some(cell),
+        7 => Some(pair),
+        0x11 if st.profile.map_mode == 3 => Some(pair),
+        0x11 => Some(cell),
+        _ => None,
+    };
+    if let Some((zone, set)) = tint {
+        copy_colours(
+            h,
+            0x40u32.wrapping_add((zone * 16) as u32),
+            TINTS.wrapping_add((set * 0x20) as u32),
+        );
+    }
+    st.g.palette_dirty = 1;
+}
+
+/// 16 colours from ROM `src` to the second palette from colour `dst`.
+fn copy_colours(h: &mut impl Host, dst: u32, src: u32) {
+    for k in 0..16 {
+        let c = rom_u16(h.rom(), src + 2 * k);
+        h.set_second_colour(dst.wrapping_add(k), c);
+    }
+}
 
 /// `kind7_enter` (`0x0812E80C`): background 0xDA, menu palette 7; the map state (`FUN_0814397C`).
 pub fn enter(st: &mut MenuState, h: &mut impl Host) -> u32 {
@@ -23,7 +99,7 @@ pub fn enter(st: &mut MenuState, h: &mut impl Host) -> u32 {
     st.g.map_moved = 1;
     st.g.map_x = 0x100;
     st.g.map_y = 0xC0;
-    h.call(MAP_PALETTES, &[]);
+    h.zone_palettes(st);
     1
 }
 

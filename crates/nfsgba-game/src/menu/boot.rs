@@ -109,6 +109,9 @@ impl Host for BootHost {
     }
     fn button_prompts(&mut self, _st: &MenuState, _args: &[u32; 3]) {}
     fn message_box_draw(&mut self, _st: &mut MenuState) {}
+    fn zone_palettes(&mut self, st: &mut MenuState) {
+        super::map::zone_palettes(st, self);
+    }
     fn profile_reset(&mut self, st: &mut MenuState) {
         save::profile_reset(st, &self.rom);
     }

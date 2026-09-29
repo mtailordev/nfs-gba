@@ -197,7 +197,7 @@ pub fn write(st: &mut MenuState, h: &mut impl Host, eeprom: &mut Vec<u8>, slot: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::menu::{Gba, adapt, boot::BootHost};
+    use crate::menu::{Gba, adapt, boot::BootHost, map};
     use nfsgba_testkit::{dump, rom};
 
     fn unhex(s: &str) -> Vec<u8> {
@@ -260,7 +260,7 @@ mod tests {
     }
 
     /// `tools/oracle/cases.py save`: the game's `save_decode`, `save_encode` and `profile_reset` on 1,800 generated
-    /// buffers and profiles; the typed versions leave the same bytes in RAM.
+    /// buffers and profiles, and `map_zone_palettes` on 600 map states; the typed versions leave the same bytes in RAM.
     #[test]
     fn save_functions_match_the_game() {
         let (Some(rom), Some(text)) = (rom(), nfsgba_testkit::read_to_string("menus3/save.jsonl")) else {
@@ -290,7 +290,7 @@ mod tests {
             }
             let buf: [u8; SAVE_SIZE] = std::array::from_fn(|i| ours.u8(BUF + i as u32));
             let f = c["fn"].as_str().unwrap();
-            let encoded = adapt::typed(&mut ours, |st, _| match f {
+            let encoded = adapt::typed(&mut ours, |st, h| match f {
                 "0x8149820" => {
                     decode(st, &rom, &buf);
                     None
@@ -298,6 +298,10 @@ mod tests {
                 "0x81492c0" => Some(to_save(st).encode(&buf)), // the game encodes into the buffer in place
                 "0x81356dc" => {
                     profile_reset(st, &rom);
+                    None
+                }
+                "0x8143284" => {
+                    map::zone_palettes(st, h);
                     None
                 }
                 _ => panic!("{f}"),
@@ -313,6 +317,6 @@ mod tests {
             );
             n += 1;
         }
-        assert_eq!(n, 1800);
+        assert_eq!(n, 2400);
     }
 }
