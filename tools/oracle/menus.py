@@ -1,4 +1,4 @@
-"""Oracle cases for the menu port (crates/nfsgba-formats/src/menu.rs): runs the game's own functions in unicorn
+"""Oracle cases for the menu port (crates/nfsgba-game/src/menu/): runs the game's own functions in unicorn
 (tools/oracle) on generated inputs and saves the cases as JSONL under $NFSGBA_DATA/work/<sha8>/menus/.
 
     .venv/Scripts/python.exe tools/oracle/cases.py menus [fades] [...]

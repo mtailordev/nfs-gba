@@ -11,6 +11,7 @@
 #![allow(clippy::precedence)]
 
 pub mod camera;
+pub mod menu;
 pub mod oam;
 pub mod race_init;
 pub mod slots;

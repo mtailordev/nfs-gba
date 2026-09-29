@@ -85,7 +85,7 @@ pub const STACK_TEXT: u32 = 0x0300_7400;
 impl Gba {
     /// An mGBA dump (`<prefix>.{wram,iwram,io,palette,vram,oam}.bin`, `tools/mgba_ctl.py dump`).
     pub fn from_dump(rom: Vec<u8>, prefix: &std::path::Path) -> std::io::Result<Gba> {
-        let d = crate::Dump::load(prefix)?.require(&["io", "palette", "vram", "oam"])?;
+        let d = nfsgba_formats::Dump::load(prefix)?.require(&["io", "palette", "vram", "oam"])?;
         Ok(Gba {
             rom,
             ewram: d.ewram,
@@ -1048,7 +1048,7 @@ pub fn kind7_update(g: &mut Gba) -> u32 {
                 let open = if g.u32(SCREEN) == 7 {
                     unlock_is_locked(g, (cursor >> 1) + 0x117) == 0
                 } else {
-                    unlock_is_locked(g, crate::div(cursor, 3) as i8 as i32 + 0x117) == 0
+                    unlock_is_locked(g, nfsgba_fixed::div(cursor, 3) as i8 as i32 + 0x117) == 0
                 };
                 if !open {
                     g.unported(CARBON_PLAY_SOUND, &[0x27, 1]);
@@ -1134,7 +1134,7 @@ pub fn kind7_draw(g: &mut Gba, _full: u32) -> u32 {
                 if s == 7 {
                     cursor >> 1
                 } else {
-                    crate::div(cursor, 3) as i8 as i32
+                    nfsgba_fixed::div(cursor, 3) as i8 as i32
                 } + 0x117,
             )
         }
@@ -1192,7 +1192,7 @@ fn number_text(g: &mut Gba, n: i32) -> Vec<u8> {
             s.push((q as u8).wrapping_add(b'0'));
         }
         n = g.i32(DIVIDEND_REMAINDER);
-        d = crate::div(d, 10);
+        d = nfsgba_fixed::div(d, 10);
     }
     s
 }
@@ -1249,14 +1249,14 @@ fn time_text(g: &mut Gba, cs: i32) -> Vec<u8> {
 
 /// `frames_to_centiseconds` (`0x08142F74`).
 fn frames_to_centiseconds(frames: i32) -> i32 {
-    crate::div(frames.wrapping_mul(100), 0x3C)
+    nfsgba_fixed::div(frames.wrapping_mul(100), 0x3C)
 }
 
 /// `event_status` (`0x08135D4C`): the 2-bit status of career event `n` (profile `+0x205`; 1 won, 2 second, 3 not
 /// done).
 fn event_status(g: &Gba, n: i32) -> u32 {
     let (mem, o) = g.at(g.u32(PROFILE).wrapping_add(0x205));
-    crate::career::event_status(&mem[o..], n as usize) as u32
+    nfsgba_formats::career::event_status(&mem[o..], n as usize) as u32
 }
 
 /// `zone_ladder_index` (`0x0812FC34`): zone·12 plus the zone's events with status 1 or 2 (6 events in zone 5).
@@ -1269,24 +1269,24 @@ fn zone_ladder_index(g: &Gba, zone: i32) -> i32 {
 }
 
 /// `style_rating` (`0x0812C30C`) of the career car (profile `+0x10`, its 17-byte record at `*0x0300539C`):
-/// [`crate::career::style_rating`].
+/// [`nfsgba_formats::career::style_rating`].
 fn career_style_rating(g: &Gba) -> i32 {
     let car = g.i8(g.u32(PROFILE) + 0x10) as i32;
     let at = g.u32(0x0300_539C).wrapping_add((car * 0x11) as u32);
     let record: [u8; 17] = std::array::from_fn(|i| g.u8(at + i as u32));
-    crate::career::style_rating(&g.rom[..], car as usize, &record)
+    nfsgba_formats::career::style_rating(&g.rom[..], car as usize, &record)
 }
 
 const ZONE: u32 = 0x1FB; // profile: the career zone 0..=5
 const EVENT_CURSOR: u32 = 0x388; // profile + zone: the event cursor per zone
 
-/// `career_event_to_globals` (`0x0812DA08`): the selected event ([`crate::career::events`]) into the race
+/// `career_event_to_globals` (`0x0812DA08`): the selected event ([`nfsgba_formats::career::events`]) into the race
 /// globals, and its slot into profile `+0x1FC`.
 fn career_event_to_globals(g: &mut Gba) {
     let profile = g.u32(PROFILE);
     let zone = g.u8(profile + ZONE) as i32;
     let slot = g.i8(profile + EVENT_CURSOR + zone as u32) as i32;
-    let e = crate::career::events(&g.rom[..])[(zone * 12 + slot) as usize];
+    let e = nfsgba_formats::career::events(&g.rom[..])[(zone * 12 + slot) as usize];
     g.set_u32(0x0300_00BC, e.skill as u32);
     g.set_u32(0x0300_5608, e.difficulty() as u32);
     g.set_u32(0x0300_56E4, e.laps as u32);
@@ -1551,8 +1551,8 @@ pub fn event_draw(g: &mut Gba, _full: u32) -> u32 {
     } else {
         (g.u16(0x087E_4744_u32.wrapping_add(((ladder - 1) * 8 + 6) as u32)) as i16 as i32) >> 1
     };
-    let pct = crate::career::reward_percent(career_style_rating(g));
-    let cash = crate::div(pct * reward, 100);
+    let pct = nfsgba_formats::career::reward_percent(career_style_rating(g));
+    let cash = nfsgba_fixed::div(pct * reward, 100);
     let mut s = number_text(g, cash);
     thousands(g, &mut s, cash);
     let arg = g.text_arg(s);
@@ -1582,11 +1582,11 @@ const RESULT_PAGES: u32 = 0x087E_510C;
 const CAREER_RACE_PAYOUT: u32 = 0x0812_EFE8; // (): `career::race_payout` models it; not wired to RAM here
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
 
-/// `rank_results` (`0x0812E8E4`, key, descending) on the ranked results: [`crate::career::rank_results`] over
+/// `rank_results` (`0x0812E8E4`, key, descending) on the ranked results: [`nfsgba_formats::career::rank_results`] over
 /// `*0x03005784 + 1` slots.
 fn rank_results(g: &mut Gba, key: u32, descending: bool) {
     let mut t: [u8; 0x40] = std::array::from_fn(|i| g.u8(RANKED + i as u32));
-    crate::career::rank_results(&mut t, g.u32(OPPONENTS), key, descending);
+    nfsgba_formats::career::rank_results(&mut t, g.u32(OPPONENTS), key, descending);
     for (i, &b) in t.iter().enumerate() {
         g.set_u8(RANKED + i as u32, b);
     }
@@ -2004,7 +2004,9 @@ fn message_box_open(g: &mut Gba, kind: u32, text: u32, arg: u32) -> u32 {
 /// (0x87). A "yes" on the options (0x10) writes the settings back and saves the profile.
 pub fn setup_update(g: &mut Gba) -> u32 {
     let index = setup_index(g);
-    let screen = crate::career::setup_screens(&g.rom[..]).get(index as usize).cloned();
+    let screen = nfsgba_formats::career::setup_screens(&g.rom[..])
+        .get(index as usize)
+        .cloned();
     let cursor_at = |g: &Gba| g.u32(PROFILE).wrapping_add(0x368).wrapping_add(index as u32);
     let item_of = |g: &Gba| screen.as_ref().map(|s| s.items[g.i8(cursor_at(g)) as usize].clone());
     let count = screen.as_ref().map_or(0, |s| s.items.len() as i32);
@@ -2152,7 +2154,7 @@ pub fn setup_update(g: &mut Gba) -> u32 {
 pub fn setup_draw(g: &mut Gba, _full: u32) -> u32 {
     let index = setup_index(g);
     let page = setup_page(index);
-    let screens = crate::career::setup_screens(&g.rom[..]);
+    let screens = nfsgba_formats::career::setup_screens(&g.rom[..]);
     let items = screens.get(index as usize).map(|s| s.items.clone()).unwrap_or_default();
     let count = g.u16(page + 10) as i16 as i32;
     let slot = g.u32(0x087E_49C4_u32.wrapping_add(g.u32(ROUTE).wrapping_mul(4)));
@@ -3634,7 +3636,7 @@ pub fn main_frame(g: &mut Gba) {
         if ticks == 0 {
             g.set_u32(0x0300_5934, 0x200);
         }
-        let t = crate::div(0x639C, g.i32(0x0300_5934)).clamp(10, 100);
+        let t = nfsgba_fixed::div(0x639C, g.i32(0x0300_5934)).clamp(10, 100);
         g.set_u32(0x0300_5640, t as u32);
     }
     g.unported(0x0816_21F0, &[3, 3, 0, 0]);
