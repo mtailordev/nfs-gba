@@ -31,9 +31,62 @@ Route 23 has 19 waypoints, a 58,231-unit line plus a closing straight: a circuit
 - **Modes:** Circuit, Elimination, Hunter and Sprint (text keys `TEXT_RACE_SETTING_*`, `TEXT_RACE_DESC_*`).
 - **Track names:** 10 `TEXT_TRACK*` circuits and 18 `TEXT_ROUTE*` sprints.
 - **Pairing:** routes mostly come in pairs sharing a start sector (forward and reverse, per the Quick Play "direction" option). Routes 15/16 and 21/22 close exactly (closing gap 0).
-- **Not decoded:** which name and mode go with which route. Route 0 has no racing line; 35 has a single waypoint.
+- **Names and kinds (verified):** three `(u16 text key, u16 route)` tables:
+  - `0x7E4A70`: 12 circuits, forward (routes 1, 3, …, 23);
+  - `0x7E4AA0`: the same 12 circuits, reverse (routes 2, 4, …, 24);
+  - `0x7E4AD0`: 18 sprints (routes 25–42).
+
+  The reference Quick Play race was **route 23, STORAGE RUN, forward**. Routes 0 and 43 are unnamed: 0 has no racing line, and 43 repeats route 1's data. The list is in `nfsgba_formats::routes` (`name`, `kind`).
+- **Still open:** how Elimination and Hunter events pick routes.
+
+| Route | Name | Kind |
+|---|---|---|
+| 0 | — | unnamed |
+| 1 | SHIPYARD CRUISE | circuit |
+| 2 | SHIPYARD CRUISE | circuit, reverse |
+| 3 | LONGPOINT | circuit |
+| 4 | LONGPOINT | circuit, reverse |
+| 5 | JUNKTOWN BLITZ | circuit |
+| 6 | JUNKTOWN BLITZ | circuit, reverse |
+| 7 | EAST TUNNEL | circuit |
+| 8 | EAST TUNNEL | circuit, reverse |
+| 9 | UNIVERSITY DRIVE | circuit |
+| 10 | UNIVERSITY DRIVE | circuit, reverse |
+| 11 | CROSSOVER | circuit |
+| 12 | CROSSOVER | circuit, reverse |
+| 13 | BIG EAST HWY | circuit |
+| 14 | BIG EAST HWY | circuit, reverse |
+| 15 | SUMMIT DRIVE | circuit |
+| 16 | SUMMIT DRIVE | circuit, reverse |
+| 17 | MOUNTAIN SPEEDZONE | circuit |
+| 18 | MOUNTAIN SPEEDZONE | circuit, reverse |
+| 19 | SOUTHSIDE | circuit |
+| 20 | SOUTHSIDE | circuit, reverse |
+| 21 | PARKSIDE | circuit |
+| 22 | PARKSIDE | circuit, reverse |
+| 23 | STORAGE RUN | circuit |
+| 24 | STORAGE RUN | circuit, reverse |
+| 25 | JUNKPOINT | sprint |
+| 26 | DOWNTOWN SPRINT | sprint |
+| 27 | LONGPOINT DASH | sprint |
+| 28 | BIG EAST TUNNEL | sprint |
+| 29 | EAST HIGHWAY | sprint |
+| 30 | CROSS HIGHWAY | sprint |
+| 31 | CROSSDRIVE | sprint |
+| 32 | LIBRARY CRUISE | sprint |
+| 33 | DOUBLE SWITCH | sprint |
+| 34 | SHIPYARD DRIVE | sprint |
+| 35 | SUMMIT CRUISE | sprint |
+| 36 | SHIPYARD SPRINT | sprint |
+| 37 | MOUNTAIN SIDE | sprint |
+| 38 | PARK ZONE | sprint |
+| 39 | CROSS TOWN SPRINT | sprint |
+| 40 | SOUTH RUN | sprint |
+| 41 | STORAGE SIDE | sprint |
+| 42 | SIDE RUN | sprint |
+| 43 | — | unnamed |
 
 ## Open
 
-- The name and mode of each route, and how events select routes (the 12 level descriptors at `0x7F2B08` are environments: palette and sky).
+- How career events choose route, mode (Elimination, Hunter) and environment. Some sectors carry a track name key at `+0x10` (e.g. sector records near `0x72C8C2`); purpose unknown.
 - The 0x50-byte `+0x04` block (checkpoints?), the waypoint `?` field, and the template entity fields besides position (start sector at `+0x74`).

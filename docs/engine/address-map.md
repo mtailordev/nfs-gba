@@ -38,6 +38,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x797D10–0x7E53EC` | | text strings | formats/text-table |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
 | `0x7C45F0` | 32,767 × 4 | reciprocal table: entry k = 2^24/(k+1) (light interpolation, likely more) | FIDELITY R2 |
+| `0x7E4A70` / `0x7E4AA0` / `0x7E4AD0` | 12 / 12 / 18 × 4 | route name tables: `(u16 text key, u16 route)` for circuits forward, circuits reverse, sprints | formats/race-routes |
 | `0x7E6EEC` | 20 × 0x80 | car paint presets | formats/vehicle-models |
 | `0x7E86A0` | 5,867 × 4 | text table: 977 keys, 5 × 977 strings, 5 module pointers | formats/text-table |
 | `0x7F0BD8` | 15 × 0x58 | car table | formats/vehicle-models |

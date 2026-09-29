@@ -28,7 +28,7 @@ An entry is closed only when the exact behaviour is implemented **and** checked 
 |---|---|---|---|
 | D1 | The racing line stops at the first waypoint that breaks the pattern | The real length or terminator is unknown | Code reading world `+0x44` |
 | D2 | Grid cars are placed on the sector's mean floor height | The game's ground height and suspension | Entity physics |
-| D3 | Route names and modes are not mapped | Events select route, mode and environment | Event tables (text keys `TEXT_TRACK*`, `TEXT_ROUTE*`) |
+| D3 | Route names and kinds are exact (name tables at `0x7E4A70`/`0x7E4AA0`/`0x7E4AD0`); **career events** (mode, route, environment choice) are not decoded | Events select route, mode and environment | Event/career tables; sector `+0x10` name keys |
 | D4 | No gameplay yet (handling, AI, cops) | — | Roadmap step 4, traced against the reference build |
 
 ## Closed

@@ -178,6 +178,38 @@ pub struct Route {
     /// Start grid, city units: the player first, then three opponents.
     pub grid: Vec<[i32; 3]>,
     pub waypoints: Vec<Waypoint>,
+    /// English track name and kind, from the name tables at `0x7E4A70` (circuits, forward),
+    /// `0x7E4AA0` (circuits, reverse) and `0x7E4AD0` (sprints): `(u16 text key, u16 route)` pairs.
+    pub name: Option<String>,
+    pub kind: Option<RouteKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteKind {
+    Circuit { reverse: bool },
+    Sprint,
+}
+
+/// `(route, text key, kind)` from the three name tables (12 circuits forward and reverse, then sprints; the
+/// sprint table ends at the first entry that does not name a route).
+fn route_names(rom: &[u8], routes: usize) -> Vec<(usize, usize, RouteKind)> {
+    let tables = [
+        (0x7E_4A70, RouteKind::Circuit { reverse: false }),
+        (0x7E_4AA0, RouteKind::Circuit { reverse: true }),
+        (0x7E_4AD0, RouteKind::Sprint),
+    ];
+    let mut out = Vec::new();
+    for (at, kind) in tables {
+        for e in (0..).map(|i| at + 4 * i) {
+            let (key, route) = (u16_at(rom, e) as usize, u16_at(rom, e + 2) as usize);
+            let circuit_done = matches!(kind, RouteKind::Circuit { .. }) && e >= at + 4 * 12;
+            if circuit_done || route == 0 || route >= routes {
+                break;
+            }
+            out.push((route, key, kind));
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -193,10 +225,12 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
     const TABLE: usize = 0x7F_2798;
     let sectors = city(rom).len();
     // Records end where `+0x10` stops being zero (the level descriptors follow).
-    (0..)
-        .map(|i| TABLE + 0x14 * i)
-        .take_while(|&r| u32_at(rom, r + 0x10) == 0)
-        .map(|r| {
+    let count = (0..).take_while(|&i| u32_at(rom, TABLE + 0x14 * i + 0x10) == 0).count();
+    let names = route_names(rom, count);
+    (0..count)
+        .map(|i| (i, TABLE + 0x14 * i))
+        .map(|(i, r)| {
+            let named = names.iter().find(|n| n.0 == i);
             let entities = ptr(rom, r);
             let grid = (0..4)
                 .map(|e| [0, 4, 8].map(|k| u32_at(rom, entities + 0xA4 * e + 0x0C + k) as i32 >> 8))
@@ -218,7 +252,12 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
                     waypoints.push(wp);
                 }
             }
-            Route { grid, waypoints }
+            Route {
+                grid,
+                waypoints,
+                name: named.map(|n| text(rom, n.1, Some(0))),
+                kind: named.map(|n| n.2),
+            }
         })
         .collect()
 }
@@ -709,6 +748,16 @@ mod tests {
         // Quick Play race in the reference run: route 23, player start (118400, 0, -64320) city units.
         let r = &routes[23];
         assert_eq!(r.grid[0], [118_400, 0, -64_320]);
+        assert_eq!(r.name.as_deref(), Some("STORAGE RUN")); // Quick Play picked Storage Run, forward
+        assert_eq!(r.kind, Some(RouteKind::Circuit { reverse: false }));
+        assert_eq!(routes.iter().filter(|r| r.kind == Some(RouteKind::Sprint)).count(), 18);
+        assert_eq!(
+            routes
+                .iter()
+                .filter(|r| matches!(r.kind, Some(RouteKind::Circuit { .. })))
+                .count(),
+            24
+        );
         assert_eq!(
             (
                 r.waypoints.len(),
