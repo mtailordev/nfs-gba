@@ -10,10 +10,14 @@
 // Here the pair's two texels are found by stepping u along the screen from this fragment (`dpdx`).
 // NOT 1:1 (R14): at high resolution the fragment keeps its own texel; the pair test uses the fragment's row.
 //
-// City fragments carry their sector (`uv_b.x`) and whether they belong to a wall (`uv_b.y`). With a portal list
-// (texel 0 of `portals` = entry count, -1 = none) a fragment is drawn only inside the screen span of an entry of
-// its sector: walls in whole pixel pairs (`raster_wall_columns` clips to columns `left >> 1 .. right >> 1`), flats
-// in pixels `left .. right`, both in rows `top .. bottom` (so row 159 is never drawn). CULL surfaces drop back faces.
+// City fragments carry their sector (`uv_b.x`) and, for walls, 1 + the wall's index in the sector (`uv_b.y`; 0 for
+// floors and ceilings). With a portal list (texel (0, 0) of `portals` = entry count, -1 = none) a fragment is drawn
+// only inside the screen span of an entry of its sector, pixels `left ..= right` and rows `top .. bottom` (so row
+// 159 is never drawn), and a wall only if the entry's wall mask (row 1) has it. CULL surfaces drop back faces.
+// NOT 1:1 (hi-res): the game's spans are its projected portal ends rounded down, and it draws walls in 2-pixel
+// column pairs clipped to pairs `left >> 1 .. right >> 1`, so its surfaces meet on whole pixels. Here the geometry
+// is continuous: a surface behind a portal ends where the portal's continuous end lies, up to a pixel past the
+// rounded `right`, so the span keeps that pixel (clipping any tighter opens a hairline where the backdrop shows).
 //
 // SCREEN surfaces read `indices` as the 240×160 GBA screen at the pixel's screen position (the sky layer).
 
@@ -36,19 +40,26 @@ fn texel(uv: vec2<f32>) -> u32 {
     return textureLoad(indices, ((t % size) + size) % size, 0).r;
 }
 
-// Whether GBA pixel `p` of `sector` lies in the span of one of the portal list's entries for that sector.
-fn listed(sector: i32, wall: bool, p: vec2<i32>) -> bool {
+// Whether GBA pixel `p` of `sector` (wall `wall` of it, or a flat when `wall` < 0) is drawn through one of the
+// portal list's entries for that sector.
+fn listed(sector: i32, wall: i32, p: vec2<i32>) -> bool {
     let count = textureLoad(portals, vec2<i32>(0, 0), 0).x;
     if count < 0 {
         return true;
     }
     for (var k = 1; k <= count; k++) {
         let e = textureLoad(portals, vec2<i32>(k, 0), 0);
-        var span = vec2<i32>(e.y, e.z);
-        if wall {
-            span = (span >> vec2<u32>(1u)) * 2;
+        if e.x != sector || p.y < (e.w & 0xFFFF) || (e.w >> 16u) <= p.y {
+            continue;
         }
-        if e.x == sector && span.x <= p.x && p.x < span.y && (e.w & 0xFFFF) <= p.y && p.y < (e.w >> 16u) {
+        if wall >= 0 {
+            let mask = textureLoad(portals, vec2<i32>(k, 1), 0);
+            let bits = select(select(select(mask.x, mask.y, wall >= 32), mask.z, wall >= 64), mask.w, wall >= 96);
+            if ((bits >> u32(wall & 31)) & 1) == 0 {
+                continue;
+            }
+        }
+        if e.y <= p.x && p.x <= e.z {
             return true;
         }
     }
@@ -67,7 +78,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         discard;
     }
 #ifdef VERTEX_UVS_B
-    if !listed(i32(round(in.uv_b.x)), in.uv_b.y > 0.5, gba) {
+    if !listed(i32(round(in.uv_b.x)), i32(round(in.uv_b.y)) - 1, gba) {
         discard;
     }
 #endif

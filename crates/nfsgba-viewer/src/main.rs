@@ -81,7 +81,9 @@ fn game_yaw(forward: Vec3) -> i32 {
 /// `focal · tan(pitch)`, clamped to ±32 as `camera_update` does. The game's cameras never pitch (0 in the chase
 /// view; the bumper view shifts the projection centre instead); only the viewer's free camera does.
 fn horizon(forward: Vec3) -> i32 {
-    (game::FOCAL as f32 * forward.y / forward.xz().length()).round().clamp(-32.0, 32.0) as i32
+    (game::FOCAL as f32 * forward.y / forward.xz().length())
+        .round()
+        .clamp(-32.0, 32.0) as i32
 }
 
 /// Unindexed triangle soup; flat normals are computed at the end. `uv_b` marks city geometry for the portal
@@ -108,12 +110,13 @@ impl Tris {
         }
     }
 
-    /// A city polygon of `sector`, tagged for the portal clip.
-    fn city(&mut self, pts: &[(Vec3, Vec2)], sector: usize, wall: bool) {
+    /// A city polygon of `sector`, tagged for the portal clip: `wall` is the wall's index in its sector, `None` for
+    /// a floor or ceiling.
+    fn city(&mut self, pts: &[(Vec3, Vec2)], sector: usize, wall: Option<usize>) {
         let n = self.pos.len();
         self.fan(pts, Color::WHITE);
         self.uv_b.resize(self.pos.len(), [0.0; 2]);
-        self.uv_b[n..].fill([sector as f32, wall as u8 as f32]);
+        self.uv_b[n..].fill([sector as f32, wall.map_or(0.0, |k| k as f32 + 1.0)]);
     }
 
     fn mesh(self) -> Mesh {
@@ -175,7 +178,7 @@ struct Indexed {
     /// `x`: `OPAQUE | SCREEN | CULL | PAIRS` flags.
     #[uniform(3)]
     mode: UVec4,
-    /// The game's visible-sector list (32×1 `Rgba32Sint`, see `portal_texels`).
+    /// The game's visible-sector list and wall masks (32×2 `Rgba32Sint`, see `portal_texels`).
     #[texture(4, sample_type = "s_int")]
     portals: Handle<Image>,
 }
@@ -220,25 +223,68 @@ fn rgba(palette: &[u16]) -> Vec<u8> {
     rom::palette_rgba(palette).as_flattened().to_vec()
 }
 
-/// The portal texture: texel 0 holds the entry count (−1: no list, draw everything), texels 1.. the drawn entries
-/// as (sector, left, right, top | bottom << 16).
-fn portal_texels(entries: Option<&[render::Portal]>) -> Vec<u8> {
-    let mut texels = vec![[0i32; 4]; 32];
+/// The portal texture (32×2): row 0 texel 0 holds the entry count (−1: no list, draw everything), texels 1.. the
+/// drawn entries as (sector, left, right, top | bottom << 16); row 1 under each entry the mask of the sector's walls
+/// the game draws through it (bit k of the 128-bit mask: wall k).
+fn portal_texels(entries: Option<&[(render::Portal, u128)]>) -> Vec<u8> {
+    let mut texels = vec![[0i32; 4]; 64];
     match entries {
         None => texels[0][0] = -1,
         Some(list) => {
             texels[0][0] = list.len() as i32;
-            for (t, p) in texels[1..].iter_mut().zip(list) {
-                *t = [
+            for (k, (p, walls)) in list.iter().enumerate().take(31) {
+                texels[1 + k] = [
                     p.sector as i32,
                     p.left as i32,
                     p.right as i32,
                     p.top as i32 | (p.bottom as i32) << 16,
                 ];
+                texels[33 + k] = std::array::from_fn(|i| (walls >> (32 * i)) as u32 as i32);
             }
         }
     }
     texels.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// The walls of `portal`'s sector that the game draws through that entry, as a mask (bit k: wall k): the checks of
+/// `draw_sector_walls` (material 0, open portal, span flag 4, deferred walls beyond the 8-bit mask, rows outside
+/// the entry) and the early returns of `raster_wall_columns` (fewer than 2 column pairs, before or after clipping
+/// to the entry's pairs `left >> 1 .. right >> 1`), on the spans `render::setup_wall_spans` made for the entry.
+/// A moving piece's flags replace the wall's (`game::wall_flags`); its material offset is 0 in every race seen.
+fn walls_drawn(rt: &render::Runtime, portal: &render::Portal, spans: &[render::WallSpan], walls: &[rom::Wall]) -> u128 {
+    let (e6, e8) = (portal.top as u16 as i32, portal.bottom as u16 as i32);
+    let (left, right) = ((portal.left as u16 >> 1) as i32, (portal.right as u16 >> 1) as i32);
+    let mut mask = 0;
+    for (i, (s, w)) in spans.iter().zip(walls).enumerate() {
+        let k = walls.len() - i;
+        let visible = s.flags & 4 == 0 && (s.flags & 2 == 0 || k < 8);
+        let rows =
+            (s.top[0] as i32) < e8 || (s.top[1] as i32) < e8 || e6 <= s.bottom[0] as i32 || e6 <= s.bottom[1] as i32;
+        let columns = || {
+            let (mut start, end) = (s.x[0] as i32 >> 1, (s.x[1] as i32 + 1) >> 1);
+            let mut cols = end - start;
+            if cols <= 1 {
+                return false;
+            }
+            if start < left {
+                if end < left {
+                    return false;
+                }
+                (start, cols) = (left, end - left);
+            }
+            if right < end {
+                if right < start {
+                    return false;
+                }
+                cols = right - start;
+            }
+            cols > 1
+        };
+        if w.material != 0 && game::wall_flags(rt, w) & 1 == 0 && visible && rows && columns() {
+            mask |= 1u128 << i;
+        }
+    }
+    mask
 }
 
 /// A car atlas moved into the car slots as `unpack_player_atlas` does for the player (`paint::remap_atlas`, body
@@ -283,7 +329,7 @@ fn floor_at(sectors: &[rom::Sector], sector: u16, x: i32, z: i32) -> i32 {
         let total = area(a, b, c.xz());
         let (l0, l1) = (area(b, c, q) / total, area(c, a, q) / total);
         let l2 = 1.0 - l0 - l1;
-        (l0 >= 0.0 && l1 >= 0.0 && l2 >= 0.0).then(|| l0 * a.y + l1 * b.y + l2 * c.y)
+        (l0 >= 0.0 && l1 >= 0.0 && l2 >= 0.0).then_some(l0 * a.y + l1 * b.y + l2 * c.y)
     });
     (inside.unwrap_or(p(0).y) * 256.0) as i32
 }
@@ -307,11 +353,7 @@ fn main() {
     .add_systems(Startup, setup)
     .add_systems(
         Update,
-        (
-            shot,
-            (keys, game_camera, visibility, sky, tint).chain(),
-            racing_line,
-        ),
+        (shot, (keys, game_camera, visibility, sky, tint).chain(), racing_line),
     );
     embedded_asset!(app, "indexed.wgsl");
     app.run();
@@ -345,7 +387,12 @@ fn setup(
         vec![0; sky::SCREEN_W * sky::SCREEN_H],
         TextureFormat::R8Uint,
     ));
-    let portals = images.add(texture_2d(32, 1, portal_texels(None), TextureFormat::Rgba32Sint));
+    let portals = images.add(texture_2d(32, 2, portal_texels(None), TextureFormat::Rgba32Sint));
+    let most_walls = sectors.iter().map(|s| s.walls.len()).max().unwrap_or(0);
+    assert!(
+        most_walls <= 128,
+        "a sector has {most_walls} walls; the portal texture's wall masks hold 128"
+    );
     let mut new_material = |indices, palette: &Handle<Image>, mode| {
         indexed.add(Indexed {
             indices,
@@ -361,10 +408,12 @@ fn setup(
     // or portal alike (R8: a portal wall is a step, kerb or fence over its own top..bottom). A wall's front, where
     // its start lies left of its end on screen, is drawn unless the wall has flag 2; its back only with flag 2 or
     // 0x2000 (`setup_wall_spans`), and then as a deferred wall, which the 8-bit defer mask drops for countdown
-    // index 8 and up (`draw_sector_walls`). Flats from each corner's floor/ceiling height (`+0x38`/`+0x3A`, R19),
-    // both faces.
+    // index 8 and up (`draw_sector_walls`). A moving piece's flags replace its wall's (in races all 122 are open,
+    // `game::race_runtime`). Flats from each corner's floor/ceiling height (`+0x38`/`+0x3A`, R19), both faces.
+    let rt = game::race_runtime(&sectors);
     let mut by_material: BTreeMap<u16, Tris> = BTreeMap::new();
     let floor_uv = |w: &rom::Wall| Vec2::new(w.floor_uv[0] as f32, w.floor_uv[1] as f32) / 16384.0;
+    let (mut solid, mut portal, mut backs, mut lost) = (0, 0, 0, 0);
     for (s, sector) in sectors.iter().enumerate() {
         let w = &sector.walls;
         for (material, floor) in [(sector.floor, true), (sector.ceiling, false)] {
@@ -377,12 +426,16 @@ fn setup(
                     })
                     .collect();
                 let tris = by_material.entry(material).or_default();
-                tris.city(&pts, s, false);
+                tris.city(&pts, s, None);
                 pts.reverse();
-                tris.city(&pts, s, false);
+                tris.city(&pts, s, None);
             }
         }
-        for (k, a) in w.iter().enumerate().filter(|(_, a)| a.material != 0 && a.flags & 1 == 0) {
+        for (k, a) in w.iter().enumerate() {
+            let flags = game::wall_flags(&rt, a);
+            if a.material == 0 || flags & 1 != 0 {
+                continue;
+            }
             let b = &w[(k + 1) % w.len()];
             let (ax, az, bx, bz) = (a.x as f32, a.z as f32, b.x as f32, b.z as f32);
             let t = &textures[a.material as usize];
@@ -394,16 +447,29 @@ fn setup(
                 (world(bx, a.top[1], bz), uv[1]),
             ];
             let tris = by_material.entry(a.material).or_default();
-            if a.flags & 2 == 0 {
-                tris.city(&front, s, true);
+            if a.link < 0 {
+                solid += 1
+            } else {
+                portal += 1
+            }
+            if flags & 2 == 0 {
+                tris.city(&front, s, Some(k));
             }
             let countdown = w.len() - k;
-            if a.flags & 0x2002 != 0 && countdown < 8 {
-                let back: Vec<_> = front.iter().rev().copied().collect();
-                tris.city(&back, s, true);
+            if flags & 0x2002 != 0 {
+                if countdown < 8 {
+                    let back: Vec<_> = front.iter().rev().copied().collect();
+                    tris.city(&back, s, Some(k));
+                    backs += 1;
+                } else {
+                    lost += 1;
+                }
             }
         }
     }
+    info!(
+        "walls drawn: {solid} solid, {portal} portal (steps, kerbs, fences); {backs} with a back side, {lost} backs lost to the 8-bit defer mask"
+    );
     let (min, max) = by_material
         .values()
         .flat_map(|t| &t.pos)
@@ -465,17 +531,21 @@ fn setup(
         })
         .collect();
     let routes = rom::routes(&data);
-    let dump = std::env::var("NFSGBA_DUMP").ok().map(|p| {
-        let d = game::Dump::load(&p).unwrap_or_else(|e| panic!("NFSGBA_DUMP={p}: {e}"));
-        (RaceSetup::from_dump(&d), d.route())
-    });
+    let dump = std::env::var("NFSGBA_DUMP")
+        .ok()
+        .map(|p| game::Dump::load(&p).unwrap_or_else(|e| panic!("NFSGBA_DUMP={p}: {e}")));
     let start_route: Option<usize> = std::env::var("NFSGBA_ROUTE").ok().and_then(|s| s.parse().ok());
-    let current = dump.as_ref().map(|d| d.1).or(start_route).unwrap_or(23);
+    let current = dump.as_ref().map(|d| d.route()).or(start_route).unwrap_or(23);
     let setup = match &dump {
-        Some((setup, _)) => setup.clone(),
-        None => RaceSetup::grid(&data, &routes[current], PLAYER_CAR, game::REFERENCE_RAND, |s, x, z| {
-            floor_at(&sectors, s, x, z)
-        }),
+        Some(d) => RaceSetup::from_dump(d),
+        None => RaceSetup::grid(
+            &data,
+            &rt,
+            &routes[current],
+            PLAYER_CAR,
+            game::REFERENCE_RAND,
+            |s, x, z| floor_at(&sectors, s, x, z),
+        ),
     };
     let active = dump.is_some() || start_route.is_some();
     info!(
@@ -484,46 +554,50 @@ fn setup(
         setup.paints,
         if dump.is_some() { " (from the dump)" } else { "" }
     );
-    // The player's texture is built as `unpack_player_atlas` builds it, with the rim at angle 0 (race start);
-    // the opponents' are raw materials already in their palette slots (`look`).
-    // NOT 1:1 (R13 in-race): the game redraws the rim rotated by the wheel angle most frames; the viewer has no
-    // wheel spin. NOT 1:1 (R24): the rim blit can read heap bytes around the rim buffer; not at angle 0.
+    // The player's texture is built as `unpack_player_atlas` builds it, with the rim at angle 0 (race start), or
+    // taken from the dump's EWRAM as the race left it; the opponents' are raw materials already in their palette
+    // slots (`look`).
+    // NOT 1:1 (R13 in-race, grid only): the game redraws the rim rotated by the wheel angle most frames; the viewer
+    // has no wheel spin. NOT 1:1 (R24): that redraw can read heap bytes around the rim buffer; not at angle 0.
     let player_car = setup.cars[0] as usize;
-    let (_, mut player_pixels) = atlas::player_atlas(&data, &vehicle_textures, player_car, 0, &setup.record);
-    if let Some(rim) = atlas::rim(&data, &vehicle_textures, player_car, &setup.record) {
-        let pixels = atlas::rim_pixels(&vehicle_textures, &rim);
-        atlas::draw_rim(&data, &mut player_pixels, &rim, &pixels, 0, 0);
-    }
-    for slot in 0..4 {
-        // Close up the race draws model entity `+0x36 − 1`: for the player the car table's close model (`+0x14`),
-        // for the opponents their `0x7EEA44` entry's model − 1 (`draw_sector_entities`).
-        // NOT 1:1 (R12): beyond depth 0x1FF the next model is drawn; the player also draws model entity `+0x64`
-        // with a second matrix; the entity draw's clip span and LOD culls are not applied.
-        let (model, atlas) = if slot == 0 {
-            let first = cars[player_car].first_material;
-            let t = &vehicle_textures[first];
-            (
-                cars[player_car].models[1],
-                rom::Texture {
-                    pixels: player_pixels.clone(),
-                    ..t.clone()
-                },
-            )
+    let player_first = &vehicle_textures[cars[player_car].first_material];
+    let player_pixels = match dump.as_ref().and_then(|d| d.atlas(0, player_first.pixels.len())) {
+        Some(pixels) => pixels,
+        None => {
+            let (_, mut pixels) = atlas::player_atlas(&data, &vehicle_textures, player_car, 0, &setup.record);
+            if let Some(rim) = atlas::rim(&data, &vehicle_textures, player_car, &setup.record) {
+                let rim_pixels = atlas::rim_pixels(&vehicle_textures, &rim);
+                atlas::draw_rim(&data, &mut pixels, &rim, &rim_pixels, 0, 0);
+            }
+            pixels
+        }
+    };
+    for (slot, racer) in setup.racers.iter().enumerate() {
+        let atlas = if slot == 0 {
+            rom::Texture {
+                pixels: player_pixels.clone(),
+                ..player_first.clone()
+            }
         } else {
-            let look = atlas::look(&data, setup.cars, slot, false, false);
-            (
-                look.model as usize - 1,
-                vehicle_textures[look.material as usize].clone(),
-            )
+            vehicle_textures[atlas::look(&data, setup.cars, slot, false, false).material as usize].clone()
         };
-        let tris = model_tris(&models[model], Some(&atlas), Color::WHITE);
-        let lift = on_ground(&tris);
-        commands.spawn((
-            Mesh3d(meshes.add(tris.mesh())),
-            MeshMaterial3d(new_material(images.add(index_image(&atlas)), &palette, 0)),
-            Transform::default(),
-            RaceCar { slot, lift },
-        ));
+        let material = new_material(images.add(index_image(&atlas)), &palette, 0);
+        // Every model the racer can show (near body `+0x36 − 1`, far body `+0x36`, spoiler `+0x64`); `visibility`
+        // picks by depth as `draw_sector_entities` does. The lift puts the near body's lowest point on the floor.
+        let lift = on_ground(&model_tris(&models[racer.model as usize - 1], None, Color::WHITE));
+        let mut parts = vec![racer.model as usize - 1, racer.model as usize];
+        if racer.extra != 0 {
+            parts.push(racer.extra.unsigned_abs() as usize);
+        }
+        for model in parts {
+            let tris = model_tris(&models[model], Some(&atlas), Color::WHITE);
+            commands.spawn((
+                Mesh3d(meshes.add(tris.mesh())),
+                MeshMaterial3d(material.clone()),
+                Transform::default(),
+                RaceCar { slot, model, lift },
+            ));
+        }
     }
 
     // Everything else in the bank (lower-detail car models, spoilers, traffic, markers) untextured, 12 per row.
@@ -554,7 +628,7 @@ fn setup(
         floors,
         current,
         active,
-        from_dump: dump.is_some(),
+        dump,
         game_camera: active && !free_cam,
         original: active && std::env::var("NFSGBA_ORIGINAL").is_ok(),
         frame: None,
@@ -583,6 +657,7 @@ fn setup(
         raw: city_palettes[env].clone(),
         rom: data,
         sectors,
+        rt,
         m: None,
         sector: None,
         palette,
@@ -610,6 +685,7 @@ fn setup(
         Projection::custom(GbaProjection {
             focal: game::FOCAL as f32,
             near: game::NEAR as f32 * SCALE,
+            unit: SCALE,
         }),
         // Palette colours reach the screen unchanged: no tonemapping, dithering or edge blending.
         Tonemapping::None,
@@ -646,8 +722,8 @@ struct Race {
     current: usize,
     /// A race is shown: its cars stand where the setup puts them and the light follows the player.
     active: bool,
-    /// The racers stand where a dump had them (else on the route's grid).
-    from_dump: bool,
+    /// The race dump the racers come from (else they stand on the route's grid).
+    dump: Option<game::Dump>,
     /// The camera is the game's chase camera (else the free camera).
     game_camera: bool,
     /// Show the game's own 240×160 world frame (`render::draw_world`) instead of the GPU view.
@@ -675,11 +751,27 @@ impl Race {
     }
 }
 
-/// A race car: racer `slot`'s model, whose lowest point is `lift` below its origin.
+/// A race car part: racer `slot`'s model `model`; the racer's near body has its lowest point `lift` below the
+/// entity origin.
 #[derive(Component)]
 struct RaceCar {
     slot: usize,
+    model: usize,
     lift: f32,
+}
+
+/// A racer's pose from its vehicle matrix slot (camera space, `render::Scene::matrices`) and the camera it was built
+/// for: model vertex `v` goes to camera space as `A·v + t` (rows `(m0 m3 m6)`, `(m1 m4 m7)`, `(m2 m5 m8)` over
+/// 0x4000; x right, y down, depth ahead). With `F = diag(1, −1, −1)` both the mesh (`world`) and Bevy's view space
+/// are `F`-flipped, so the mesh-to-view map is `F·A·F` plus `F·t`.
+fn pose_from_matrix(camera: &Transform, m: &[i32; 12]) -> Transform {
+    let f = [1.0, -1.0, -1.0];
+    let linear = Mat3::from_cols_array(&std::array::from_fn(|i| {
+        let (c, r) = (i / 3, i % 3);
+        f[r] * m[r + 3 * c] as f32 / 16384.0 * f[c]
+    }));
+    let t = Vec3::new(m[9] as f32, -m[10] as f32, -m[11] as f32) * SCALE;
+    Transform::from_matrix(camera.to_matrix() * Mat4::from_mat3_translation(linear, t))
 }
 
 /// R moves to the next route (Quick Play on its grid), G switches game and free camera, O the original frame.
@@ -693,12 +785,13 @@ fn keys(
         race.current = (race.current + 1) % race.routes.len();
         let setup = RaceSetup::grid(
             &tint.rom,
+            &tint.rt,
             race.route(),
             PLAYER_CAR,
             game::REFERENCE_RAND,
             |s, x, z| floor_at(&tint.sectors, s, x, z),
         );
-        (race.setup, race.active, race.from_dump, race.game_camera) = (setup, true, false, true);
+        (race.setup, race.active, race.dump, race.game_camera) = (setup, true, None, true);
         let r = race.route();
         info!(
             "route {}: {} waypoints, {} units",
@@ -732,31 +825,49 @@ fn game_camera(mut race: ResMut<Race>, tint: Res<Tint>, mut camera: Single<&mut 
         return;
     }
     let player = *race.player();
-    let (frame, root) = race.setup.chase.step(&tint.rom, &player);
-    **camera = game::frame_transform(&frame, |x, y, z| world(x, y, z));
+    let (frame, root) = race.setup.chase.step(&tint.rom, &tint.rt, &player);
+    **camera = game::frame_transform(&frame, world);
     race.visible = Some(render::visible_sectors(&tint.rom, &frame, root));
     race.frame = Some((frame, root));
 }
 
 /// What is drawn: in game-camera mode the city through the game's visible list (the entries whose sector
 /// `draw_sector` draws: `transform_walls` finds no corner deeper than 0x5FFF), each clipped to its screen span in
-/// the shader; the race cars on their frame positions, those with a matrix slot whose sector is listed.
+/// the shader; the racers whose sector is listed, each with the models `draw_sector_entities` picks at its camera
+/// depth (`Racer::models_at`). Racers from a dump stand as their vehicle matrices put them (pitch and roll
+/// included); on a grid they stand level on the floor, facing their heading.
 /// NOT 1:1 (R10): hidden surfaces come from the depth buffer; the game overdraws in list order (painter's).
+/// NOT 1:1 (R12): the cars are not clipped to their portal's span and the screen-row cull is not applied.
 fn visibility(
     race: Res<Race>,
     tint: Res<Tint>,
+    mut logged: Local<Vec<(render::Portal, u128)>>,
     mut images: ResMut<Assets<Image>>,
+    camera: Single<&Transform, (With<Camera3d>, Without<RaceCar>)>,
     mut city: Query<&mut Visibility, (With<CityMesh>, Without<RaceCar>)>,
     mut cars: Query<(&RaceCar, &mut Transform, &mut Visibility), Without<CityMesh>>,
 ) {
-    let drawn: Option<Vec<render::Portal>> = race.frame.as_ref().zip(race.visible.as_ref()).map(|((f, _), v)| {
-        let rt = render::Runtime::default();
-        v.portals
+    let drawn: Option<Vec<(render::Portal, u128)>> =
+        race.frame.as_ref().zip(race.visible.as_ref()).map(|((f, _), v)| {
+            let rt = &tint.rt;
+            v.portals
+                .iter()
+                .filter(|p| p.flags & 8 == 0)
+                .filter_map(|p| {
+                    let (mut spans, _) = render::transform_walls(&tint.rom, f, rt, p.sector)?;
+                    render::setup_wall_spans(&tint.rom, f, rt, p, &mut spans);
+                    Some((*p, walls_drawn(rt, p, &spans, &tint.sectors[p.sector as usize].walls)))
+                })
+                .collect()
+        });
+    if let Some(d) = drawn.as_ref().filter(|d| **d != *logged) {
+        let list: Vec<_> = d
             .iter()
-            .filter(|p| p.flags & 8 == 0 && render::transform_walls(&tint.rom, f, &rt, p.sector).is_some())
-            .copied()
-            .collect()
-    });
+            .map(|(p, w)| (p.sector, p.left, p.right, p.depth, w.count_ones()))
+            .collect();
+        info!("portal list (sector, left, right, depth, walls drawn): {list:?}");
+        logged.clone_from(d);
+    }
     if let Some(mut image) = images.get_mut(&race.portals) {
         let texels = portal_texels(drawn.as_deref());
         if image.data.as_ref() != Some(&texels) {
@@ -769,15 +880,26 @@ fn visibility(
     }
     for (car, mut t, mut v) in &mut cars {
         let r = &race.setup.racers[car.slot];
-        let mut at = world_fixed(r.pos);
-        if !race.from_dump {
-            // NOT 1:1 (D2): on the grid the model's lowest point stands on the floor.
-            at.y += car.lift;
-        }
-        let pose = Transform::from_translation(at).looking_to(direction(r.heading), Vec3::Y);
+        let pose = match (&race.dump, race.frame) {
+            // The dump's matrices were built for the dump's camera, which the game camera reproduces.
+            (Some(d), Some(_)) if r.slot != 0xFF => pose_from_matrix(&camera, &d.matrix(r.slot)),
+            (Some(_), _) => *t,
+            // NOT 1:1 (D2): on the grid the near body's lowest point stands on the floor, level.
+            (None, _) => Transform::from_translation(world_fixed(r.pos) + Vec3::Y * car.lift)
+                .looking_to(direction(r.heading), Vec3::Y),
+        };
         t.set_if_neq(pose);
-        let listed = drawn.as_ref().is_none_or(|d| d.iter().any(|p| p.sector == r.sector));
-        v.set_if_neq(shown(race.active && !race.original && r.slot != 0xFF && listed));
+        // The entity's camera depth as `draw_sector_entities` computes it; the free camera shows the near models.
+        let depth = race.frame.map_or(0, |(f, _)| {
+            let m = &f.camera;
+            let (x, z) = (m[9].wrapping_add(r.pos[0] >> 8), m[11].wrapping_add(r.pos[2] >> 8));
+            m[2].wrapping_mul(x).wrapping_add(m[8].wrapping_mul(z)) >> 14
+        });
+        let listed = drawn
+            .as_ref()
+            .is_none_or(|d| d.iter().any(|(p, _)| p.sector == r.sector));
+        let drawn_model = r.models_at(depth).contains(&car.model);
+        v.set_if_neq(shown(race.active && !race.original && listed && drawn_model));
     }
 }
 
@@ -807,6 +929,8 @@ struct CarPalette {
 struct Tint {
     rom: Vec<u8>,
     sectors: Vec<rom::Sector>,
+    /// The renderer's runtime tables as races have them (`game::race_runtime`).
+    rt: render::Runtime,
     /// The current environment's city palette, untinted.
     raw: Vec<u16>,
     /// Current multipliers; `None` until a sector first gives a light (the palette is then as loaded).
@@ -913,9 +1037,12 @@ struct Skies {
     screen_image: Handle<Image>,
     /// Palette entry 0 per screen line (160×1 RGBA).
     backdrop: Handle<Image>,
-    /// Environment, camera and (original frame) render camera of the last drawn sky.
-    drawn: Option<(usize, sky::SkyCamera, Option<([i32; 12], u16)>)>,
+    /// What the sky layer was last drawn for.
+    drawn: Option<SkyKey>,
 }
+
+/// Environment, sky camera and, in the original frame, the render camera matrix and camera sector.
+type SkyKey = (usize, sky::SkyCamera, Option<([i32; 12], u16)>);
 
 /// K switches to the next environment (sky and palette). Redraws the sky layer when the environment or the
 /// camera changes: the skyline (`sky::draw_skyline`, only when the portal pass saw an open sky, world `+0xF6`)
@@ -973,13 +1100,14 @@ fn sky(
         sky::draw_skyline(&tint.rom, desc, &cam, SKY_CLIP, screen);
     }
     if let (Some((frame, _)), Some(visible)) = (world_frame, race.visible.as_ref()) {
-        render::draw_world(
-            &tint.rom,
-            &frame,
-            &render::Runtime::default(),
-            &mut visible.clone(),
-            screen,
-        );
+        // The cars come from the dump's entities; on a grid the world is drawn alone.
+        // NOT 1:1 (R12, grid): the vehicle matrices are built by game code the viewer does not have
+        // (`draw_vehicle` `0x0814bc30`, `FUN_0814eba0`).
+        let mut scene = match &race.dump {
+            Some(d) => d.scene(tint.sectors.len()),
+            None => render::Scene::empty(),
+        };
+        render::draw_world(&tint.rom, &frame, &tint.rt, &mut scene, &mut visible.clone(), screen);
     }
     let start = sky::gradient_start(desc, &cam);
     let lines: Vec<u8> = (0..sky::SCREEN_H)
@@ -1024,6 +1152,67 @@ mod tests {
         assert_eq!(horizon(Vec3::NEG_Y), -32);
     }
 
+    /// `walls_drawn` agrees with the game's rasteriser: over the chase frames of several routes, every wall of
+    /// every drawn entry that it keeps writes pixels when `render::raster_wall_columns` draws it alone, and every
+    /// wall it drops (that `draw_sector_walls` would pass to the rasteriser) writes none.
+    #[test]
+    fn walls_drawn_matches_the_rasteriser() {
+        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
+        let Ok(data) = rom::canonical_rom() else {
+            eprintln!("skipping: no ROM vault");
+            return;
+        };
+        let (sectors, routes, textures) = (rom::city(&data), rom::routes(&data), rom::city_textures(&data));
+        let rt = game::race_runtime(&sectors);
+        let (mut kept, mut dropped) = (0, 0);
+        // Route 0 has no grid of its own.
+        for (route, r) in routes.iter().enumerate().skip(1) {
+            let setup = RaceSetup::grid(&data, &rt, r, 2, game::REFERENCE_RAND, |s, x, z| {
+                floor_at(&sectors, s, x, z)
+            });
+            let mut chase = setup.chase;
+            let (frame, root) = chase.step(&data, &rt, &setup.racers[0]);
+            for p in render::visible_sectors(&data, &frame, root).portals {
+                let Some((mut spans, _)) = render::transform_walls(&data, &frame, &rt, p.sector) else {
+                    continue;
+                };
+                render::setup_wall_spans(&data, &frame, &rt, &p, &mut spans);
+                let walls = &sectors[p.sector as usize].walls;
+                let mask = walls_drawn(&rt, &p, &spans, walls);
+                for (i, (s, w)) in spans.iter().zip(walls).enumerate() {
+                    // Opaque textures only: a transparent one can legitimately write nothing.
+                    let flags = game::wall_flags(&rt, w);
+                    let opaque = textures[w.material as usize].pixels[0] != 0;
+                    if w.material == 0 || flags & 1 != 0 || s.flags & 4 != 0 {
+                        // Never passed to the rasteriser.
+                        assert!(mask >> i & 1 == 0, "route {route}, sector {}, wall {i}", p.sector);
+                        continue;
+                    }
+                    if !opaque {
+                        continue;
+                    }
+                    let mut screen = vec![0u8; render::SCREEN_WIDTH * 160];
+                    render::raster_wall_columns(&data, &p, s, w.material, w.flags, &mut screen);
+                    let wrote = screen.iter().any(|&b| b != 0);
+                    let keep = mask >> i & 1 != 0;
+                    let deferred_lost = s.flags & 2 != 0 && walls.len() - i >= 8;
+                    let rows = (s.top[0] as i32) < p.bottom as i32
+                        || (s.top[1] as i32) < p.bottom as i32
+                        || p.top as i32 <= s.bottom[0] as i32
+                        || p.top as i32 <= s.bottom[1] as i32;
+                    if deferred_lost || !rows {
+                        assert!(!keep, "route {route}, sector {}, wall {i}", p.sector);
+                        continue;
+                    }
+                    assert_eq!(keep, wrote, "route {route}, sector {}, wall {i}: {s:?}", p.sector);
+                    (kept, dropped) = (kept + keep as usize, dropped + !keep as usize);
+                }
+            }
+        }
+        eprintln!("{kept} walls kept, {dropped} dropped, all as the rasteriser draws them");
+        assert!(kept > 100 && dropped > 10);
+    }
+
     /// The game camera's transform looks where the render frame looks: every point projects to the same screen x.
     #[test]
     fn frame_transform_matches_the_render_camera() {
@@ -1038,12 +1227,15 @@ mod tests {
             camera,
             rect: [0, 240, 0, 159],
         };
-        let t = game::frame_transform(&frame, |x, y, z| world(x, y, z));
+        let t = game::frame_transform(&frame, world);
         let view = t.to_matrix().inverse();
         for (x, y, z) in [(118400, 164, -64320), (120000, -300, -65000), (119000, 0, -63000)] {
             let v = view.transform_point3(world(x as f32, y as f32, z as f32)) / SCALE;
             let (cx, depth) = frame.to_camera(x, z);
-            assert!((v.x - cx as f32).abs() < 1.5 && (-v.z - depth as f32).abs() < 1.5, "{x} {z}: {v}");
+            assert!(
+                (v.x - cx as f32).abs() < 1.5 && (-v.z - depth as f32).abs() < 1.5,
+                "{x} {z}: {v}"
+            );
             assert!((-v.y - (y - 30) as f32).abs() < 0.01, "height: {v}");
         }
     }

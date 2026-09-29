@@ -24,10 +24,43 @@ const VIEW_DISTANCES: usize = 0x7F_39EC;
 pub const CHASE: usize = 2;
 /// New-profile paint per car (record byte 6, `profile_reset` `FUN_081356dc`); the other record bytes start at 0.
 const NEW_PROFILE_PAINTS: usize = 0x7E_EA33;
+/// The car table (15 × 0x58).
+const CAR_TABLE: usize = 0x7F_0BD8;
+/// i16 spoiler model per `car·0x10 + record[0]` (entity `+0x64`).
+const SPOILERS: usize = 0x7F_0636;
 /// The rand index at `pick_opponent_cars` in the reference race: the only one of the 256 that deals its racers
 /// (cars 2, 9, 10, 11; paints 11, 11, 11, 5). Derived, not traced: `setup_race_cars` seeds the index with
 /// `*0x03000044 & 0xFF` = 3, so 14 other draws come between (open).
 pub const REFERENCE_RAND: u32 = 0x11;
+
+/// The renderer's runtime tables in a race as every captured race has them (20 dumps, routes 18 and 23): each
+/// moving wall piece (world `+0x18`, one per wall naming one at `+0x2A`) with no offsets and flags 1, so those 122
+/// walls are open (not drawn, not blocking the camera); no material animation or scroll.
+/// NOT 1:1 (R21): the tables' writers are not decoded, so other races may set them otherwise.
+pub fn race_runtime(sectors: &[rom::Sector]) -> render::Runtime {
+    let pieces = sectors
+        .iter()
+        .flat_map(|s| &s.walls)
+        .filter(|w| w.piece != 0xFFFF)
+        .map(|w| w.piece as usize + 1)
+        .max()
+        .unwrap_or(0);
+    render::Runtime {
+        pieces: vec![
+            render::Piece {
+                flags: 1,
+                ..Default::default()
+            };
+            pieces
+        ],
+        ..Default::default()
+    }
+}
+
+/// A wall's flags as the renderer sees them: its moving piece's when it names one.
+pub fn wall_flags(rt: &render::Runtime, w: &rom::Wall) -> u16 {
+    rt.pieces.get(w.piece as usize).map_or(w.flags, |p| p.flags)
+}
 
 fn word(rom: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(rom[at..at + 4].try_into().unwrap())
@@ -63,7 +96,11 @@ pub fn atan(rom: &[u8], x: i32, y: i32) -> i32 {
     };
     let t = t >> 1;
     let cube = (t.wrapping_mul(t.wrapping_mul(t) >> 15) >> 15).wrapping_mul(0x1920) >> 15;
-    let a = base.wrapping_add(cube).wrapping_sub(t.wrapping_mul(0x7DA9) >> 15).wrapping_mul(0x1460) >> 16;
+    let a = base
+        .wrapping_add(cube)
+        .wrapping_sub(t.wrapping_mul(0x7DA9) >> 15)
+        .wrapping_mul(0x1460)
+        >> 16;
     if x < 0 { -a } else { a }
 }
 
@@ -99,6 +136,39 @@ pub struct Racer {
     pub sector: u16,
     /// `+0x88`: vehicle matrix slot; 0xFF = not drawn (`draw_sector_entities`).
     pub slot: u8,
+    /// `+0x0A`: draw flags (bit 0 whole-screen clip, bit 1 always the near model, bit 6 far model beyond 0x1000).
+    pub flags: u16,
+    /// `+0x36`: the far model (drawn at depth ≥ 0x200; the one before it nearer).
+    pub model: i16,
+    /// `+0x64`: the spoiler model on the next matrix slot (0: none).
+    pub extra: i16,
+}
+
+impl Racer {
+    /// The models `draw_sector_entities` draws for this racer at camera depth `d` (`render::entities`), body
+    /// then spoiler; none beyond depth 0x2000, nor beyond 0x1000 without flag bit 6, nor without a matrix slot.
+    pub fn models_at(&self, d: i32) -> Vec<usize> {
+        let mut d = d;
+        if d as u32 >= 0x2000 || self.slot == 0xFF || self.model == 0 {
+            return Vec::new();
+        }
+        if self.flags & 2 != 0 {
+            d = 0;
+        }
+        if d > 0x1000 {
+            if self.flags & 0x40 == 0 {
+                return Vec::new();
+            }
+            d = 0x200;
+        }
+        let body = (self.model + (d >= 0x200) as i16 - 1) as usize;
+        let spoiler = self.extra.unsigned_abs() as usize;
+        match self.extra {
+            0 => vec![body],
+            n if n < 0 => vec![spoiler, body],
+            _ => vec![body, spoiler],
+        }
+    }
 }
 
 /// The chase camera's state between frames (view 2).
@@ -120,7 +190,7 @@ pub struct Chase {
 impl Chase {
     /// A camera that has settled behind a standing racer: orbit yaw = the driver's heading, position and look yaw
     /// from one `step`'s rules. A standing racer keeps it there frame after frame.
-    pub fn behind(rom: &[u8], player: &Racer) -> Chase {
+    pub fn behind(rom: &[u8], rt: &render::Runtime, player: &Racer) -> Chase {
         let mut c = Chase {
             yaw: player.driver_heading,
             look: 0,
@@ -129,8 +199,12 @@ impl Chase {
             sector: player.sector,
             focal: FOCAL,
         };
-        c.place(rom, player);
-        c.look = atan(rom, (player.pos[0] >> 8) - (c.x >> 8), (player.pos[2] >> 8) - (c.z >> 8));
+        c.place(rom, rt, player);
+        c.look = atan(
+            rom,
+            (player.pos[0] >> 8) - (c.x >> 8),
+            (player.pos[2] >> 8) - (c.z >> 8),
+        );
         c
     }
 
@@ -140,19 +214,20 @@ impl Chase {
     }
 
     /// Camera position on the orbit (8.8), then pushed out of nearby walls.
-    fn place(&mut self, rom: &[u8], player: &Racer) {
+    fn place(&mut self, rom: &[u8], rt: &render::Runtime, player: &Racer) {
         let d = self.distance(rom);
         self.x = player.pos[0].wrapping_add(paint::sin_q14(rom, self.yaw).wrapping_mul(d) >> 14);
         self.z = player.pos[2].wrapping_add(cos_q14(rom, self.yaw).wrapping_mul(d) >> 14);
-        self.push_out_of_walls(rom);
+        self.push_out_of_walls(rom, rt);
     }
 
     /// `FUN_08137744`: for each wall of the camera's sector that blocks the camera (flag `0x1000`, or `0x4000`
-    /// below the height limit `*0x03005778`), a camera nearer than 81 units to its line (and within its ends, or
-    /// within √0x18FF of them) is pushed out to 80 units along the wall normal (`+0x34`/`+0x36`, 4.12). Walls in the
-    /// game's order: the last one first, then 0, 1, … NOT 1:1 (R21): moving pieces are not applied; the height
-    /// limit is taken as passed (every wall top is below it).
-    fn push_out_of_walls(&mut self, rom: &[u8]) {
+    /// below the height limit `*0x03005778`; a moving piece's flags replace the wall's), a camera nearer than 81
+    /// units to its line (and within its ends, or within √0x18FF of them) is pushed out to 80 units along the wall
+    /// normal (`+0x34`/`+0x36`, 4.12). Walls in the game's order: the last one first, then 0, 1, …
+    /// NOT 1:1: the height limit (a smoothed ground height from `FUN_0814ca84`) is taken as passed, as it is for
+    /// every wall in the reference race.
+    fn push_out_of_walls(&mut self, rom: &[u8], rt: &render::Runtime) {
         let walls = word(rom, rom::LEVEL_TABLE + 0x14) as u32 - rom::ROM_BASE;
         let sectors = word(rom, rom::LEVEL_TABLE + 0x18) as u32 - rom::ROM_BASE;
         let s = (sectors + 0x30 * u32::from(self.sector)) as usize;
@@ -160,7 +235,8 @@ impl Chase {
         let wall = |k: usize| walls as usize + 0x44 * (first + k);
         for k in (0..count).map(|k| (k + count - 1) % count) {
             let (w, n) = (wall(k), wall((k + 1) % count));
-            let flags = half(rom, w + 0x2E) as u16;
+            let piece = rt.pieces.get(half(rom, w + 0x2A) as u16 as usize);
+            let flags = piece.map_or(half(rom, w + 0x2E) as u16, |p| p.flags);
             if flags & 0x5000 == 0 {
                 continue;
             }
@@ -178,8 +254,8 @@ impl Chase {
                 (x3 - x2) * ex + ez * (z3 - z2) < 0 && ex * ex + ez * ez > 0x18FF
             };
             if !outside {
-                self.x += (0x50 - dist) * nx >> 4;
-                self.z += nz * (0x50 - dist) >> 4;
+                self.x += ((0x50 - dist) * nx) >> 4;
+                self.z += (nz * (0x50 - dist)) >> 4;
             }
         }
     }
@@ -189,7 +265,7 @@ impl Chase {
     /// `clamp(diff, ±0x600) >> 3`, position, the camera sector, and the frame the renderer uses.
     /// NOT 1:1 (R11): the speed effect (driver `+0x4D1` set: focal eases towards `150 − max(0, (0x800 − g) >> 5)`,
     /// `g` the angle between heading and travel) is not modelled; the viewer has no driving.
-    pub fn step(&mut self, rom: &[u8], player: &Racer) -> (render::Frame, render::Portal) {
+    pub fn step(&mut self, rom: &[u8], rt: &render::Runtime, player: &Racer) -> (render::Frame, render::Portal) {
         self.focal = if self.focal < FOCAL { self.focal + 4 } else { FOCAL };
         let (px, pz) = (player.pos[0] >> 8, player.pos[2] >> 8);
         let (ex, ez) = (px - (self.x >> 8), pz - (self.z >> 8));
@@ -205,8 +281,8 @@ impl Chase {
         if self.yaw < -0x4000 {
             self.yaw += 0x4000;
         }
-        self.place(rom, player);
-        self.find_sector(rom, player);
+        self.place(rom, rt, player);
+        self.find_sector(rom, rt, player);
         let height = word(rom, VIEW_HEIGHTS + 4 * CHASE);
         let mut camera = rotation(rom, -self.look & 0x3FFF);
         camera[9] = -(self.x >> 8);
@@ -239,14 +315,13 @@ impl Chase {
     /// becomes the camera sector, the previous one when that search fails.
     /// NOT 1:1: the second fallback `FUN_0814dbbc` is not decoded (the previous sector is kept); sector `+0x22`
     /// aliases (none in the Carbon city) are not applied.
-    fn find_sector(&mut self, rom: &[u8], player: &Racer) {
-        let rt = render::Runtime::default();
-        if render::camera_sector(rom, &rt, self.sector, self.x >> 8, self.z >> 8).is_none() {
+    fn find_sector(&mut self, rom: &[u8], rt: &render::Runtime, player: &Racer) {
+        if render::camera_sector(rom, rt, self.sector, self.x >> 8, self.z >> 8).is_none() {
             self.sector = player.sector;
         }
         let m = rotation(rom, self.look);
-        let (ax, az) = (72 * m[6] >> 14, 72 * m[8] >> 14);
-        if let Some(s) = render::camera_sector(rom, &rt, self.sector, (self.x >> 8) + ax, (self.z >> 8) + az) {
+        let (ax, az) = ((72 * m[6]) >> 14, (72 * m[8]) >> 14);
+        if let Some(s) = render::camera_sector(rom, rt, self.sector, (self.x >> 8) + ax, (self.z >> 8) + az) {
             self.sector = s;
         }
     }
@@ -355,6 +430,38 @@ impl Dump {
     pub fn route(&self) -> usize {
         self.word(0x0300_5720) as usize
     }
+
+    /// World struct field `+off` (`0x030000C0`).
+    fn world(&self, off: u32) -> u32 {
+        self.word(0x0300_00C0 + off) as u32
+    }
+
+    /// Vehicle matrix slot `s` (world `+0xFC`, 0x30 bytes each).
+    pub fn matrix(&self, s: u8) -> [i32; 12] {
+        let at = self.world(0xFC) + 0x30 * s as u32;
+        std::array::from_fn(|k| self.word(at + 4 * k as u32))
+    }
+
+    /// Racer `i`'s atlas as the race holds it in EWRAM (entity `+0x84`, when flag bit 3), rim and all.
+    pub fn atlas(&self, i: u32, len: usize) -> Option<Vec<u8>> {
+        let e = self.world(0x3C) + 0xA4 * i;
+        (self.half(e + 0x0A) & 8 != 0).then(|| self.at(self.word(e + 0x84) as u32)[..len].to_vec())
+    }
+
+    /// The entities as the renderer draws them (`render::Scene`): the entity array (world `+0x3C`, count
+    /// `+0xF8` + `+0xFA`), the sector list heads (`+0x0C`), the matrix slots (`+0xFC`) and EWRAM for the atlases.
+    pub fn scene(&self, sectors: usize) -> render::Scene<'_> {
+        let (entities, heads) = (self.world(0x3C), self.world(0x0C));
+        let count = (self.half(0x0300_00C0 + 0xF8) + self.half(0x0300_00C0 + 0xFA)) as u32;
+        render::Scene::new(
+            (0..count)
+                .map(|i| render::Entity::read(self.at(entities + 0xA4 * i)))
+                .collect(),
+            (0..sectors as u32).map(|s| self.half(heads + 2 * s)).collect(),
+            (0..64).map(|s| self.matrix(s)).collect(),
+            &self.wram,
+        )
+    }
 }
 
 /// Who races and how they look, and where they and the camera are.
@@ -382,6 +489,9 @@ impl RaceSetup {
                 driver_heading: d.word(d.word(e + 0x8C) as u32),
                 sector: d.half(e + 0x78),
                 slot: d.at(e + 0x88)[0],
+                flags: d.half(e + 0x0A),
+                model: d.half(e + 0x36) as i16,
+                extra: d.half(e + 0x64) as i16,
             }
         };
         let player = d.word(0x0300_0060) as u32;
@@ -408,11 +518,14 @@ impl RaceSetup {
     }
 
     /// A Quick Play race on `route`'s grid with a new profile: the player in car `car` with its default record,
-    /// three opponents dealt by `pick_opponent_cars` from rand index `rand` (no wingman). `floor_y(sector, x, z)`
-    /// gives the racer's height, 8.8.
+    /// three opponents dealt by `pick_opponent_cars` from rand index `rand` (no wingman) and dressed by `look`.
+    /// Models as `setup_race_cars` sets them: the player's far model is the car table's `+0x14` + 1 and its
+    /// spoiler `i16 0x7F0636[car·0x10 + record[0]]` (at least 0); the draw flags are the reference race's (player
+    /// 0x0D, opponents 0x22). `floor_y(sector, x, z)` gives the racer's height, 8.8.
     /// NOT 1:1 (D2): the game spawns racers at the template's height and lets the physics settle them.
     pub fn grid(
         rom: &[u8],
+        rt: &render::Runtime,
         route: &rom::Route,
         car: i8,
         rand: u32,
@@ -424,16 +537,26 @@ impl RaceSetup {
         atlas::pick_opponent_cars(rom, &mut rand, 3, 0, &mut cars, &mut paints);
         let racers: [Racer; 4] = std::array::from_fn(|i| {
             let [x, _, z] = route.positions[i];
+            let (flags, model, extra) = if i == 0 {
+                let close = half(rom, CAR_TABLE + 0x58 * car as usize + 0x14);
+                let spoiler = half(rom, SPOILERS + 2 * (0x10 * car as usize + record[0] as usize));
+                (0x0D, close + 1, spoiler.max(0))
+            } else {
+                (0x22, atlas::look(rom, cars, i, false, false).model as i16, 0)
+            };
             Racer {
                 pos: [x, floor_y(route.sectors[i], x >> 8, z >> 8), z],
                 heading: route.headings[i],
                 driver_heading: route.headings[i],
                 sector: route.sectors[i],
                 slot: i as u8,
+                flags,
+                model,
+                extra,
             }
         });
         RaceSetup {
-            chase: Chase::behind(rom, &racers[0]),
+            chase: Chase::behind(rom, rt, &racers[0]),
             racers,
             cars,
             paints,
@@ -477,21 +600,42 @@ mod tests {
             return;
         };
         let setup = RaceSetup::from_dump(&d);
+        let rt = race_runtime(&rom::city(&rom));
         let player = setup.racers[0];
-        assert_eq!((player.heading, player.driver_heading, player.sector), (0x1000, 0x1000, 760));
+        assert_eq!(
+            (player.heading, player.driver_heading, player.sector),
+            (0x1000, 0x1000, 760)
+        );
         let want = [18, 0, 16383, 0, 16384, 0, -16383, 0, 18, -118039, -30, 64321];
         let mut chase = setup.chase;
-        let (frame, root) = chase.step(&rom, &player);
+        let (frame, root) = chase.step(&rom, &rt, &player);
         assert_eq!(chase, setup.chase, "a frame later the camera is where it was");
         assert_eq!((frame.camera, root.sector), (want, 760));
         assert_eq!((frame.view.cx, frame.view.cy, frame.view.focal), (120, 79, 150));
-        let mut settled = Chase::behind(&rom, &player);
+        let mut settled = Chase::behind(&rom, &rt, &player);
         assert_eq!(settled, setup.chase);
-        assert_eq!(settled.step(&rom, &player).0.camera, want);
+        assert_eq!(settled.step(&rom, &rt, &player).0.camera, want);
 
         let routes = rom::routes(&rom);
-        let grid = RaceSetup::grid(&rom, &routes[23], 2, REFERENCE_RAND, |_, _, _| 0);
-        assert_eq!((grid.cars, grid.paints, grid.record), (setup.cars, setup.paints, setup.record));
+        let grid = RaceSetup::grid(&rom, &rt, &routes[23], 2, REFERENCE_RAND, |_, _, _| 0);
+        assert_eq!(
+            (grid.cars, grid.paints, grid.record),
+            (setup.cars, setup.paints, setup.record)
+        );
+        let draw = |r: &Racer| (r.flags, r.model, r.extra, r.heading);
+        assert_eq!(grid.racers.map(|r| draw(&r))[0], draw(&setup.racers[0]));
+        // The opponents raced off (their headings differ); their models and flags are as dealt.
+        let dressed = |r: &Racer| (r.flags, r.model, r.extra);
+        assert_eq!(
+            grid.racers[1..].iter().map(dressed).collect::<Vec<_>>(),
+            setup.racers[1..].iter().map(dressed).collect::<Vec<_>>()
+        );
+        // LOD: the player's medium model near, low model from depth 0x200, spoiler 12 on top; opponents stay near.
+        assert_eq!(
+            (setup.racers[0].models_at(343), setup.racers[0].models_at(0x200)),
+            (vec![9, 12], vec![10, 12])
+        );
+        assert_eq!(setup.racers[1].models_at(0x1800), Vec::<usize>::new()); // matrix slot 0xFF: not drawn
     }
 
     /// The projection puts view-space points where `render::View` puts them on the 240×160 screen.

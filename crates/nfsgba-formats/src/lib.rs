@@ -252,8 +252,9 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
             let named = names.iter().find(|n| n.0 == i);
             let entities = ptr(rom, r);
             let entity = |e: usize| entities + 0xA4 * e;
-            let positions: Vec<[i32; 3]> =
-                (0..4).map(|e| [0, 4, 8].map(|k| u32_at(rom, entity(e) + 0x0C + k) as i32)).collect();
+            let positions: Vec<[i32; 3]> = (0..4)
+                .map(|e| [0, 4, 8].map(|k| u32_at(rom, entity(e) + 0x0C + k) as i32))
+                .collect();
             let mut lines = sections[i].iter().map(|s| {
                 let line = ptr(rom, r + 8) + 24 * s.first as usize;
                 (0..s.count as usize)
@@ -334,6 +335,8 @@ pub struct Wall {
     pub ceiling_y: i16,
     /// Light at this corner, red/green/blue (`+0x3C..+0x3E`, BGR555 channel scale); see `light_factor`.
     pub light: [u8; 3],
+    /// `+0x2A`: the moving piece (world `+0x18` record) whose offsets and flags apply to this wall; `0xFFFF` none.
+    pub piece: u16,
 }
 
 impl Wall {
@@ -601,6 +604,7 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                         ceiling_y: i16_at(rom, w + 0x3A),
                         flags: u16_at(rom, w + 0x2E),
                         light: [rom[w + 0x3C], rom[w + 0x3D], rom[w + 0x3E]],
+                        piece: u16_at(rom, w + 0x2A),
                     }
                 })
                 .collect();
@@ -793,7 +797,10 @@ mod tests {
         let r = &routes[23];
         assert_eq!(r.grid[0], [118_400, 0, -64_320]);
         // The reference race's player spawned from this entity: heading 0x1000, start sector 760 (entity +0x78).
-        assert_eq!((r.headings[0], r.sectors[0], r.positions[0][0]), (0x1000, 760, 118_400 << 8));
+        assert_eq!(
+            (r.headings[0], r.sectors[0], r.positions[0][0]),
+            (0x1000, 760, 118_400 << 8)
+        );
         assert_eq!(r.name.as_deref(), Some("STORAGE RUN")); // Quick Play picked Storage Run, forward
         assert_eq!(r.kind, Some(RouteKind::Circuit { reverse: false }));
         assert_eq!(routes.iter().filter(|r| r.kind == Some(RouteKind::Sprint)).count(), 18);
