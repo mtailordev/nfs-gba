@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 import first_look
+import models
 import vault
 from common import ROOT, data_dir
 
@@ -128,6 +129,23 @@ class RealVaultTest(unittest.TestCase):
             self.assertTrue(vault.parse_header(rom)["header_checksum_ok"])
         canon = next(r for r in m["roms"] if r["sha1"] == m["canonical_target"])
         self.assertEqual(canon["header"]["game_code"], "BN7E")
+
+    def test_vehicle_models_fill_their_arrays_exactly(self):
+        m = json.loads((data_dir() / "vault" / "manifest.json").read_text(encoding="utf-8"))
+        canon = next(r for r in m["roms"] if r["sha1"] == m["canonical_target"])
+        rom = (data_dir() / canon["vault_file"]).read_bytes()
+        a, ms = models.bank_arrays(rom), models.parse(rom)
+        self.assertEqual(len(ms), 102)
+        for mo in ms:
+            for p in mo["polys"]:
+                self.assertIn(len(p["v"]), (3, 4))
+                self.assertTrue(all(k < len(mo["verts"]) for k in p["v"]), mo["index"])
+                if mo["flags"] & 1:
+                    self.assertTrue(all(k < len(mo["uvs"]) for k in p["uv"]), mo["index"])
+        last = ms[-1]
+        vstart, istart, uvstart, pstart, _, _ = last["first"]
+        self.assertEqual(vstart + len(last["verts"]), (a["indices"] - a["verts"]) // 6)  # vertex array ends here (2 bytes padding)
+        self.assertEqual(uvstart + len(last["uvs"]), (a["sizes"] - a["uvs"]) // 4)
 
 
 if __name__ == "__main__":

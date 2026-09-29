@@ -35,7 +35,12 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 
 Lua API: `callbacks:add("frame", fn)`, `emu:currentFrame()`, `emu:readRegister("pc")`, `emu:read32(addr)`, standard `io` for writing trace files.
 
-**Ghidra headless** (GBA loader installed):
+**Remote control for the canonical ROM:** `python tools/mgba_ctl.py start`, then batches such as `python tools/mgba_ctl.py "hold A 10" "wait 120" "shot x" "dump x" "save x"`, then `stop`. Output goes to `$NFSGBA_DATA\work\<sha1-8>\mgba\`.
+- **Menus** need presses of at least 10 frames.
+- **Route to a race from a fresh save:** A (language: English) → A → A → START → A (intro screens) → profile name (DOWN, A, START) → main menu → A (Quick Play) → A (Random) → A → A.
+- **Savestates** `mainmenu.ss` and `race.ss` are kept in the work folder.
+
+**Ghidra headless** (GBA loader installed). For the race-time IWRAM code, add `-scriptPath tools\ghidra -preScript LoadIwram.java <iwram dump> -postScript ExportDecomp.java <out.c>` (the output of the current run is `data\work\e5298b24\ghidra\carbon_decomp.c`):
 
 ```powershell
 $g = "$env:USERPROFILE\scoop\apps\ghidra\current"
