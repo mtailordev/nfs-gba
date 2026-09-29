@@ -2,16 +2,33 @@
 //! `work/e5298b24/race-init/` (`tools/race_init_capture.py`: the machine at the entry of
 //! `race_start_from_table_a`), the port must give the state the game's code gives in the function oracle
 //! (`tools/race_init_oracle.py`, `NAME_oracle.*`), byte for byte in EWRAM, IWRAM, I/O, palette, VRAM and OAM.
-//! Skipped when the captures are absent.
+//! Missing captures follow `nfsgba_testkit`'s rule (`NFSGBA_REQUIRE_DATA`).
 
 use std::{fs, path::PathBuf};
 
 use nfsgba_game::{Machine, race_init};
 
 fn dir() -> Option<PathBuf> {
-    let d = nfsgba_formats::data_dir().join("work/e5298b24/race-init");
-    d.exists().then_some(d)
+    nfsgba_testkit::fixture("race-init")
 }
+
+/// Every recorded race start (each with its seed timing, `NAME_seed.txt`).
+const CAPTURES: [&str; 14] = [
+    "career",
+    "circuit",
+    "circuitb",
+    "elimination",
+    "golf",
+    "hunter",
+    "hunterb",
+    "ref",
+    "refb",
+    "rx7",
+    "sprint",
+    "sprintb",
+    "wingman",
+    "wingmanb",
+];
 
 fn diff_runs(a: &[u8], b: &[u8], base: u32) -> Vec<(u32, u32)> {
     let mut runs: Vec<(u32, u32)> = Vec::new();
@@ -49,11 +66,9 @@ fn irq_write(a: u32, engine: u32) -> bool {
 
 #[test]
 fn race_start_matches_the_game() {
-    let Some(dir) = dir() else {
-        eprintln!("race-init captures not found; skipped");
+    let (Some(dir), Some(rom)) = (dir(), nfsgba_testkit::rom()) else {
         return;
     };
-    let rom = nfsgba_formats::canonical_rom().expect("ROM vault");
     let mut names: Vec<String> = fs::read_dir(&dir)
         .unwrap()
         .filter_map(|e| {
@@ -65,7 +80,10 @@ fn race_start_matches_the_game() {
         })
         .collect();
     names.sort();
-    assert!(!names.is_empty(), "no NAME_oracle files: run tools/race_init_oracle.py");
+    assert_eq!(
+        names, CAPTURES,
+        "the recorded race starts (NAME_oracle files: tools/race_init_oracle.py)"
+    );
     let mut bad = Vec::new();
     for name in &names {
         let pre = dir.join(format!("{name}_pre"));
@@ -91,7 +109,8 @@ fn race_start_matches_the_game() {
             }
         }
         // Against the emulator: with the recorded seed timing, every byte outside the IRQs' own writes.
-        if let Ok(seed) = fs::read_to_string(dir.join(format!("{name}_seed.txt"))) {
+        let seed = fs::read_to_string(dir.join(format!("{name}_seed.txt"))).expect("seed timing");
+        {
             let mut g = Machine::load_dump(rom.clone(), &pre).unwrap();
             let mut io: race_init::Io = fs::read(dir.join(format!("{name}_pre.io.bin"))).unwrap()[..0x400]
                 .try_into()

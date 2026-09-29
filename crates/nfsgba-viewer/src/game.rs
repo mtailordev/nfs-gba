@@ -573,13 +573,7 @@ impl RaceSetup {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        rom::canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
+    use nfsgba_testkit::rom;
 
     #[test]
     fn angle_helpers() {
@@ -600,10 +594,10 @@ mod tests {
     #[test]
     fn chase_camera_reproduces_the_race() {
         let Some(rom) = rom() else { return };
-        let Ok(d) = Dump::load("mgba/race") else {
-            eprintln!("skipping: no race dump");
+        let Some(_) = nfsgba_testkit::dump("mgba/race") else {
             return;
         };
+        let d = Dump::load("mgba/race").unwrap();
         let setup = RaceSetup::from_dump(&d);
         let rt = race_runtime(&rom::city(&rom));
         let player = setup.racers[0];

@@ -661,14 +661,7 @@ pub fn models(rom: &[u8]) -> Vec<Model> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Tests against the user's ROM; skipped (with a note) when no vault exists.
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
+    use nfsgba_testkit::{read, rom};
 
     #[test]
     fn city_sectors_tile_walls_and_portals_match() {
@@ -800,10 +793,8 @@ mod tests {
     #[test]
     fn light_tint_reproduces_the_race_palette() {
         let Some(rom) = rom() else { return };
-        let dir = data_dir().join("work/e5298b24/mgba");
-        let dump = |name: &str| fs::read(dir.join(format!("race.{name}.bin")));
-        let (Ok(iwram), Ok(wram), Ok(pal)) = (dump("iwram"), dump("wram"), dump("palette")) else {
-            eprintln!("skipping: no reference race dump");
+        let dump = |name: &str| read(&format!("mgba/race.{name}.bin"));
+        let (Some(iwram), Some(wram), Some(pal)) = (dump("iwram"), dump("wram"), dump("palette")) else {
             return;
         };
         let word = |mem: &[u8], o: usize| u32::from_le_bytes(mem[o..o + 4].try_into().unwrap());

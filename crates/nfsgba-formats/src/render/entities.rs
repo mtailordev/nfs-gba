@@ -689,14 +689,7 @@ fn span(rom: &[u8], scene: &Scene, tex: &Texture, out: &mut [u8], u: i32, v: i32
 mod tests {
     use super::super::{MaterialState, Piece, View, Visibility, draw_world, visible_sectors};
     use super::*;
-    use crate::canonical_rom;
-
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
+    use nfsgba_testkit::{fixture, rom};
 
     /// A race RAM dump (`NAME.iwram.bin`, `NAME.wram.bin`, `NAME.vram.bin` from `tools/mgba_remote.lua` or
     /// `tools/mgba_frame_probe.lua`): everything the renderer reads, straight from the game's memory.
@@ -710,15 +703,12 @@ mod tests {
 
     impl Dump {
         fn load(name: &str) -> Option<Dump> {
-            let path = |ext: &str| crate::data_dir().join(format!("work/e5298b24/{name}.{ext}.bin"));
-            let read = |ext: &str| std::fs::read(path(ext)).ok();
-            match (read("iwram"), read("wram"), read("vram")) {
-                (Some(iwram), Some(wram), Some(vram)) => Some(Dump { iwram, wram, vram }),
-                _ => {
-                    eprintln!("skipping: no dump {name}");
-                    None
-                }
-            }
+            let read = |ext: &str| nfsgba_testkit::read(&format!("{name}.{ext}.bin"));
+            Some(Dump {
+                iwram: read("iwram")?,
+                wram: read("wram")?,
+                vram: read("vram")?,
+            })
         }
 
         fn mem(&self, at: u32) -> &[u8] {
@@ -885,11 +875,8 @@ mod tests {
     #[test]
     fn probe_frames_match() {
         let Some(rom) = rom() else { return };
-        let dir = crate::data_dir().join("work/e5298b24/entity-draw");
-        let Ok(files) = std::fs::read_dir(&dir) else {
-            eprintln!("skipping: no {}", dir.display());
-            return;
-        };
+        let Some(dir) = fixture("entity-draw") else { return };
+        let files = std::fs::read_dir(&dir).unwrap();
         let mut names: Vec<String> = files
             .filter_map(|f| {
                 f.ok()?

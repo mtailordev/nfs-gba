@@ -3691,14 +3691,11 @@ pub fn main_frame(g: &mut Gba) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_dir;
+    use nfsgba_testkit::{dump, rom};
 
     /// Oracle cases saved by `tools/ui_menu_oracle.py <name>`.
     fn cases(name: &str) -> Option<Vec<serde_json::Value>> {
-        let path = data_dir().join(format!("work/e5298b24/menus2/{name}.jsonl"));
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| eprintln!("skipping: no oracle cases {} ({e})", path.display()))
-            .ok()?;
+        let text = nfsgba_testkit::read_to_string(&format!("menus2/{name}.jsonl"))?;
         Some(text.lines().map(|l| serde_json::from_str(l).unwrap()).collect())
     }
 
@@ -3800,14 +3797,15 @@ mod tests {
     ];
 
     fn replay(name: &str) {
-        let Some(rom) = crate::paint::tests::rom() else { return };
+        let Some(rom) = rom() else { return };
         let Some(cases) = cases(name) else { return };
         let mut snaps = std::collections::HashMap::new();
         for (n, c) in cases.iter().enumerate() {
             let snap = c["snap"].as_str().unwrap();
-            let base = snaps
-                .entry(snap.to_owned())
-                .or_insert_with(|| Gba::from_dump(rom.clone(), &data_dir().join("work/e5298b24").join(snap)).unwrap());
+            let base = snaps.entry(snap.to_owned()).or_insert_with(|| {
+                let prefix = dump(snap).unwrap_or_else(|| panic!("snapshot {snap} of case set {name}"));
+                Gba::from_dump(rom.clone(), &prefix).unwrap()
+            });
             let mut g = base.clone();
             for m in c["mem"].as_array().unwrap() {
                 for (i, &b) in bytes(&m[1]).iter().enumerate() {
@@ -3903,7 +3901,7 @@ mod tests {
     /// before its first unconditional branch, or no handler.
     #[test]
     fn screen_tables_match_the_rom_jump_tables() {
-        let Some(rom) = crate::paint::tests::rom() else { return };
+        let Some(rom) = rom() else { return };
         let hw = |a: u32| u16::from_le_bytes([rom[(a & 0x1FF_FFFF) as usize], rom[(a & 0x1FF_FFFF) as usize + 1]]);
         let handler_of = |stub: u32, phase: usize| -> Option<Kind> {
             let kinds = [
@@ -3949,7 +3947,6 @@ mod tests {
 
     #[test]
     fn fades_match_the_game() {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
         let Some(cases) = cases("fades") else { return };
         for c in &cases {
             let n = |k: &str| c[k].as_u64().unwrap() as usize;

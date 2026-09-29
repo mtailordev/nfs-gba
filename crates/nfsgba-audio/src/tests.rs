@@ -4,14 +4,7 @@
 use crate::format::{self, MODULE_COUNT, MODULE_TABLE, NO_NOTE, SAMPLE_BANK, SFX_TABLE};
 use crate::ram::{self, ENGINE_SIZE};
 use crate::{Engine, Rom};
-use std::path::PathBuf;
-
-fn rom() -> Option<Vec<u8>> {
-    std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-    nfsgba_formats::canonical_rom()
-        .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-        .ok()
-}
+use nfsgba_testkit::rom;
 
 fn modules(rom: Rom) -> Vec<format::Module> {
     (0..MODULE_COUNT as u32)
@@ -101,12 +94,7 @@ enum Record {
 }
 
 fn trace(name: &str) -> Option<Vec<Record>> {
-    let path: PathBuf = nfsgba_formats::data_dir()
-        .join("work/e5298b24/audio")
-        .join(format!("{name}.trace"));
-    let data = std::fs::read(&path)
-        .map_err(|e| eprintln!("skipping: no trace {} ({e})", path.display()))
-        .ok()?;
+    let data = nfsgba_testkit::read(&format!("audio/{name}.trace"))?;
     let mut out = Vec::new();
     let mut o = 0;
     while o < data.len() {

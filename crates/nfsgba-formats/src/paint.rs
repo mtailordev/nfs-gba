@@ -107,23 +107,15 @@ pub fn remap_atlas(pixels: &mut [u8], body: u8, trim: u8) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::{canonical_rom, city, city_palette_raw, data_dir, environments, sector_light};
-    use std::fs;
-
-    pub(crate) fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
+    use crate::{city, city_palette_raw, environments, sector_light};
+    use nfsgba_testkit::rom;
 
     /// IWRAM, EWRAM and palette RAM of an mGBA dump (`<dir>/<name>.<domain>.bin`).
     pub(crate) struct Dump(Vec<u8>, Vec<u8>, pub(crate) Vec<u16>);
 
     impl Dump {
         pub(crate) fn load(dir: &str, name: &str) -> Option<Dump> {
-            let path = data_dir().join("work/e5298b24").join(dir);
-            let read = |domain: &str| fs::read(path.join(format!("{name}.{domain}.bin"))).ok();
+            let read = |domain: &str| nfsgba_testkit::read(&format!("{dir}/{name}.{domain}.bin"));
             let pal = read("palette")?
                 .chunks(2)
                 .take(256)
@@ -164,10 +156,7 @@ pub(crate) mod tests {
     #[test]
     fn car_slots_reproduce_the_race_palette() {
         let Some(rom) = rom() else { return };
-        let Some(d) = Dump::load("mgba", "race") else {
-            eprintln!("skipping: no reference race dump");
-            return;
-        };
+        let Some(d) = Dump::load("mgba", "race") else { return };
         let (cars, paints) = (d.bytes4(0x0300_611C), d.bytes4(0x0300_5FEC));
         let record = d.at(d.word(0x0300_539C) + 0x11 * cars[0] as u32)[..0x11].to_vec();
         let mut base = city_palette_raw(&rom, environments(&rom)[11].palette);
@@ -197,7 +186,6 @@ pub(crate) mod tests {
         let Some(rom) = rom() else { return };
         for (before, after) in [("d0", "d3"), ("d3", "d7"), ("d15", "d19")] {
             let (Some(a), Some(b)) = (Dump::load("car-paint", before), Dump::load("car-paint", after)) else {
-                eprintln!("skipping: no car-paint session dumps");
                 return;
             };
             let (glass, heading) = a.glass_and_heading();
