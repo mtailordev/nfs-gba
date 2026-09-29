@@ -879,4 +879,70 @@ mod tests {
         let (a, b) = (draw(&rom, &dump, 0, n).0, draw(&rom, &dump, 255, n).0);
         eprintln!("{} written pixels match", differences(&a, &b, page).0);
     }
+
+    /// Whole frames from `tools/mgba_frame_probe.lua` (inputs at the start of `draw_visible_sectors`, the page at
+    /// its end) in `work/e5298b24/entity-draw/`: every pixel the renderer writes must equal the game's.
+    #[test]
+    fn probe_frames_match() {
+        let Some(rom) = rom() else { return };
+        let dir = crate::data_dir().join("work/e5298b24/entity-draw");
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            eprintln!("skipping: no {}", dir.display());
+            return;
+        };
+        let mut names: Vec<String> = files
+            .filter_map(|f| {
+                f.ok()?
+                    .file_name()
+                    .to_str()?
+                    .strip_suffix(".iwram.bin")
+                    .map(String::from)
+            })
+            .collect();
+        names.sort();
+        for name in names {
+            let dump = Dump::load(&format!("entity-draw/{name}")).unwrap();
+            let ((a, _, spans), (b, _, _)) = (draw(&rom, &dump, 0, usize::MAX), draw(&rom, &dump, 255, usize::MAX));
+            let (written, differ) = differences(&a, &b, dump.page());
+            // Per entity that passed the screen cull: its depth and the pixels it shows (the frame without it).
+            let frame = dump.frame();
+            let mut scene = dump.scene();
+            let rt = dump.runtime(&rom);
+            let mut vis = visible_sectors(&rom, &frame, dump.root());
+            draw_world(
+                &rom,
+                &frame,
+                &rt,
+                &mut scene,
+                &mut vis,
+                &mut vec![0; SCREEN_WIDTH * 160],
+            );
+            let m = frame.camera;
+            let drawn: Vec<String> = (0..scene.entities.len())
+                .filter(|&i| scene.entities[i].flags & 4 != 0)
+                .map(|i| {
+                    let e = scene.entities[i];
+                    let (x, z) = (m[9].wrapping_add(e.pos[0] >> 8), m[11].wrapping_add(e.pos[2] >> 8));
+                    let d = m[2].wrapping_mul(x).wrapping_add(m[8].wrapping_mul(z)) >> 14;
+                    let mut without = dump.scene();
+                    without.entities[i].material = 0;
+                    let mut screen = vec![0; SCREEN_WIDTH * 160];
+                    let mut vis = visible_sectors(&rom, &frame, dump.root());
+                    draw_world(&rom, &frame, &rt, &mut without, &mut vis, &mut screen);
+                    let shown = (0..a.len()).filter(|&k| a[k] != screen[k]).count();
+                    format!("#{i} +0x36 {} slot {} depth {d:#x}: {shown} px", e.model, e.slot)
+                })
+                .collect();
+            eprintln!(
+                "{name}: {written} pixels written, {} differ; {spans} entity spans; {}",
+                differ.len(),
+                drawn.join(", ")
+            );
+            assert!(
+                differ.is_empty(),
+                "{name}: first differences at {:?}",
+                &differ[..differ.len().min(8)]
+            );
+        }
+    }
 }
