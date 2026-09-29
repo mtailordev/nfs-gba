@@ -60,6 +60,48 @@ def perturb(rng: random.Random, p: int) -> list[tuple[int, bytes]]:
     return patch
 
 
+INIT_TRACES = ["start", "hunter", "wingman", "sprint", "circuit", "shortcut"]
+
+
+def init_inputs(rng: random.Random, e: int) -> list[tuple[int, bytes]]:
+    """The race globals the car init reads: career flag (0x030000A0: 0 quick race, 1/2 career), event AI skill
+    (0x030000BC), difficulty (0x03005608), race mode (0x030056E0), route index (0x03005720) and number (0x03005388),
+    environment (0x0300006C), reverse (0x03005610), wingman (0x03006104), opponents (0x03005784); the car's state
+    is set to 0 so the handler runs the init."""
+    s32 = lambda v: struct.pack("<i", v)  # noqa: E731
+    return [(0x030000A0, s32(rng.choice([0, 1, 2]))), (0x030000BC, s32(rng.randint(0x28, 0x60))),
+            (0x03005608, s32(rng.randint(1, 3))), (0x030056E0, s32(rng.randrange(4))),
+            (0x03005720, s32(rng.choice([0x13, rng.randrange(44)]))), (0x03005388, s32(rng.randint(1, 43))),
+            (0x0300006C, s32(rng.randrange(12))), (0x03005610, s32(rng.randrange(2))),
+            (0x03006104, s32(rng.randrange(13))), (0x03005784, s32(rng.choice([3, 3, 2, 1, 0]))),
+            (e + 0x4A, struct.pack("<H", 0))]
+
+
+def init_cases(work, count: int, seen: dict) -> list[dict]:
+    """The car init (entity state 0) on the first step of the traces that start at a race-info screen, with random
+    race globals, for the player or (as the car handler) another racer slot: the career and wingman branches."""
+    out = []
+    rng = random.Random(0x0814B98C)
+    for i in range(count):
+        name = rng.choice(INIT_TRACES)
+        gba = base.Gba(f"{work.name}/{name}")
+        state = next(base.ram_states(work, name))
+        gba.poke(0x02000000, state[:0x40000].tobytes())
+        gba.poke(0x03000000, state[0x40000:].tobytes())
+        entities = struct.unpack("<I", gba.read_base(base.WORLD + 0x3C, 4))[0]
+        index = rng.choice([0, 0, rng.randrange(1, 4)])
+        e = entities + 0xA4 * index
+        patch = init_inputs(rng, e)
+        for addr, data in patch:
+            gba.poke(addr, data)
+        r, calls = base.run_step(gba, e)
+        writes = [f"{a + j:08x}={v:02x}" for a, b in r.writes if base.RAM[0] <= a < base.RAM[1] for j, v in enumerate(b)]
+        seen["init"] = seen.get("init", 0) + 1
+        out.append({"trace": name, "step": 0, "entity": index, "car": True, "patch": [(a, d.hex()) for a, d in patch],
+                    "writes": writes, "calls": calls, "paths": ["init"]})
+    return out
+
+
 def main(count: int) -> None:
     work = base.session()
     rng = random.Random(0x0814DBBC)
@@ -111,11 +153,12 @@ def main(count: int) -> None:
                 writes = [f"{a:08x}={v:02x}" for a, v in changed]
                 cases[i] = {"trace": name, "step": k, "entity": index, "patch": [(a, d.hex()) for a, d in patch],
                             "writes": writes, "calls": calls, "paths": sorted(hit)}
+    cases += init_cases(work, count // 8, seen)
     out = work / "fuzz.jsonl"
     with out.open("w", encoding="utf-8") as f:
         for c in cases:
             f.write(json.dumps(c) + "\n")
-    print(f"wrote {count} cases to {out}; paths reached {seen}")
+    print(f"wrote {len(cases)} cases to {out}; paths reached {seen}")
 
 
 if __name__ == "__main__":

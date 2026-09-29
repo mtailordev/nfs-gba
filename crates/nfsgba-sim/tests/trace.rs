@@ -338,8 +338,9 @@ fn perturbed_steps_match_the_oracle() {
         let index = c["entity"].as_u64().unwrap_or(0) as u32;
         let e = sim.mem.u32(W_ENTITIES) + 0xA4 * index;
         let before = sim.mem.clone();
-        // The player's car handler, or the opponent handler (0x29) with its 2D-effects call.
-        let result = if index == 0 {
+        // The player's car handler (also for car-init cases on other racer slots), or the opponent handler (0x29)
+        // with its 2D-effects call.
+        let result = if index == 0 || c["car"].as_bool() == Some(true) {
             car::handler(&mut sim, e).map(|()| None)
         } else {
             nfsgba_sim::ai::handler(&mut sim, e)
