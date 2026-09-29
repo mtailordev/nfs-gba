@@ -17,8 +17,12 @@
 //! under `$NFSGBA_DATA/work/e5298b24/` (e.g. `mgba/race`, the reference race); `NFSGBA_ORIGINAL=1` starts in the
 //! original-resolution frame; `NFSGBA_ENV=<n>` picks the environment; `NFSGBA_CAM=x,y,z,tx,ty,tz` sets the free
 //! camera's start eye and target (metres); `NFSGBA_SHOT=<file.png>` saves one frame and quits.
+//! `NFSGBA_PLAY=1` with `NFSGBA_DUMP` runs the game itself from that machine state (`nfsgba_game::Game`, `play.rs`):
+//! the keyboard drives the race, the HUD is the game's OAM, and O shows the GBA screen as the game composes it.
+//! The dump must be taken at `main_frame`'s entry with palette, VRAM and OAM (e.g. a `tools/game_trace.py` state).
 
 mod game;
+mod play;
 
 use std::{collections::BTreeMap, f64::consts::TAU};
 
@@ -353,7 +357,20 @@ fn main() {
     .add_systems(Startup, setup)
     .add_systems(
         Update,
-        (shot, (keys, game_camera, visibility, sky, tint).chain(), racing_line),
+        (
+            shot,
+            (
+                play::play.run_if(resource_exists::<play::Play>),
+                keys,
+                game_camera,
+                visibility,
+                sky,
+                tint,
+            )
+                .chain(),
+            racing_line,
+            play::hud_layer.run_if(resource_exists::<play::Play>),
+        ),
     );
     embedded_asset!(app, "indexed.wgsl");
     app.run();
@@ -622,6 +639,24 @@ fn setup(
             Transform::from_translation(at),
         ));
     }
+    // Play mode: the game itself runs from the dump; its HUD is a 2D layer over the window.
+    if let (Ok(_), Ok(prefix)) = (std::env::var("NFSGBA_PLAY"), std::env::var("NFSGBA_DUMP")) {
+        let hud = images.add(play::hud_image());
+        commands.spawn((
+            ImageNode::new(hud.clone()),
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+        ));
+        match play::Play::load(data.clone(), &prefix, hud) {
+            Ok(p) => commands.insert_resource(p),
+            Err(e) => panic!("NFSGBA_PLAY with NFSGBA_DUMP={prefix}: {e} (needs the dump's palette, vram and oam too)"),
+        }
+        info!("play mode: arrows, X = A, Z = B, A = L, S = R, Enter = START, Backspace = SELECT");
+    }
     let free_cam = std::env::var("NFSGBA_CAM").is_ok();
     commands.insert_resource(Race {
         routes,
@@ -819,9 +854,21 @@ fn keys(
 
 /// The game camera: one `camera_update` (chase view) per frame for the player, the viewer camera set to its eye
 /// and view direction, and the portal pass from its camera sector.
-fn game_camera(mut race: ResMut<Race>, tint: Res<Tint>, mut camera: Single<&mut Transform, With<Camera3d>>) {
+fn game_camera(
+    mut race: ResMut<Race>,
+    tint: Res<Tint>,
+    play: Option<Res<play::Play>>,
+    mut camera: Single<&mut Transform, With<Camera3d>>,
+) {
     if !race.game_camera {
         (race.frame, race.visible) = (None, None);
+        return;
+    }
+    // Play mode: the camera the game frame left in RAM.
+    if let Some(play) = play {
+        let (frame, root, visible) = play::frame(&play, &tint.rom);
+        **camera = game::frame_transform(&frame, world);
+        (race.frame, race.visible) = (Some((frame, root)), Some(visible));
         return;
     }
     let player = *race.player();
@@ -967,7 +1014,22 @@ fn tint(
     camera: Single<&Transform, With<Camera3d>>,
     cars: Query<Ref<CarPalette>>,
     mut images: ResMut<Assets<Image>>,
+    play: Option<Res<play::Play>>,
 ) {
+    // Play mode: palette RAM as the game frame left it (tint, glass shades, cars).
+    if let Some(play) = play {
+        let pal = &play.game.palette;
+        let palette: Vec<u16> = (0..256)
+            .map(|i| u16::from_le_bytes([pal[2 * i], pal[2 * i + 1]]))
+            .collect();
+        if palette != tint.written
+            && let Some(mut image) = images.get_mut(&tint.palette)
+        {
+            image.data = Some(rgba(&palette));
+            tint.written = palette;
+        }
+        return;
+    }
     let sector = if race.active {
         // The player's position in the camera's sector, as the game has it.
         Some(race.setup.chase.sector as usize)
@@ -1060,7 +1122,21 @@ fn sky(
     race: Res<Race>,
     camera: Single<&Transform, With<Camera3d>>,
     mut images: ResMut<Assets<Image>>,
+    play: Option<Res<play::Play>>,
 ) {
+    // Play mode, original frame: the page the game shows, and the backdrop lines it left.
+    if let Some(play) = play.as_ref().filter(|_| race.original) {
+        skies.screen.copy_from_slice(play.game.screen());
+        let lines: Vec<u8> = play.game.backdrop().into_iter().flat_map(rom::bgr555).collect();
+        if let Some(mut image) = images.get_mut(&skies.screen_image) {
+            image.data = Some(skies.screen.clone());
+        }
+        if let Some(mut image) = images.get_mut(&skies.backdrop) {
+            image.data = Some(lines);
+        }
+        skies.drawn = None;
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyK) {
         skies.current = (skies.current + 1) % skies.palettes.len();
         tint.raw = skies.palettes[skies.current].clone();
