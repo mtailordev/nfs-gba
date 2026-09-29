@@ -26,8 +26,9 @@ pub const HUD_MATERIALS: usize = 0x36_CF5C;
 pub const SINE: usize = 0x7C_05F0;
 /// Four font descriptors, 0x18 bytes each (`FUN_08141578` picks them for font ids 0xC..0xF).
 pub const FONTS: usize = 0x7E_E974;
-/// Menu materials holding the glyphs of fonts 0..3 (`FUN_08141578`: ids 0xC..0xE use materials 12..14,
-/// id 0xF reads material 14 through the hard-coded offset 0x1F8).
+/// Menu materials holding the glyphs of fonts 0..3. The text functions map font ids 0xC..0xE to materials
+/// 12..14; for id 0xF they use a hard-coded offset: 0x1F8 (material 14) in `FUN_08141578`, `FUN_08141840`,
+/// `FUN_081419c0`, `FUN_08141b40` and `FUN_08141c88`, but 0x1B0 (material 12) in `FUN_081416d0`.
 pub const FONT_MATERIALS: [usize; 4] = [12, 13, 14, 14];
 /// Character → glyph index, 256 bytes; `0xFF` = no glyph (`FUN_08162860`).
 pub const CHAR_MAP: usize = 0x7F_5BC8;
@@ -494,6 +495,8 @@ pub struct Font {
     /// `+0x04`, `+0x06`: glyph cell; glyph `g` is `width × height` bytes at `glyphs + g × width × height`.
     pub width: usize,
     pub height: usize,
+    /// `+0x08`: line advance of the word-wrapping renderer.
+    pub line_height: usize,
     /// ROM offset of glyph 0 (the game fills descriptor `+0x0C` with it at run time).
     pub glyphs: usize,
     /// `+0x10`: drawn width per glyph (224 bytes).
@@ -503,26 +506,28 @@ pub struct Font {
     pub raw: [u8; 0x18],
 }
 
+/// Font `id` (0..3 for the game's font ids 0xC..0xF) with the glyphs of menu material `glyph_material`.
+pub fn font(rom: &[u8], id: usize, glyph_material: usize) -> Font {
+    let d = FONTS + 0x18 * id;
+    let raw: [u8; 0x18] = rom[d..d + 0x18].try_into().unwrap();
+    let (widths, yoffs) = (ptr(rom, d + 0x10), ptr(rom, d + 0x14));
+    Font {
+        flags: raw[1],
+        key: raw[2],
+        spacing: raw[3] as i8,
+        width: u16_at(rom, d + 4) as usize,
+        height: u16_at(rom, d + 6) as usize,
+        line_height: u16_at(rom, d + 8) as usize,
+        glyphs: MENU_TEXELS + u32_at(rom, MENU_MATERIALS + 0x24 * glyph_material + 8) as usize,
+        widths: rom[widths..widths + 224].to_vec(),
+        y_offsets: rom[yoffs..yoffs + 224].iter().map(|&b| b as i8).collect(),
+        raw,
+    }
+}
+
+/// The four fonts with their usual glyph materials (`FONT_MATERIALS`).
 pub fn fonts(rom: &[u8]) -> Vec<Font> {
-    let menu = materials(rom, MENU_MATERIALS);
-    (0..4)
-        .map(|f| {
-            let d = FONTS + 0x18 * f;
-            let raw: [u8; 0x18] = rom[d..d + 0x18].try_into().unwrap();
-            let (widths, yoffs) = (ptr(rom, d + 0x10), ptr(rom, d + 0x14));
-            Font {
-                flags: raw[1],
-                key: raw[2],
-                spacing: raw[3] as i8,
-                width: u16_at(rom, d + 4) as usize,
-                height: u16_at(rom, d + 6) as usize,
-                glyphs: MENU_TEXELS + menu[FONT_MATERIALS[f]].offset,
-                widths: rom[widths..widths + 224].to_vec(),
-                y_offsets: rom[yoffs..yoffs + 224].iter().map(|&b| b as i8).collect(),
-                raw,
-            }
-        })
-        .collect()
+    (0..4).map(|f| font(rom, f, FONT_MATERIALS[f])).collect()
 }
 
 /// Horizontal alignment of `Font::draw` (`FUN_08162860` argument 7).
@@ -593,6 +598,88 @@ impl Font {
                 self.widths[g as usize] as i64
             };
             at += advance + self.spacing as i64;
+        }
+    }
+
+    /// Exact port of `FUN_08163278` + `FUN_08162a1c`: word-wrapped text from (`x`, `y`), lines
+    /// `line_height` rows apart, at most `max_width` pixels per line and `max_lines` lines. A word is measured
+    /// without its trailing space and moves to a new line when it would pass `max_width`; `\n` starts a new
+    /// line. Returns the number of line breaks taken (the game's return value).
+    #[allow(clippy::too_many_arguments)] // mirrors FUN_08163278
+    pub fn draw_wrapped(
+        &self,
+        rom: &[u8],
+        fb: &mut [u8],
+        stride: usize,
+        x: i32,
+        y: i32,
+        text: &[u8],
+        max_width: i32,
+        max_lines: i32,
+        colour: i16,
+    ) -> i32 {
+        if y < 0 || y > 0x9F - self.height as i32 || x >= stride as i32 {
+            return 0;
+        }
+        let s = stride as i64;
+        let byte = |i: usize| text.get(i).copied().unwrap_or(0);
+        let glyph = |c: u8| rom[CHAR_MAP + c as usize];
+        let width = |c: u8| match glyph(c) {
+            0xFF => 0,
+            _ if c == 0x7E => self.widths[0] as i32,
+            g => self.widths[g as usize] as i32,
+        };
+        let (mut line, mut used, mut lines, mut i) = (y as i64 * s + x as i64, 0i32, 0i32, 0usize);
+        let mut at = line;
+        loop {
+            if byte(i) == b'\n' {
+                i += 1;
+                (used, line, lines) = (0, line + self.line_height as i64 * s, lines + 1);
+                at = line;
+                if lines >= max_lines {
+                    return lines;
+                }
+            }
+            if byte(i) == 0 {
+                return lines;
+            }
+            let (mut n, mut word) = (0, 0);
+            loop {
+                match byte(i + n) {
+                    b'\n' => break,
+                    0 | b' ' => {
+                        n += 1;
+                        break;
+                    }
+                    c => word += width(c) + self.spacing as i32,
+                }
+                n += 1;
+            }
+            if max_width < used + word {
+                (used, line, lines) = (0, line + self.line_height as i64 * s, lines + 1);
+                at = line;
+                if lines >= max_lines {
+                    return lines;
+                }
+            }
+            for _ in 0..n {
+                let (c, g) = (byte(i), glyph(byte(i)));
+                if g != 0xFF && c != 0x7E && g != 0 {
+                    self.blit(
+                        rom,
+                        fb,
+                        stride,
+                        g as usize,
+                        at + self.y_offsets[g as usize] as i64 * s,
+                        colour,
+                    );
+                }
+                let advance = width(c) + self.spacing as i32;
+                (at, used, i) = (at + advance as i64, used + advance, i + 1);
+                if byte(i) == 0 {
+                    return lines;
+                }
+            }
         }
     }
 
@@ -744,6 +831,41 @@ mod tests {
         let differ = fb.iter().zip(&vram).filter(|(a, b)| a != b).count();
         assert_eq!(differ, 0, "bytes differing from the frame buffer");
         assert_eq!(u16s(&pal[..512]), palette_at(&rom, MENU_PALETTES + 4 * 0x200));
+    }
+
+    /// The displayed mode-4 page of a dump (DISPCNT bit 4) and its BG palette.
+    fn screen(name: &str) -> Option<(Vec<u8>, Vec<u16>)> {
+        let (io, vram, pal) = (dump(name, "io")?, dump(name, "vram")?, dump(name, "palette")?);
+        let page = if io[0] & 0x10 != 0 { 0xA000 } else { 0 };
+        Some((vram[page..page + 240 * 160].to_vec(), u16s(&pal[..512])))
+    }
+
+    #[test]
+    fn intro_screens_are_recomposed_exactly() {
+        let Some(rom) = rom() else { return };
+        let menu = materials(&rom, MENU_MATERIALS);
+        // Health and safety (English) and the EA logo: plain images; material 7 uses palette 1, whose colours
+        // 0..3 the health screen (FUN_081315a0, state 0x2F) replaces from 0x7E5E48; colour 4 is animated.
+        for (name, m, p, patched) in [("ui-2d/n1", 7, 1, 5), ("ui-2d/n2", 2, 2, 0)] {
+            let Some((fb, pal)) = screen(name) else { return };
+            assert!(pixels_8bpp(&rom, MENU_TEXELS, &menu[m]) == fb, "{name}");
+            let mut want = palette_at(&rom, MENU_PALETTES + 0x200 * p);
+            for (i, c) in want.iter_mut().enumerate().take(patched.min(4)) {
+                *c = u16_at(&rom, 0x7E_5E48 + 2 * i);
+            }
+            assert_eq!(pal[patched..], want[patched..], "{name}");
+            assert_eq!(pal[..patched.min(4)], want[..patched.min(4)], "{name}");
+        }
+        // Public service announcement: material 1 (palette 1), the title centred in font 0xD at x 120,
+        // rows 6 and 16, and TEXT_PUBLIC_SERVICE_TEXT_1 wrapped in font 0xE from (8, 30), colour 8.
+        let Some((want, pal)) = screen("ui-2d/n3") else { return };
+        let (f, mut fb) = (fonts(&rom), pixels_8bpp(&rom, MENU_TEXELS, &menu[1]));
+        f[1].draw(&rom, &mut fb, 240, 120, 6, &text_bytes(&rom, 410, 0), 0, Align::Centre);
+        f[1].draw(&rom, &mut fb, 240, 120, 16, &text_bytes(&rom, 411, 0), 0, Align::Centre);
+        f[2].draw_wrapped(&rom, &mut fb, 240, 8, 30, &text_bytes(&rom, 409, 0), 224, 99, 8);
+        let differ = fb.iter().zip(&want).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "bytes differing from the PSA frame buffer");
+        assert_eq!(pal, palette_at(&rom, MENU_PALETTES + 0x200));
     }
 
     #[test]
