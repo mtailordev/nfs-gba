@@ -1,10 +1,13 @@
 //! The race world renderer, reimplemented from the IWRAM code (copied from ROM `0x08165134` to `0x03000220`):
 //! portal visibility, wall and flat setup, and the software rasterisers that write the 240×160 mode-4 frame.
 //! Spec with pseudocode and addresses: `docs/engine/renderer.md`. Everything here is exact: 32-bit wrapping
-//! arithmetic, the reciprocal table read straight from the ROM, and the game's quirks. The one gap is the
-//! entity draw (cars), marked `NOT 1:1` where it would go.
+//! arithmetic, the reciprocal table read straight from the ROM, and the game's quirks. The entities (cars) are
+//! drawn by the `entities` module, in pass 1 or with their sector.
 
 use super::{LEVEL_TABLE, i16_at, ptr, u16_at, u32_at};
+
+mod entities;
+pub use entities::{Entity, Scene, draw_entities, project_model};
 
 /// Reciprocal table (ROM `0x7C45F0`, 32,767 entries): entry k = 2^24 / (k + 1).
 const RECIP: usize = 0x7C_45F0;
@@ -1005,9 +1008,17 @@ pub fn draw_sector_flats(rom: &[u8], rt: &Runtime, portal: &Portal, clipped: &[F
     }
 }
 
-/// `draw_sector` (`FUN_0300224c`), pass 0: walls, then the floor and ceiling, then the walls it deferred.
-/// NOT 1:1: the sector's entities (drawn here when `entry.flags & 0x80`, else in pass 1) are left out.
-pub fn draw_sector(rom: &[u8], frame: &Frame, rt: &Runtime, entry: &mut Portal, screen: &mut [u8]) {
+/// `draw_sector` (`FUN_0300224c`). Pass 0: walls, then the floor and ceiling, then the sector's entities when
+/// `entry.flags & 0x80`, then the walls it deferred. Pass 1 (`entities_only`): only the entities.
+pub fn draw_sector(
+    rom: &[u8],
+    frame: &Frame,
+    rt: &Runtime,
+    scene: &mut Scene,
+    entry: &mut Portal,
+    entities_only: bool,
+    screen: &mut [u8],
+) {
     let sector = sector_at(rom, entry.sector);
     let mut flags = rom[sector + 0x12] as u16;
     let offsets = u16_at(rom, sector + 0xA);
@@ -1017,13 +1028,17 @@ pub fn draw_sector(rom: &[u8], frame: &Frame, rt: &Runtime, entry: &mut Portal, 
             return;
         }
     }
+    if entities_only {
+        draw_entities(rom, frame, rt, scene, entry, screen);
+        return;
+    }
     if flags & 8 != 0 {
         // A container: draws its chain of children (`+0x24`) through the same entry.
         let own = entry.sector;
         let mut child = u16_at(rom, sector + 0x24);
         while child != 0xFFFF {
             entry.sector = child;
-            draw_sector(rom, frame, rt, entry, screen);
+            draw_sector(rom, frame, rt, scene, entry, false, screen);
             child = u16_at(rom, sector_at(rom, child) + 0x24);
         }
         entry.sector = own;
@@ -1041,17 +1056,29 @@ pub fn draw_sector(rom: &[u8], frame: &Frame, rt: &Runtime, entry: &mut Portal, 
         let clipped = clip_flat(rom, &outline, entry.left, entry.right);
         draw_sector_flats(rom, rt, entry, &clipped, screen);
     }
+    // The entity draw leaves its last clip columns in world +0xE2/+0xE4, which the deferred walls then use.
+    let mut columns = *entry;
+    if entry.flags & 0x80 != 0 {
+        (columns.left, columns.right) = draw_entities(rom, frame, rt, scene, entry, screen);
+    }
     if deferred != 0 {
-        draw_sector_walls(rom, rt, entry, &spans, Some(deferred), screen);
+        draw_sector_walls(rom, rt, &columns, &spans, Some(deferred), screen);
     }
 }
 
-/// Pass 0 of `FUN_030048c8`: every visible sector from the last list entry to the first (painter's order),
-/// skipping merged entries (flag 8). NOT 1:1: pass 1 (entities) is left out.
-pub fn draw_world(rom: &[u8], frame: &Frame, rt: &Runtime, vis: &mut Visibility, screen: &mut [u8]) {
+/// `draw_visible_sectors` (`FUN_030048c8`): pass 0 draws every visible sector from the last list entry to the
+/// first (painter's order), skipping merged entries (flag 8); pass 1 then draws, in the same order, the
+/// entities of every entry without flag `0x80` (set by pass 0 when all its corners are 0x200 or deeper) or 8.
+pub fn draw_world(rom: &[u8], frame: &Frame, rt: &Runtime, scene: &mut Scene, vis: &mut Visibility, screen: &mut [u8]) {
+    scene.begin_frame();
     for entry in vis.portals.iter_mut().rev() {
         if entry.flags & 8 == 0 {
-            draw_sector(rom, frame, rt, entry, screen);
+            draw_sector(rom, frame, rt, scene, entry, false, screen);
+        }
+    }
+    for entry in vis.portals.iter_mut().rev() {
+        if entry.flags & 0x88 == 0 {
+            draw_sector(rom, frame, rt, scene, entry, true, screen);
         }
     }
 }
@@ -1384,7 +1411,7 @@ mod tests {
         let draw = |fill: u8| {
             let mut screen = vec![fill; SCREEN_WIDTH * 160];
             let mut vis = visible_sectors(&rom, &RACE, root);
-            draw_world(&rom, &RACE, &rt, &mut vis, &mut screen);
+            draw_world(&rom, &RACE, &rt, &mut Scene::empty(), &mut vis, &mut screen);
             screen
         };
         // Draw on two backgrounds: the pixels that differ between them were not written.
