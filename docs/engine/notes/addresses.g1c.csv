@@ -1,0 +1,2 @@
+region,address,size,what,doc
+profile,0x2F4,1,"camera-reset flag: at the race end in phase 6 it is cleared and the camera setting 0x030053E4 = 1",docs/engine/game-loop.md

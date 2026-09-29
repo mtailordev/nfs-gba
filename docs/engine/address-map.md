@@ -572,6 +572,7 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x26C` | AI drive-force curve (count 0x15; x0 0; x1; pointer to +0x27C; 21 values) (0x60) |
 | `+0x2EE` | race music choice, i8 (`rand & 3` at race start; music id = choice + 1; resuming a race plays it again) |
 | `+0x2EF` | engine sound id (car table +0x48; 0x7EEA44 +8 in link play) (1) |
+| `0x2F4` | camera-reset flag: at the race end in phase 6 it is cleared and the camera setting 0x030053E4 = 1 (1) |
 | `+0x2F6` / `+0x2F8` | car select turn: speed (0x80) / target angle; cleared on every screen enter (u16 / u32) |
 | `+0x318` | sparks: the car's matrix code spawns two sparks while it is > 0 (4 per racer) |
 | `+0x338` | cleared when an upgrade page opens (4) |

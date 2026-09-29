@@ -201,9 +201,8 @@ impl Game {
         Ok(Handover::Pause)
     }
 
-    /// `race_menu_palette_setup` (`0x081372e4`, the resume from the pause menu): both pages cleared, the base
-    /// palette is the level's with the racers' car palettes, and outside the menus' preview (phase 5) the VCount
-    /// IRQ comes back on (`0x0813a4c0`: the sky gradient restarts). The fade's target keeps the level's palette.
+    /// `race_menu_palette_setup` (`0x081372e4`, the resume from the pause menu): both pages cleared, both palette buffers are the level's with the racers' car palettes, and outside the menus' preview (phase 5) the VCount
+    /// IRQ comes back on (`0x0813a4c0`: the sky gradient restarts). The fade's target gets the same palette.
     pub fn race_menu_palette_setup(&mut self) {
         let w = &self.world;
         let bytes = (w.screen.size[0] as usize) * (w.screen.size[1] as usize);
@@ -220,6 +219,7 @@ impl Game {
         self.world.palette_base = palette;
         let mut base = self.world.palette_base.clone();
         crate::race_init::load_car_palettes(&self.rom, &mut base, &self.world);
+        self.world.palette_fade = base.clone();
         self.world.palette_base = base;
         if self.world.g.phase != 5 {
             self.vcount_irq_on();

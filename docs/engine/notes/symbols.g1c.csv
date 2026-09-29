@@ -1,0 +1,1 @@
+0x081474b8,link_race_end,function,link play only: race_frame_update calls it at the race end when race_over != 2 (unported: G1)

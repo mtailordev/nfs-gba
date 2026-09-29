@@ -44,7 +44,7 @@ PROVENANCE = {
     "vehicle-physics": ("tools/record.py car + tools/oracle/cases.py car (fuzz, calls, suspension: cases.py fuzz / calls / suspension)", "record.py car <name>; cases.py car <name>", "race.ss and the scenario states in docs/engine/physics.md"),
     "ai-traffic": ("tools/record.py ai + tools/oracle/cases.py ai", "record.py ai <name>; cases.py ai <name>", "Quick Play races (docs/engine/ai.md)"),
     "race-init": ("tools/record.py race-init (recorders/race_init.py + race_init.lua), tools/oracle/cases.py race-init", "record.py race-init <name>; cases.py race-init <name>", "menu states before each race start (docs/engine/race-init.md)"),
-    "game-loop": ("tools/record.py game (recorders/game.py + game.lua), tools/oracle/cases.py game-edges / game-countdown", "record.py game record <name>; record.py game pack <name>; cases.py game-edges; cases.py game-countdown", "race.ss (docs/engine/game-loop.md)"),
+    "game-loop": ("tools/record.py game (recorders/game.py + game.lua), tools/oracle/cases.py game-edges / game-countdown / game-end", "record.py game record <name>; record.py game pack <name>; cases.py game-edges; cases.py game-countdown; cases.py game-end", "race.ss (docs/engine/game-loop.md)"),
     "live-race": ("tools/record.py game (recorders/game.py + game.lua)", "record.py game record <name>; record.py game pack <name>", "race starts and race.ss (docs/engine/game-loop.md, live-race)"),
     "harness": ("tools/oracle/cases.py prove (function oracle)", "cases.py prove", "mgba/race dumps"),
 }

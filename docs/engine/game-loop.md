@@ -12,7 +12,7 @@ effect sprites and the spark entities all run in `Game::frame`. Five traces hold
 state (the gameplay state, the sound engine, the atlases) and in VRAM, palette and OAM, both from each traced state
 and as free runs that carry their own state. Only the frame timing (T1) and the keys come from the trace. The viewer drives it live
 (`NFSGBA_PLAY=1`) and plays its sound. The race start (state 4), the intro, the countdown and GO run in the loop (`start` trace, 89 frames; `countdown.rs`);
-the race end, pause and menus are not in it yet ([Not ported](#not-ported)).
+the race end, the state-5 exit and the pause run to their hand-over to the menus (`Flow::Handover`); the menu frames are not in it yet ([Not ported](#not-ported)).
 
 ## No frame pacing: timing is an input
 
@@ -178,7 +178,7 @@ Play stops at the first unported code path and logs it (the pause menu, the race
 (`FADE` ≠ 0: the sky gradient, BG and OBJ palette RAM by 4 per channel, the counter by 2; the light tint goes to
 the fade's target buffer meanwhile), `flip_page`, `read_keys` (link play stops), the shadow-OAM copy, the engine
 loop restart, `snd_stop_all` and `music_stop` (`Game::snd_stop_all`, `music_stop`; called by the state-5 exit and
-the pause, which are not ported). The gradient fade is tracked for its first 120 entries (the rest of the 0x200
+the pause). The gradient fade is tracked for its first 120 entries (the rest of the 0x200
 buffer is never shown).
 
 **Done around the race start (trace `start`, `tests/edges.rs` `countdown_matches_the_game`):** game state 4 after
@@ -188,40 +188,16 @@ then the frame as a race frame; the intro (phase 9); the countdown and GO (`race
 the digit tiles); the racing HUD tiles one frame later (`0x03005714 == 3`, `countdown_tiles_a..d`). The recorder marks
 the IRQ counts at `rand_seed`, the music request and `race_start_from_table_b` (`Timing::seed`, `music`, `start`).
 
-**Around the race (the race-init handover, open):**
-- the race-end countdown (phases 6–8), the race end (phase 3) and the state-5 exit of `game_state_step` (sound
-  stops, `fill_results`, `FUN_081396c4`'s frees, the screen change);
-- the pause (START) and every menu frame (game state 1).
-
-The plan for this is under [Open: the race-init handover](#open-the-race-init-handover).
-
-## Open: the race-init handover
-
-(the coordinator's added scope, not started, paused for the review). The plan, from
-the decompiled code:
-- **The pause block and the marks:** the recorder still needs marks for the pause block's entry and the store to
-  `0x03005398`. (State 4, the seed and music marks and the countdown are done, above.)
-- **Race end:**
-  - phases 6–8 count `0x030000AC` down by the frame ticks, then `0x03005780 = 1` and fade `−0x10`;
-  - phase 3 sets fade `+0x10`;
-  - once over with no fade, `race_frame_update` returns 0.
-- **The state-5 exit, in order:**
-  - `FUN_08135f38` (stop sounds 0–3 and the music, `0x0300003C = −1`);
-  - profile `+0x32C`;
-  - `fill_results` (`finish_time_estimate`, the tie-break `FUN_0812e9e8`);
-  - `FUN_081396c4` (heap frees, `oam_hide_range(0, 0x37)`, `FUN_081374b0`/`FUN_0813ffbc`);
-  - `goto_screen(0xB)` or `menu_back` (in `menu.rs`);
-  - state 1, `carbon_play_music(0)`.
-- **Pause:** the START block writes `0x03005398`, clears the gradient and both pages, turns DISPSTAT's VCount IRQ off
-  (`FUN_0813a4e0`), calls `hud_toggle(0)`, then `goto_screen(5)`.
-- **The menu boundary:** menu frames and `goto_screen(0x82)` (resume) run in `menu.rs` on its `Gba`, where
-  race-side calls (`race_menu_palette_setup`, `hud_toggle`, `restart_engine_sound`, the music, the palette copy and
-  tint) go through `Gba::unported`. The loop should run state 1 through `menu.rs` and stop with `Unported` whenever
-  it logs a call. `menu.rs` needs a hook so those race-side functions can run in place.
-- **Traces to record:**
-  - the 14 race-init starts, arming at state 4 (intro, countdown, first racing frames);
-  - a circuit finish with laps set to 1 on the info screen (a legal setting, 1..6), driven by the autopilot from
-    `tools/recorders/rules.lua`;
-  - a pause.
-
-  `Trace` then has to stream its states: it holds every state in memory, about 400 KB each.
+**Race end, exit and pause (G1c; `end.rs`; traces `over` and `pause`, `tests/replay.rs` `handovers_match_the_game`):**
+- phases 6-8 count `0x030000AC` down by the frame ticks, then `0x03005780 = 1` and fade `-0x10`; phase 3 sets fade `+0x10`;
+  once over with no fade, `race_frame_update` returns 0 and the state-5 exit runs: `snd_stop_all`, `fill_results` (phase
+  ≠ 5; `results_tiebreak` on the ranked block, `Game::ranked`), `race_cleanup` (frees dropped; shadow OAM 0..0x37 hidden).
+- The START block: `music_stop`, `snd_stop_all`, `carbon_play_music(0)`, one VBlank (`vblank_intr_wait`), VCount IRQ off
+  (`Game::vcount_irq`), the gradient and both pages cleared, state 1, `0x03005398 = 1`, `hud_toggle(0)`, `sprite_screen_update`.
+- `Game::frame` returns `Flow::Handover(Handover::Pause)` or `Handover::Results(Results { results, ranked, last_player, next })`
+  where the game calls `goto_screen(5)` / `goto_screen(0xB)` or `menu_back` (`Next`). The caller runs that screen change on its
+  menu state (it also stores `last_player` in the profile `+0x32C`, and the ranked block, and copies `0x03005940` to
+  `0x0300593c`), then `Game::finish_frame(keys, timing, &handover)` for the frame's tail (state 1, `carbon_play_music(0)`
+  after a result). The resume from the pause menu's race side is `Game::race_menu_palette_setup` (with `vcount_irq_on`).
+- Recorder marks (`game.lua`, columns 16-18): the pause block's entry, the exit's entry and the screen change, where
+  `NAME.handover.bin` also stores the machine state; a hand-over frame is compared with it.
