@@ -1,0 +1,149 @@
+"""The fixture manifest (hard rule 3: provenance): every fixture file the Rust tests read, with its SHA-1, its size,
+the tool that recorded it and where it came from. Paths are relative to $NFSGBA_DATA/work/<sha1-8 of the ROM>/.
+
+    .venv/Scripts/python.exe tools/fixtures.py build              # run the tests, write docs/engine/fixtures.csv
+    .venv/Scripts/python.exe tools/fixtures.py check [--log FILE] # every listed file present with its SHA-1; with
+                                                                  # --log (NFSGBA_FIXTURE_LOG of a test run), every
+                                                                  # fixture the tests read is listed
+
+`build` runs `cargo test --release --workspace` with NFSGBA_REQUIRE_DATA=1 and NFSGBA_FIXTURE_LOG, so the list is
+exactly what the tests resolve through `nfsgba_testkit` (a folder fixture lists every file under it).
+"""
+import argparse
+import csv
+import hashlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from common import ROOT, data_dir, write_if_changed
+
+MANIFEST = ROOT / "docs" / "engine" / "fixtures.csv"
+COLUMNS = ["path", "sha1", "size", "recorder", "command", "source", "rom_sha1"]
+
+# Top folder -> (recorder, command, source state). Recorded per session; details in the named doc.
+PROVENANCE = {
+    "mgba": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump/save", "race.ss: Quick Play route 23 (docs/TOOLS.md route)"),
+    "audio": ("tools/audio_trace.py + tools/mgba_audio_trace.lua", "audio_trace.py <name>", "race.ss, mainmenu.ss (docs/formats/audio.md)"),
+    "hud-logic": ("tools/ui_hud_trace.py + tools/ui_hud_trace.lua", "ui_hud_trace.py <name>", "Quick Play races per mode (docs/formats/ui.md, HUD logic)"),
+    "menus": ("tools/ui_menu_oracle.py (function oracle)", "ui_menu_oracle.py <set>", "menu snapshots named in each case (docs/formats/ui.md, Menus)"),
+    "menus2": ("tools/ui_menu_oracle.py (function oracle)", "ui_menu_oracle.py all", "menu snapshots named in each case (docs/formats/ui.md, Menus, continued)"),
+    "ui-2d": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump <name>", "fresh save, intro screens (docs/formats/ui.md)"),
+    "car-paint": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump <name>", "race.ss, driving left (docs/formats/car-paint.md)"),
+    "car-atlas": ("mGBA session car-atlas, trace scripts in the folder", "see docs/formats/car-paint.md (car-atlas)", "race starts from race.ss and mainmenu.ss, RAM-poked records"),
+    "sky": ("probe scripts in the folder's scripts/", "see docs/engine/sky.md, Verification", "race.ss, both camera views"),
+    "entity-draw": ("tools/mgba_frame_probe.lua", "probe <name> [ADDR=VALUE ...]", "race.ss, g0.ss (docs/engine/renderer.md, entity-draw)"),
+    "race-rules": ("tools/trace_race_rules.lua + tools/oracle_race_rules.py", "see docs/formats/career.md, Race-rule checks", "Quick Play and career races (savestates in the folder)"),
+    "vehicle-physics": ("tools/trace_race.py + tools/trace_oracle.py (fuzz, calls, suspension: trace_fuzz.py, trace_calls.py, trace_suspension.py)", "trace_race.py <name>", "race.ss and the scenario states in docs/engine/physics.md"),
+    "ai-traffic": ("tools/trace_ai_race.py + tools/trace_ai_oracle.py", "trace_ai_race.py <name>", "Quick Play races (docs/engine/ai.md)"),
+    "race-init": ("tools/race_init_capture.py + tools/race_init_capture.lua, tools/race_init_oracle.py", "race_init_capture.py <name>", "menu states before each race start (docs/engine/race-init.md)"),
+    "game-loop": ("tools/game_trace.py + tools/mgba_game_trace.lua", "game_trace.py <name>", "race.ss (docs/engine/game-loop.md)"),
+    "live-race": ("tools/game_trace.py + tools/mgba_game_trace.lua", "game_trace.py <name>", "race starts and race.ss (docs/engine/game-loop.md, live-race)"),
+    "harness": ("tools/oracle/prove.py (function oracle)", "prove.py", "mgba/race dumps"),
+}
+
+
+def work_dir():
+    manifest = json.loads((data_dir() / "vault" / "manifest.json").read_text(encoding="utf-8"))
+    sha1 = manifest["canonical_target"]
+    return data_dir() / "work" / sha1[:8], sha1
+
+
+def sha1_of(path: Path) -> str:
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def files_of(work: Path, rels) -> list[str]:
+    """Logged fixture paths, folders expanded to the files under them."""
+    out = set()
+    for rel in rels:
+        p = work / rel
+        if p.is_dir():
+            out.update(f.relative_to(work).as_posix() for f in p.rglob("*") if f.is_file())
+        elif p.is_file():
+            out.add(Path(rel).as_posix())
+    return sorted(out)
+
+
+def rows_for(work: Path, rom_sha1: str, files: list[str]) -> list[dict]:
+    rows = []
+    for rel in files:
+        top = rel.split("/")[0]
+        if top not in PROVENANCE:
+            sys.exit(f"no provenance for fixture folder {top!r}: add it to PROVENANCE in tools/fixtures.py")
+        recorder, command, source = PROVENANCE[top]
+        p = work / rel
+        rows.append({"path": rel, "sha1": sha1_of(p), "size": p.stat().st_size, "recorder": recorder,
+                     "command": command, "source": source, "rom_sha1": rom_sha1})
+    return rows
+
+
+def render(rows: list[dict]) -> str:
+    out = io.StringIO()
+    w = csv.DictWriter(out, COLUMNS, lineterminator="\n")
+    w.writeheader()
+    w.writerows(rows)
+    return out.getvalue()
+
+
+def cargo() -> str:
+    return shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
+
+
+def build() -> int:
+    work, rom_sha1 = work_dir()
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp) / "fixtures.log"
+        env = dict(os.environ, NFSGBA_REQUIRE_DATA="1", NFSGBA_FIXTURE_LOG=str(log))
+        subprocess.run([cargo(), "test", "--release", "--workspace", "-q"], cwd=ROOT, env=env, check=True)
+        rels = set(log.read_text(encoding="utf-8").split())
+    rows = rows_for(work, rom_sha1, files_of(work, rels))
+    changed = write_if_changed(MANIFEST, render(rows))
+    print(f"{len(rows)} fixtures, {sum(r['size'] for r in rows) / 1e6:.0f} MB; "
+          f"{'wrote' if changed else 'unchanged'} {MANIFEST.relative_to(ROOT)}")
+    return 0
+
+
+def check(log: Path | None) -> int:
+    work, rom_sha1 = work_dir()
+    rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
+    bad = []
+    for r in rows:
+        p = work / r["path"]
+        if r["rom_sha1"] != rom_sha1:
+            bad.append(f"{r['path']}: recorded from ROM {r['rom_sha1'][:8]}, the vault's is {rom_sha1[:8]}")
+        elif not p.is_file():
+            bad.append(f"{r['path']}: missing")
+        elif sha1_of(p) != r["sha1"]:
+            bad.append(f"{r['path']}: changed (SHA-1 differs)")
+    if log:
+        listed = {r["path"] for r in rows}
+        extra = [f for f in files_of(work, set(log.read_text(encoding="utf-8").split())) if f not in listed]
+        bad += [f"{f}: read by the tests but not in the manifest (run tools/fixtures.py build)" for f in extra]
+    for b in bad:
+        print(f"FIXTURE  {b}")
+    print(f"fixtures: {len(rows)} listed, {len(bad)} problems")
+    return 1 if bad else 0
+
+
+def main(argv) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("build")
+    c = sub.add_parser("check")
+    c.add_argument("--log", type=Path)
+    args = ap.parse_args(argv)
+    return build() if args.cmd == "build" else check(args.log)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
