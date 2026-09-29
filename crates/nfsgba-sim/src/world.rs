@@ -34,18 +34,9 @@ pub const DT: u32 = 0x0300_5640;
 pub const RACE_PHASE: u32 = 0x0300_0048;
 /// Entity index of the local player (sound, HUD and camera side effects happen only for it).
 pub const PLAYER: u32 = 0x0300_0060;
-/// Per-entity control word (u16): `~KEYINPUT` bits for the player, AI output for the others.
-pub const INPUT: u32 = 0x0300_57D8;
-/// Control binding set (byte): 0 when 0x03005798 is set, else 1 (`FUN_08144f1c`).
-pub const BINDING_SET: u32 = 0x0300_629C;
-/// Automatic gearbox when non-zero (read by the dynamics).
-pub const AUTOMATIC: u32 = 0x0300_5798;
 /// The profile pointer (EWRAM, saved to EEPROM). The car step updates `+0x2D0` distance, `+0x2D8` skid count,
 /// `+0x2DC` top speed and the HUD flags `+0x2E0/+0x2E8/+0x2EC`, `+0x318` skid sounds.
 pub const PROFILE: u32 = 0x0300_56EC;
-
-/// The control binding table: per binding set 9 actions of (held mask, held value, pressed mask, pressed value).
-const BINDINGS: u32 = 0x087F_5494;
 
 pub fn entity(mem: &Mem, index: u32) -> u32 {
     mem.u32(W_ENTITIES) + index * 0xA4
@@ -57,26 +48,6 @@ pub fn sector_addr(mem: &Mem, sector: u32) -> u32 {
 
 pub fn wall_addr(mem: &Mem, wall: u32) -> u32 {
     mem.u32(W_WALLS) + wall * 0x44
-}
-
-/// Flags of a wall (`+0x2E`), or of its dynamic state when it has one (`+0x2A`); bit 0x1000 = solid.
-/// The RAM-image twin of [`Geometry::wall_flags`] for `walls.rs`; it goes when the car step is typed.
-pub fn wall_flags(mem: &Mem, wall: u32) -> u16 {
-    match mem.u16(wall + 0x2A) as u32 {
-        NONE => mem.u16(wall + 0x2E),
-        state => mem.u16(mem.u32(W_WALL_STATES) + state * 0x20 + 0xE),
-    }
-}
-
-/// `FUN_08144f38`: whether control action `action` is active for the held and newly pressed keys.
-pub fn control(mem: &Mem, held: u32, pressed: u32, action: u32) -> bool {
-    let b = BINDINGS + (action & 0xFFFF) * 8 + mem.u8(BINDING_SET) as u32 * 0x48;
-    (mem.u16(b) as u32 & held) == mem.u16(b + 2) as u32 && (mem.u16(b + 4) as u32 & pressed) == mem.u16(b + 6) as u32
-}
-
-/// `FUN_08144f1c`: selects the binding set.
-pub fn select_bindings(mem: &mut Mem, automatic: i32) {
-    mem.set_u8(BINDING_SET, (automatic == 0) as u8);
 }
 
 /// The city geometry the sector searches and the floor lookup read: the ROM's sectors and walls

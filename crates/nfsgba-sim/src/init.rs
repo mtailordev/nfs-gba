@@ -1,306 +1,275 @@
-//! Car setup: the car handler's first step (`FUN_0814b98c`, entity state 0). Allocates the physics struct,
-//! copies the handling record and upgrades into it, places the rigid body, lets the car settle on the ground
-//! (20 steps) and builds the race's route distance tables.
+//! Car setup on typed state: the car handler's first step (`FUN_0814b98c`, entity state 0). The physics struct is
+//! allocated by the adapter (`ram.rs`: the game's heap is a RAM structure) and so is the player's decal
+//! (`decal.rs`: the pixels go onto the heap for the renderer). Here: the handling record and upgrades go into the
+//! car, the rigid body is placed, the car settles on the ground (20 steps) and the race's route distances are
+//! built.
 
 use crate::body;
+use crate::carworld::{CarWorld, NONE};
 use crate::contact;
-use crate::heap;
+use crate::data::HANDLING_WORDS;
 use crate::math::{atan2, cos, div, isqrt, mat_mul, mul12, quat_matrix, recip, recip_entry, sin, sub};
-use crate::mem::Mem;
-use crate::route::{self, CIRCUIT, OPPONENTS};
-use crate::world::{self, NONE, PLAYER, PROFILE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
-use crate::{Result, Sim};
+use crate::route::{lateral, nearest_lane};
+use crate::state::RigidBody;
 
-/// Career flag (0 quick race; 1 and 2 career variants).
-const CAREER: u32 = 0x0300_00A0;
-/// Upgrade weights: 10 categories × 5 attributes (acceleration?, torque, final drive, grip, brakes).
-const UPGRADE_WEIGHTS: u32 = 0x087F_5988;
-/// Per car in the save data (`*0x0300539C`, 0x11 bytes): +2 decal, +7 10 upgrade bytes (4 × 2 bits).
-const CAR_SAVE: u32 = 0x0300_539C;
-/// Upgrade totals of the player's car (5 words), for the HUD.
-const PLAYER_UPGRADES: u32 = 0x0300_6000;
-/// Decal records (0x10 bytes per car × 15 decals): +4 vehicle material.
-const DECALS: u32 = 0x087E_F816;
-/// Per entity: the decal pixels on the heap.
-const DECAL_BUFFERS: u32 = 0x0300_6094;
-
-/// `FUN_0814b98c`.
-pub fn car_init(sim: &mut Sim, e: u32) -> Result<()> {
-    let m = &mut sim.mem;
-    let handling = crate::car::HANDLING + m.u8(e + 0x89) as u32 * 0x158;
-    let p = heap::alloc_zeroed(m, 0x4FC);
-    m.set_u32(e + 0x8C, p);
-    m.set_u16(e + 0x4A, 0x100);
-    for off in [0x4C, 0x90, 0x9E, 0x72] {
-        m.set_u16(e + off, 0);
+/// `FUN_0814b98c` (without the physics struct's allocation and the decal).
+pub fn car_init(w: &mut CarWorld, i: usize) {
+    let data = w.data;
+    let e = &mut w.slots[i].e;
+    let h = &data.car.handling[e.car as usize];
+    e.race_state = 0x100;
+    (e.u_4c, e.waypoint, e.traffic_mode, e.segment) = (0, 0, 0, 0);
+    (e.dir_x, e.u_1c, e.dir_z) = (0, 0, 0);
+    let heading = div((e.heading >> 8) << 15, 0xA30);
+    let c = &mut w.slots[i].c;
+    c.heading = heading;
+    c.heading_sign = heading >> 31;
+    c.gear = 1;
+    let mass = h[0];
+    let (i0, i1, i2) = (h[2], h[3], h[4]);
+    c.inertia = [
+        div((i1 * 10).wrapping_mul(mass), i2),
+        div((i0 * 10).wrapping_mul(mass), i2),
+    ];
+    c.points_on_floor = 4;
+    let laps = w.g.laps as u8;
+    c.laps_left = laps as i8;
+    c.laps = laps;
+    c.progress = 0;
+    c.u_0b0 = 0x7FFF_FFFF;
+    c.u_0c2 = 0;
+    c.u_434 = 0xFFFF;
+    c.u_436 = 0xFFFF;
+    c.route_flags = 1;
+    c.u_4b8 = 0x100;
+    c.tipped = 0;
+    c.airborne = 0;
+    c.hunter_life = 0;
+    c.wrong_way = 0;
+    c.stationary = 0;
+    c.u_4f0 = 0;
+    c.hard_hit = 0;
+    let lane = nearest_lane(w, lateral(w, i), -1);
+    let c = &mut w.slots[i].c;
+    c.lane = lane as u16;
+    c.lane_bit = 1u32.checked_shl(c.lane as i16 as u8 as u32).unwrap_or(0);
+    upgrades(w, i);
+    nitro_setup(w, i);
+    for s in &mut w.profile.skid_sound[..4] {
+        *s = 0;
     }
-    for off in [0x18, 0x1C, 0x20] {
-        m.set_u32(e + off, 0);
+    let e = &w.slots[i].e;
+    let floor = w.floor_height(e.sector as u32, e.pos[0] >> 8, e.pos[2] >> 8);
+    w.slots[i].e.pos[1] = floor;
+    w.g.gravity = 0x4F0;
+    setup_handling(w, i, h);
+    let c = &mut w.slots[i].c;
+    let heading = atan2(c.body.rot[6] >> 4, c.body.rot[8] >> 4);
+    c.heading = heading;
+    c.heading_sign = heading >> 31;
+    for wheel in &mut c.wheels {
+        wheel.base_grip = (wheel.base_grip * 3) << 10 >> 12;
     }
-    let heading = div((m.i32(e + 0x2C) >> 8) << 15, 0xA30);
-    m.set_i32(p, heading);
-    m.set_i32(p + 4, heading >> 31);
-    m.set_i32(p + 0x40, 1);
-    let mass = m.i32(handling);
-    let (i0, i1, i2) = (m.i32(handling + 8), m.i32(handling + 0xC), m.i32(handling + 0x10));
-    m.set_i32(p + 0x34, div((i1 * 10).wrapping_mul(mass), i2));
-    m.set_i32(p + 0x38, div((i0 * 10).wrapping_mul(mass), i2));
-    m.set_i32(p + 0x48, 4);
-    let laps = m.u32(0x0300_56E4) as u8;
-    m.set_u8(p + 0xC5, laps);
-    m.set_u8(p + 0xC6, laps);
-    m.set_i32(p + 0xAC, 0);
-    m.set_i32(p + 0xB0, 0x7FFF_FFFF);
-    m.set_u16(p + 0xC2, 0);
-    m.set_u16(p + 0x434, 0xFFFF);
-    m.set_u16(p + 0x436, 0xFFFF);
-    m.set_u16(p + 0x4D8, 1);
-    m.set_u32(p + 0x4B8, 0x100);
-    m.set_u16(p + 0x4E4, 0);
-    m.set_u16(p + 0x4E6, 0);
-    m.set_u32(p + 0x4E8, 0);
-    m.set_u16(p + 0x4EC, 0);
-    m.set_u16(p + 0x4EE, 0);
-    m.set_u16(p + 0x4F0, 0);
-    m.set_u32(p + 0x4B4, 0);
-    let lane = route::nearest_lane(m, route::lateral(m, e), -1);
-    m.set_u16(p + 0xC0, lane as u16);
-    m.set_u32(p + 0x430, 1u32.checked_shl(m.i16(p + 0xC0) as u8 as u32).unwrap_or(0));
-    upgrades(m, e);
-    nitro_setup(m, e, p);
-    let stats = m.u32(PROFILE);
-    for k in 0..4 {
-        m.set_u32(stats + 0x318 + 4 * k, 0);
-    }
-    if m.u16(e) as u32 == m.u32(PLAYER) {
-        unpack_decal(m, e);
-    }
-    let floor = world::floor_height(m, m.u16(e + 0x78) as u32, m.i32(e + 0xC) >> 8, m.i32(e + 0x14) >> 8);
-    m.set_i32(e + 0x10, floor);
-    m.set_u32(0x0300_6030, 0x4F0);
-    setup_handling(m, e, handling);
-    let heading = atan2(m.i32(p + 0x140) >> 4, m.i32(p + 0x148) >> 4);
-    m.set_i32(p, heading);
-    m.set_i32(p + 4, heading >> 31);
-    for k in 0..4 {
-        let grip = p + 0x210 + 0x94 * k;
-        m.set_i32(grip, (m.i32(grip) * 3) << 10 >> 12);
-    }
-    race_start_setup(sim, e)?;
-    route_distances(&mut sim.mem);
-    Ok(())
+    race_start_setup(w, i);
+    route_distances(w);
 }
 
-/// `FUN_08140148`: upgrade levels (`+0x3E0`, 10 categories) from the car's save bytes.
-fn upgrades(m: &mut Mem, e: u32) {
-    let p = m.u32(e + 0x8C);
-    let save = m.u32(CAR_SAVE) + m.u8(e + 0x89) as u32 * 0x11 + 7;
-    for i in 0..10 {
-        let mut v = m.u8(save + i) as u32;
+/// `FUN_08140148`: upgrade levels (10 categories) from the car's save bytes (4 × 2 bits each).
+fn upgrades(w: &mut CarWorld, i: usize) {
+    let career = w.g.career;
+    let c = &mut w.slots[i].c;
+    for (k, &byte) in w.save.iter().enumerate() {
+        let mut v = byte as u32;
         let mut level = 0;
         for _ in 0..4 {
             level += v & 3;
             v >>= 2;
         }
-        m.set_u32(p + 0x3E0 + 4 * i, level);
+        c.upgrades[k] = level as i32;
     }
-    if m.i32(CAREER) == 2 {
-        m.set_u32(p + 0x404, 1);
+    if career == 2 {
+        c.upgrades[9] = 1;
     }
 }
 
 /// `FUN_0814f198`: the nitro tank and factors.
-pub(crate) fn nitro_setup(m: &mut Mem, e: u32, p: u32) {
-    let mut v = m.i32(p + 0x404).wrapping_mul(10);
-    if e == m.u32(W_ENTITIES) {
-        m.set_i32(PLAYER_UPGRADES + 0x10, v);
+pub(crate) fn nitro_setup(w: &mut CarWorld, i: usize) {
+    let c = &mut w.slots[i].c;
+    let mut v = c.upgrades[9].wrapping_mul(10);
+    if i == 0 {
+        w.g.upgrade_totals[4] = v;
     }
-    if m.i32(0x0300_6150) != 0 {
+    if w.g.nitro_free != 0 {
         v = 100;
     }
-    m.set_u32(p + 0x4C4, 0);
-    m.set_u16(p + 0x4D2, 0x200);
-    m.set_u8(p + 0x4D0, 6);
+    c.u_4c4 = 0;
+    c.u_4d2 = 0x200;
+    c.u_4d0 = 6;
     if v == 0 {
-        m.set_u32(p + 0x4C8, 0);
-        m.set_u16(p + 0x4CC, 0x915);
-        m.set_u16(p + 0x4CE, 0x15CC);
+        c.nitro_tank = 0;
+        c.nitro_drain = 0x915;
+        c.nitro_torque = 0x15CC;
     } else {
-        m.set_u32(p + 0x4C8, 0x5_0000);
-        m.set_u16(p + 0x4CC, (0x9C0 - div(v * 0x6B0, 100)) as u16);
-        m.set_u16(p + 0x4CE, (div(v << 11, 100) + 0x1500) as u16);
+        c.nitro_tank = 0x5_0000;
+        c.nitro_drain = (0x9C0 - div(v * 0x6B0, 100)) as u16;
+        c.nitro_torque = (div(v << 11, 100) + 0x1500) as u16;
     }
-    m.set_u8(p + 0x4D1, 0);
+    c.nitro_on = 0;
 }
 
 /// `FUN_0814b2a8`: engine, gearbox, rigid body and wheels from the handling record `h`, with the upgrades.
-pub(crate) fn setup_handling(m: &mut Mem, e: u32, h: u32) {
-    let p = m.u32(e + 0x8C);
-    let hw = |m: &Mem, k: u32| m.i32(h + 4 * k);
+pub(crate) fn setup_handling(w: &mut CarWorld, i: usize, h: &[i32; HANDLING_WORDS]) {
+    let (data, rom) = (w.data, w.rom);
     let (mut up, mut max) = ([0i32; 5], [0i32; 5]);
-    for i in 0..10 {
-        let row = UPGRADE_WEIGHTS + i * 0x14;
-        let level = m.i32(p + 0x3E0 + 4 * i);
+    for (row, &level) in data.car.upgrade_weights.iter().zip(&w.slots[i].c.upgrades) {
         for k in 0..5 {
-            up[k as usize] += div(m.i32(row + 4 * k).wrapping_mul(level), 10);
-            max[k as usize] += m.i32(row + 4 * k);
+            up[k] += div(row[k].wrapping_mul(level), 10);
+            max[k] += row[k];
         }
     }
-    let top = hw(m, 0x19);
-    m.set_i32(p + 0x454, top);
-    m.set_i32(p + 0x44C, top - (top * 500 >> 13));
-    m.set_i32(p + 0x450, m.i32(p + 0x454) - (m.i32(p + 0x454) * 0xAF0 >> 13));
-    m.set_i32(p + 0x458, hw(m, 0x19).wrapping_mul(recip(m, m.i32(p + 0x454))) >> 12);
-    m.set_i32(p + 0x9C, 0);
-    let final_drive = hw(m, 0x53) + div(up[2].wrapping_mul(hw(m, 0x55) - hw(m, 0x53)), max[2]);
+    let g = &mut w.g;
+    let s = &mut w.slots[i];
+    let (e, c) = (&mut s.e, &mut s.c);
+    let top = h[0x19];
+    c.max_rpm = top;
+    c.upshift_rpm = top - (top * 500 >> 13);
+    c.lower_rpm = c.max_rpm - (c.max_rpm * 0xAF0 >> 13);
+    c.engine_braking = h[0x19].wrapping_mul(recip(rom, c.max_rpm)) >> 12;
+    c.gearbox_pause = 0;
+    let final_drive = h[0x53] + div(up[2].wrapping_mul(h[0x55] - h[0x53]), max[2]);
     for k in 0..8 {
-        let v = final_drive.wrapping_mul(hw(m, 0xD + k));
-        m.set_i32(p + 0x408 + 4 * k, (if v < 0 { v + 0xFF } else { v }) >> 8);
+        let v = final_drive.wrapping_mul(h[0xD + k]);
+        c.gear_ratios[k] = (if v < 0 { v + 0xFF } else { v }) >> 8;
     }
-    if e == world::entity(m, m.u32(PLAYER)) {
-        m.set_i32(0x0300_60A4, final_drive);
+    if e.index as u32 == g.player {
+        g.final_drive = final_drive;
     }
-    m.set_i32(
-        p + 0x4BC,
-        hw(m, 0x16) + div(up[1].wrapping_mul(hw(m, 0x54) - hw(m, 0x16)), max[1]),
-    );
-    let pos = [
-        m.i32(e + 0xC),
-        m.i32(e + 0x10) - hw(m, 0x3D) + hw(m, 0x3F),
-        m.i32(e + 0x14),
-    ];
-    for k in 0..18 {
-        m.set_i32(p + 0x464 + 4 * k, hw(m, 0x1B + k));
-    }
+    c.torque_scale = h[0x16] + div(up[1].wrapping_mul(h[0x54] - h[0x16]), max[1]);
+    let pos = [e.pos[0], e.pos[1] - h[0x3D] + h[0x3F], e.pos[2]];
+    c.torque_curve.copy_from_slice(&h[0x1B..0x1B + 18]);
     // The torque curve's peak: the first point after which it stops rising.
+    let tc = &c.torque_curve;
     let mut peak = 2;
-    if m.i32(p + 0x468) <= m.i32(p + 0x46C) {
-        let mut at = p + 0x46C;
-        let mut v = m.i32(at);
+    if tc[1] <= tc[2] {
+        let mut at = 2;
+        let mut v = tc[at];
         loop {
-            at += 4;
+            at += 1;
             peak += 1;
             if peak > 0x11 {
                 break;
             }
-            let rising = v <= m.i32(at);
-            v = m.i32(at);
+            let rising = v <= tc[at];
+            v = tc[at];
             if !rising {
                 break;
             }
         }
     }
-    let top = m.i32(p + 0x454);
-    let shift = (peak - 1) * (top >> 3) + hw(m, 0x1A) + (top >> 4);
-    m.set_i32(p + 0x45C, shift.min(top - 400));
-    body_init(m, p + 0xC8, pos, m.i32(e + 0x2C), h, hw(m, 0));
-    let index = m.u16(e) as i32;
-    let opponents = m.i32(OPPONENTS);
+    let top = c.max_rpm;
+    let shift = (peak - 1) * (top >> 3) + h[0x1A] + (top >> 4);
+    c.shift_rpm = shift.min(top - 400);
+    body_init(rom, &mut c.body, pos, e.heading, h, h[0], data.car.rest);
+    let index = e.index as i32;
+    let opponents = g.opponents as i32;
     let grid = if index as u32 > opponents as u32 {
-        let mut u = (m.i32(0x0300_6104) - 1) as u32;
-        if m.i32(CAREER) != 0 {
+        let mut u = (g.wingman - 1) as u32;
+        if g.career != 0 {
             u = (u & 1) + 6;
         }
-        m.i32(0x087F_42E4 + u * 4)
+        data.car.wingman_grid[u.wrapping_add(1) as usize]
     } else {
-        match m.i32(CAREER) {
-            0 => (m.i32(0x0300_5608) - 1) * 0x30 + (opponents - (index - 1)) * 10,
-            1 => (m.i32(0x0300_00BC) - 0x28) * 3 + (opponents - (index - 1)) * 10,
+        match g.career {
+            0 => (g.difficulty as i32 - 1) * 0x30 + (opponents - (index - 1)) * 10,
+            1 => (g.career_level - 0x28) * 3 + (opponents - (index - 1)) * 10,
             _ => (opponents - (index - 1)) * 10 - 0x30,
         }
     };
-    m.set_i32(p + 0x188, grid);
-    m.set_i32(p + 0x438, hw(m, 0x44));
-    m.set_i32(p + 0x43C, hw(m, 0x45));
-    m.set_i32(p + 0x440, hw(m, 0x46));
-    m.set_i32(p + 0x43C, -0x1800);
-    let wheel = |k: u32| p + contact::WHEELS + contact::WHEEL_SIZE * k;
+    c.grid = grid;
+    c.centre_of_mass = [h[0x44], h[0x45], h[0x46]];
+    c.centre_of_mass[1] = -0x1800;
     let (brakes, grip) = (up[4], up[3]);
     for (k, front) in [(0, true), (1, true), (2, false), (3, false)] {
-        let w = wheel(k);
-        let (drive, brake, g, spring, damping, ride, pos) = if front {
+        let (drive, brake, gr, spring, damping, ride, pos) = if front {
             (0x38, 0x39, 0x3A, 0x32, 0x33, 0x34, 0x35)
         } else {
             (0x41, 0x42, 0x43, 0x3B, 0x3C, 0x3D, 0x3E)
         };
-        m.set_i32(w + 0x70, hw(m, drive));
+        let wheel = &mut c.wheels[k];
+        wheel.drive = h[drive];
         let extra = if front { 0x5_0000 } else { 0x6_0000 };
-        m.set_i32(w + 0x74, hw(m, brake) + div(brakes.wrapping_mul(extra), max[4]));
-        let base = hw(m, g) + div(grip * 0x580, max[3]);
-        m.set_i32(w + 0x80, base);
-        m.set_i32(w + 0x84, base);
-        let x = hw(m, pos);
-        m.set_vec3(
-            w + 0x48,
-            [
-                if k % 2 == 0 { x } else { -x },
-                hw(m, pos + 1) - m.i32(p + 0x43C),
-                hw(m, pos + 2) - m.i32(p + 0x440),
-            ],
-        );
-        m.set_i32(w + 0x68, hw(m, spring));
-        m.set_i32(w + 0x78, hw(m, ride));
-        m.set_i32(w + 0x6C, hw(m, damping));
+        wheel.brake = h[brake] + div(brakes.wrapping_mul(extra), max[4]);
+        let base = h[gr] + div(grip * 0x580, max[3]);
+        wheel.grip = base;
+        wheel.base_grip = base;
+        let x = h[pos];
+        wheel.car_pos = [
+            if k % 2 == 0 { x } else { -x },
+            h[pos + 1] - c.centre_of_mass[1],
+            h[pos + 2] - c.centre_of_mass[2],
+        ];
+        wheel.spring = h[spring];
+        wheel.ride_height = h[ride];
+        wheel.damping = h[damping];
     }
-    for k in 0..4 {
-        let w = wheel(k);
-        m.set_i32(w + 0x88, 0x700);
-        m.set_i32(w + 0x8C, recip(m, 0x700));
-        if m.i32(0x0300_614C) == 0 {
-            m.set_i32(w + 0x80, m.i32(w + 0x80) << 1);
+    for wheel in &mut c.wheels {
+        wheel.u_88 = 0x700;
+        wheel.u_8c = recip(rom, 0x700);
+        if g.u_614c == 0 {
+            wheel.grip <<= 1;
         }
-        m.set_i32(w + 0x84, m.i32(w + 0x84) * 0xD0 >> 8);
+        wheel.base_grip = wheel.base_grip * 0xD0 >> 8;
     }
-    if e == m.u32(W_ENTITIES) {
+    if index == 0 {
         for (k, v) in up.into_iter().enumerate() {
-            m.set_i32(PLAYER_UPGRADES + 4 * k as u32, v);
+            g.upgrade_totals[k] = v;
         }
     }
 }
 
-/// `FUN_08147ca0`: the rigid body at `pos`, turned to `heading` (entity `+0x2C` form), at rest.
-fn body_init(m: &mut Mem, b: u32, pos: [i32; 3], heading: i32, h: u32, mass: i32) {
-    m.set_vec3(b + body::POS, pos);
-    let rest = m.vec3(0x087F_3DD0);
-    m.set_vec3(b + body::MOMENTUM, rest);
-    m.set_vec3(b + body::ANG_MOMENTUM, rest);
-    orient(m, b, heading >> 8);
+/// `FUN_08147ca0`: the rigid body at `pos`, turned to `heading` (entity `heading` form), at rest.
+fn body_init(
+    rom: &[u8],
+    b: &mut RigidBody,
+    pos: [i32; 3],
+    heading: i32,
+    h: &[i32; HANDLING_WORDS],
+    mass: i32,
+    rest: [i32; 3],
+) {
+    b.pos = pos;
+    b.momentum = rest;
+    b.ang_momentum = rest;
+    orient(rom, b, heading >> 8);
     // The game's inline reciprocal differs from `recip` for negative values; masses are positive.
-    m.set_i32(b + body::MASS, mass * 3);
-    m.set_i32(b + body::INV_MASS, recip(m, mass * 3));
-    let inertia = m.i32(h + 0xC4) * 0x120 >> 8;
-    m.set_i32(b + 0xAC, inertia);
-    m.set_i32(b + body::INV_INERTIA, recip(m, inertia));
-    let rest = m.vec3(0x087F_3DD0);
-    m.set_vec3(b + body::VEL, rest);
-    m.set_vec3(b + body::ANG_VEL, rest);
-    for off in [0xA8, 0x9C, 0xA0, 0xA4] {
-        m.set_i32(b + off, 0);
-    }
+    b.mass = mass * 3;
+    b.inv_mass = recip(rom, mass * 3);
+    let inertia = h[0x31] * 0x120 >> 8;
+    b.inertia = inertia;
+    b.inv_inertia = recip(rom, inertia);
+    b.vel = rest;
+    b.ang_vel = rest;
+    b.quat_rate = [0; 4];
 }
 
 /// `FUN_08148f24`: turn body `b` upright to `heading` (14-bit, low 2 bits dropped): quaternion (renormalised
 /// through the reciprocal table) and rotation matrix. Momenta and velocities are left alone.
-pub(crate) fn orient(m: &mut Mem, b: u32, heading: i32) {
+pub(crate) fn orient(rom: &[u8], b: &mut RigidBody, heading: i32) {
     let a = (heading >> 2) * 4;
-    let (c, s) = (cos(m, a) >> 2, sin(m, a) >> 2);
-    let q = matrix_quat(m, &[c, 0, -s, 0, 0x1000, 0, s, 0, c]);
+    let (c, s) = (cos(rom, a) >> 2, sin(rom, a) >> 2);
+    let q = matrix_quat(rom, &[c, 0, -s, 0, 0x1000, 0, s, 0, c]);
     let norm2 = q.iter().map(|&v| mul12(v, v)).fold(0i32, i32::wrapping_add);
     let len = isqrt(norm2.wrapping_mul(0x1000) as u32);
-    let inv = if len != 0 { recip_entry(m, len >> 1) >> 1 } else { 0 };
+    let inv = if len != 0 { recip_entry(rom, len >> 1) >> 1 } else { 0 };
     let q = q.map(|v| mul12(inv, v));
-    for (k, v) in q.into_iter().enumerate() {
-        m.set_i32(b + body::QUAT + 4 * k as u32, v);
-    }
-    for (k, v) in quat_matrix(q).into_iter().enumerate() {
-        m.set_i32(b + body::ROT + 4 * k as u32, v);
-    }
+    b.quat = q;
+    b.rot = quat_matrix(q);
 }
 
 /// `FUN_081477ac`: unit quaternion (x, y, z, w; 1.0 = 0x1000) of a rotation matrix (row-major, 20.12).
-fn matrix_quat(m: &Mem, r: &[i32; 9]) -> [i32; 4] {
+fn matrix_quat(rom: &[u8], r: &[i32; 9]) -> [i32; 4] {
     let trace = r[0] + r[4] + r[8] + 0x1000;
-    let half_recip = |v: i32| recip(m, v) >> 1;
+    let half_recip = |v: i32| recip(rom, v) >> 1;
     if trace >= 0x41 {
         let v = isqrt((trace * 0x40) as u32) * 8;
         let k = half_recip(v);
@@ -348,223 +317,69 @@ fn matrix_quat(m: &Mem, r: &[i32; 9]) -> [i32; 4] {
 }
 
 /// `FUN_0813e430`: race-controller globals for the start, then 20 settling steps of the car on the ground.
-pub(crate) fn race_start_setup(sim: &mut Sim, e: u32) -> Result<()> {
-    let m = &mut sim.mem;
-    let p = m.u32(e + 0x8C);
-    let b = p + 0xC8;
-    m.set_i32(0x0300_6078, -1);
-    for k in 0..16 {
-        m.set_u32(0x0300_60C0 + 4 * k, 0);
+pub(crate) fn race_start_setup(w: &mut CarWorld, i: usize) {
+    let data = w.data;
+    let g = &mut w.g;
+    g.u_6078 = -1;
+    g.visited = [0; 16];
+    if g.route_index == 0x13 {
+        g.visited[1] = 1;
     }
-    if m.i32(0x0300_5720) == 0x13 {
-        m.set_u32(0x0300_60C4, 1);
-    }
-    m.set_u32(CIRCUIT, (m.i32(0x0300_56E0) != 3) as u32);
+    g.circuit = (g.mode != 3) as u32;
     // `FUN_081400bc`: the time limit.
-    m.set_i32(0x0300_6154, if m.i32(CAREER) != 0 { 0x2328 } else { 0x4650 });
-    m.set_u32(0x0300_6088, 0);
-    let v = m.i8(0x087F_3050 + m.u32(0x0300_5388).wrapping_mul(4)) as i32;
-    m.set_i32(0x0300_6084, v);
-    for a in [0x0300_6074, 0x0300_6020, 0x0300_5FE0] {
-        m.set_u32(a, 0);
-    }
-    m.set_u32(0x0300_60A8, 0xC);
-    m.set_u32(0x0300_6080, 0);
-    m.set_u32(0x0300_5FE4, 0);
-    let k = m.i32(0x0300_006C) * 2 + m.i32(0x0300_5610);
-    m.set_i32(0x0300_6028, m.i32(0x087F_40D0u32.wrapping_add((k * 4) as u32)));
-    m.set_u32(0x0300_60AC, 0);
-    m.set_u32(0x0300_6090, m.u32(0x0300_5604));
-    if m.i32(CAREER) == 0 {
-        let v = m.i32(0x0300_5608);
-        m.set_i32(0x0300_6158, v);
-        m.set_i32(0x0300_6190, m.i32(0x0300_6170) + v * m.i32(0x0300_6194));
+    g.time_limit = if g.career != 0 { 0x2328 } else { 0x4650 };
+    g.u_6088 = 0;
+    g.u_6084 = data.car.start_bytes[g.u_5388.wrapping_mul(4) as usize] as i32;
+    (g.shift_state, g.u_6076, g.u_6020, g.u_5fe0) = (0, 0, 0, 0);
+    g.u_60a8 = 0xC;
+    g.u_6080 = 0;
+    g.u_5fe4 = 0;
+    let k = g.level * 2 + g.u_5610;
+    g.u_6028 = data.car.time_scale[k as usize];
+    g.u_60ac = 0;
+    g.u_6090 = g.u_5604;
+    if g.career == 0 {
+        let v = g.difficulty as i32;
+        g.u_6158 = v;
+        g.u_6190 = g.u_6170 + v * g.u_6194;
     } else {
-        m.set_i32(0x0300_6158, 1);
-        m.set_i32(0x0300_6190, m.i32(0x0300_6170) + m.i32(0x0300_6194));
+        g.u_6158 = 1;
+        g.u_6190 = g.u_6170 + g.u_6194;
     }
-    m.set_u32(0x0300_615C, 0);
-    m.set_u32(0x0300_61A4, 0);
-    m.set_u32(p + 0x42C, 0);
+    g.gap = 0;
+    g.finished = 0;
+    w.slots[i].c.torque_timer = 0;
     for _ in 0..20 {
-        let m = &mut sim.mem;
-        let old = m.u16(e + 0x78);
-        m.set_u16(WORLD + 0xEA, old);
-        let s = world::find_sector(m, old as u32, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
-        m.set_u16(e + 0x78, if s & 0xFFFF == NONE { old } else { s as u16 });
-        let g = m.i32(0x0300_6030).wrapping_mul(m.i32(b)) >> 12;
-        m.set_i32(p + 0xFC, m.i32(p + 0xFC) + (g * 0x800 >> 11));
-        for k in 0..4 {
-            m.set_u32(p + 0x3AC - 0x94 * k, 0);
+        let e = &w.slots[i].e;
+        let old = e.sector;
+        w.query.sector = old;
+        let s = w.find_sector(old as u32, e.pos[0], e.pos[1], e.pos[2]);
+        w.slots[i].e.sector = if s & 0xFFFF == NONE { old } else { s as u16 };
+        let gravity = w.g.gravity;
+        let c = &mut w.slots[i].c;
+        let pull = gravity.wrapping_mul(c.body.mass) >> 12;
+        c.body.momentum[1] += pull * 0x800 >> 11;
+        for wheel in &mut c.wheels {
+            wheel.spin = 0;
         }
-        m.set_u16(p + 0x4E6, 0);
-        contact::wheels(sim, e, 0x800)?;
-        let m = &mut sim.mem;
-        body::integrate(m, b, 0x800);
-        body::integrate(m, b, 0x800);
-        let offset = [0, m.i32(p + 0x43C), m.i32(p + 0x440)];
-        let rot: [i32; 9] = std::array::from_fn(|k| m.i32(p + 0x128 + 4 * k as u32));
-        m.set_vec3(e + 0xC, sub(m.vec3(p + 0xD0), mat_mul(offset, &rot)));
+        c.airborne = 0;
+        contact::wheels(w, i, 0x800);
+        let s = &mut w.slots[i];
+        let (e, c) = (&mut s.e, &mut s.c);
+        body::integrate(w.rom, &mut c.body, 0x800);
+        body::integrate(w.rom, &mut c.body, 0x800);
+        let offset = [0, c.centre_of_mass[1], c.centre_of_mass[2]];
+        e.pos = sub(c.body.pos, mat_mul(offset, &c.body.rot));
     }
-    let m = &mut sim.mem;
-    let y = (m.u32(e + 0x10) >> 8) as u16;
-    m.set_u16(e + 0x98, y);
-    m.set_u16(e + 0x9A, y);
-    Ok(())
+    let e = &mut w.slots[i].e;
+    let y = ((e.pos[1] as u32) >> 8) as u16;
+    e.u_98 = y;
+    e.direction = y as i16;
 }
 
-/// `FUN_0813f744`: cumulative distances (`+0x10`) along the main route and the side segments, scaled so each
-/// side segment spans the main-route distance between where it leaves and rejoins; segment scale factors at
-/// 0x03006120.
-fn route_distances(m: &mut Mem) {
-    let segs = m.u32(W_SEGMENTS);
-    let count = m.u16(segs) as i32;
-    m.set_u32(0x0300_6120, 0x100);
-    let wp = |m: &Mem, seg: u32, k: i32| -> u32 {
-        m.u32(W_WAYPOINTS)
-            .wrapping_add((m.i32(segs + seg * 8 + 4) + k) as u32 * 0x18)
-    };
-    let dist = |m: &Mem, a: u32, bx: i32, bz: i32| {
-        let (dx, dz) = (m.i32(a) - bx, m.i32(a + 4) - bz);
-        isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32)
-    };
-    let first = wp(m, 0, 0);
-    let (mut px, mut pz, mut sum) = (m.i32(first), m.i32(first + 4), 0);
-    for i in 0..count {
-        let w = wp(m, 0, i);
-        sum += dist(m, w, px, pz);
-        if i == 1 && m.i32(CIRCUIT) == 0 {
-            sum = 0;
-        }
-        m.set_i32(w + 0x10, sum);
-        (px, pz) = (m.i32(w), m.i32(w + 4));
-    }
-    for j in 0..count {
-        let w = wp(m, 0, j);
-        if m.i16(w + 0xE) != 0 {
-            continue;
-        }
-        let seg = m.u16(w + 0xC) as u32;
-        let n = m.u16(segs + seg * 8) as i32;
-        let last = wp(m, seg, n - 1);
-        let rejoin = wp(m, 0, m.u16(last + 0xE) as i32);
-        let span = (m.i32(rejoin + 0x10) - m.i32(w + 0x10)) >> 8;
-        let start = wp(m, seg, 0);
-        let (mut px, mut pz, mut acc) = (m.i32(start), m.i32(start + 4), 0);
-        for k in 1..n {
-            let wk = wp(m, seg, k);
-            acc += dist(m, wk, px, pz);
-            m.set_i32(wk + 0x10, acc);
-            (px, pz) = (m.i32(wk), m.i32(wk + 4));
-        }
-        let len = m.i32(last + 0x10) >> 8;
-        for k in 0..n {
-            let wk = wp(m, seg, k);
-            m.set_i32(
-                wk + 0x10,
-                div(span.wrapping_mul(m.i32(wk + 0x10)), len) + m.i32(w + 0x10),
-            );
-        }
-        m.set_i32(0x0300_6120 + seg * 4, div(span << 8, len));
-    }
-}
-
-/// `unpack_decal` (`FUN_0813bf58`) without its last call: the player's decal pixels onto the heap.
-/// Rendering, done by `nfsgba-game` (`slots.rs`), not here: the blit onto the car's texture atlas (`draw_decal_on_atlas`, `FUN_0813bd90`) belongs
-/// to the renderer.
-fn unpack_decal(m: &mut Mem, e: u32) {
-    let car = m.u8(e + 0x89) as u32;
-    let save = m.u32(CAR_SAVE) + car * 0x11;
-    let rec = DECALS + (car * 0xF + m.u8(save + 2) as u32) * 0x10;
-    let material = m.u32(WORLD + 0x24).wrapping_add((m.i16(rec + 4) as i32 * 0x24) as u32);
-    let src = m.u32(WORLD + 4) + m.u32(material + 8);
-    let size = m.u16(material + 0xE) as u32 * m.u16(material + 0xC) as u32;
-    let slot = DECAL_BUFFERS + m.u16(e) as u32 * 4;
-    if m.u32(slot) != 0 {
-        heap::free(m, m.u32(slot));
-        m.set_u32(slot, 0);
-    }
-    let buf = heap::alloc(m, size);
-    m.set_u32(slot, buf);
-    let ring = heap::alloc(m, 0x1011);
-    lz77_ring_decode(m, src, buf, ring);
-    heap::free(m, ring);
-    // `remap_decal_pixels`: index 0x10 becomes transparent, the rest move up to palette 0xB0.
-    for k in 0..size {
-        let v = m.u8(buf + k);
-        m.set_u8(buf + k, if v == 0x10 { 0 } else { v.wrapping_add(0xB0) });
-    }
-}
-
-/// `lz77_ring_decode` (IWRAM 0x030042F4, ARM): LZ77 through a 0x1000-byte ring prefilled with 0xFF up to
-/// 0xFED, writing position 0xFEE on. Reproduces the decoder's exits exactly (it may read on after the last
-/// output byte when that byte came from a back-reference).
-fn lz77_ring_decode(m: &mut Mem, mut src: u32, mut dst: u32, ring: u32) {
-    let header = u32::from_le_bytes([m.u8(src), m.u8(src + 1), m.u8(src + 2), m.u8(src + 3)]);
-    src += 4;
-    let size = header >> 8;
-    let mut left = size as i32;
-    for k in 0..=0xFED {
-        m.set_u8(ring + k, 0xFF);
-    }
-    let (mut ip, mut flags, mut count, mut produced) = (0xFEEu32, 7u32, 7, 0u32);
-    loop {
-        flags <<= 1;
-        count += 1;
-        if count == 8 {
-            count = 0;
-            flags = m.u8(src) as u32;
-            src += 1;
-        }
-        if flags & 0x80 == 0 {
-            let c = m.u8(src);
-            src += 1;
-            if produced < size {
-                left -= 1;
-                m.set_u8(dst, c);
-                dst += 1;
-                if left <= 0 {
-                    return;
-                }
-            }
-            m.set_u8(ring + ip, c);
-            produced += 1;
-            ip = (ip + 1) & 0xFFF;
-            continue;
-        }
-        let (b1, b2) = (m.u8(src) as u32, m.u8(src + 1) as u32);
-        src += 2;
-        let len = (b1 >> 4) + 2;
-        let disp = b2 | (b1 << 8) & 0xF00;
-        let at = |ip: u32| ip.wrapping_sub(disp).wrapping_sub(1) & 0xFFF;
-        let mut c = m.u8(ring + at(ip));
-        if produced < size {
-            left -= 1;
-            m.set_u8(dst, c);
-            dst += 1;
-            if left <= 0 {
-                continue;
-            }
-        }
-        let mut n = 0;
-        loop {
-            produced += 1;
-            n += 1;
-            m.set_u8(ring + ip, c);
-            ip = (ip + 1) & 0xFFF;
-            if n > len {
-                break;
-            }
-            c = m.u8(ring + at(ip));
-            if produced >= size {
-                continue;
-            }
-            left -= 1;
-            m.set_u8(dst, c);
-            dst += 1;
-            if left <= 0 {
-                break;
-            }
-        }
-    }
+/// `FUN_0813f744`: cumulative distances along the main route and the side sections, scaled so each side section
+/// spans the main-route distance between where it leaves and rejoins: `RacingLine::measure` (the scale factors
+/// go to `g.scales`).
+fn route_distances(w: &mut CarWorld) {
+    w.route.line.measure(w.g.circuit != 0);
 }

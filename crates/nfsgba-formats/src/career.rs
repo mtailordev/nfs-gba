@@ -246,12 +246,12 @@ impl RacingLine {
     /// that a lap point forks into (link index 0) is measured the same way from 0 and then scaled onto the lap
     /// between the fork and where the branch rejoins; quirk kept: its first point scales its old distance. The scale
     /// (×256) goes to `0x03006120 + 4 · section`.
-    fn measure(&mut self, lapped: bool) {
+    pub fn measure(&mut self, lapped: bool) {
         let len = |a: LinePoint, b: LinePoint| {
             let (dx, dz) = (b.x.wrapping_sub(a.x), b.z.wrapping_sub(a.z));
             isqrt(dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) as u32)
         };
-        self.scales = vec![0; self.sections.len()];
+        self.scales.resize(self.sections.len(), 0);
         self.scales[0] = 0x100;
         let count = i32::from(self.sections[0].count);
         let (mut prev, mut dist) = (self.point(0, 0), 0i32);

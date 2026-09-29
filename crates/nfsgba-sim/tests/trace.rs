@@ -7,7 +7,7 @@
 
 use nfsgba_sim::sound::Command;
 use nfsgba_sim::world::W_ENTITIES;
-use nfsgba_sim::{Mem, Sim, car};
+use nfsgba_sim::{Mem, Sim};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -215,7 +215,7 @@ fn each_step_matches_the_trace() {
             let mut sim = Sim::new(trace.state(i));
             let e = sim.mem.u32(W_ENTITIES);
             let before = sim.mem.clone();
-            if let Err(err) = car::handler(&mut sim, e) {
+            if let Err(err) = nfsgba_sim::ram::car_handler(&mut sim, e) {
                 failures.push(format!("{name} step {i}: {err}"));
                 continue;
             }
@@ -281,7 +281,7 @@ fn replay_matches_the_trace() {
                 mem.set_bytes(p + 0xA8, &race_position);
             }
             sim = Sim::new(mem);
-            car::handler(&mut sim, e).unwrap_or_else(|err| panic!("{name} step {i}: {err}"));
+            nfsgba_sim::ram::car_handler(&mut sim, e).unwrap_or_else(|err| panic!("{name} step {i}: {err}"));
             if want.external {
                 // Other code changed the car before the next step: carry on from the game's state.
                 own = Some(trace.cars[i + 1].clone());
@@ -330,7 +330,7 @@ fn perturbed_steps_match_the_oracle() {
         // The player's car handler (also for car-init cases on other racer slots), or the opponent handler (0x29)
         // with its 2D-effects call.
         let result = if index == 0 || c["car"].as_bool() == Some(true) {
-            car::handler(&mut sim, e).map(|()| None)
+            nfsgba_sim::ram::car_handler(&mut sim, e).map(|()| None)
         } else {
             nfsgba_sim::ai::handler(&mut sim, e)
                 .map(|fx| fx.map(|f| format!("effects({},{},{},{})", f.entity, f.heading, f.view, f.size)))
@@ -414,10 +414,10 @@ fn calls_match_the_oracle() {
                 let near = mem.u32(W_ENTITIES) + 0xA4 * c["near"].as_u64().unwrap() as u32;
                 nfsgba_sim::traffic::spawn(&mut mem, near, c["kind"].as_u64().unwrap() as u32).map(Some)
             }
-            "wingman" => nfsgba_sim::route::wingman_command(&mut mem).map(|()| None),
+            "wingman" => nfsgba_sim::ram::route::wingman_command(&mut mem).map(|()| None),
             "lap" => {
                 let e = mem.u32(W_ENTITIES) + 0xA4 * c["who"].as_u64().unwrap() as u32;
-                nfsgba_sim::route::lap(&mut mem, e).map(|()| None)
+                nfsgba_sim::ram::route::lap(&mut mem, e).map(|()| None)
             }
             other => panic!("unknown function {other}"),
         };

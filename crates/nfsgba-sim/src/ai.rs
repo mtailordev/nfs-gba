@@ -8,11 +8,11 @@
 //! `+0x4D4` lane-change timer, `+0x4D6` preferred lane, `+0x4DA..+0x4E2` blocked lanes (u16 × 5), `+0x4F0`
 //! follow timer and `+0x4F4` the entity followed, `+0x4F2` hunter countdown, `+0x4F8` nitro/boost timer.
 
-use crate::body;
-use crate::contact::{WHEEL_SIZE, WHEELS};
 use crate::math::{angle_diff, atan2, cos, div, dot, isqrt, mat_mul, mul64, recip, scale, sin, sub, udiv};
 use crate::mem::Mem;
-use crate::route::{self, CIRCUIT, OPPONENTS, RACE_TIME};
+use crate::ram::body;
+use crate::ram::contact::{WHEEL_SIZE, WHEELS};
+use crate::ram::route::{self, CIRCUIT, OPPONENTS, RACE_TIME};
 use crate::traffic::{atan2_fast, rand};
 use crate::world::{
     self, DT, NONE, PLAYER, PROFILE, RACE_PHASE, W_ENTITIES, W_QUERY, W_QUERY_SECTOR, W_SEGMENTS, W_WAYPOINTS, WORLD,
@@ -103,7 +103,7 @@ pub fn handler(sim: &mut Sim, e: u32) -> Result<Option<Effects>> {
 /// `FUN_0814a390`: the opponent's setup (state 0).
 fn init(sim: &mut Sim, e: u32) -> Result<()> {
     let m = &mut sim.mem;
-    let h = crate::car::HANDLING + m.u8(e + 0x89) as u32 * 0x158;
+    let h = crate::ram::car::HANDLING + m.u8(e + 0x89) as u32 * 0x158;
     let p = crate::heap::alloc_zeroed(m, 0x4FC);
     let player_p = m.u32(m.u32(W_ENTITIES) + 0x8C);
     m.set_u16(e + 0x72, 0);
@@ -217,16 +217,16 @@ fn init(sim: &mut Sim, e: u32) -> Result<()> {
     for (k, v) in upgrades.into_iter().enumerate() {
         m.set_i32(p + 0x3E0 + 4 * k as u32, v);
     }
-    crate::init::nitro_setup(m, e, p);
-    crate::init::setup_handling(m, e, h);
+    crate::ram::init::nitro_setup(m, e, p);
+    crate::ram::init::setup_handling(m, e, h);
     speed_curve(m, e);
-    crate::init::setup_handling(m, e, h);
+    crate::ram::init::setup_handling(m, e, h);
     wingman_setup(m);
     for k in 0..4 {
         let g = p + 0x210 + WHEEL_SIZE * k;
         m.set_i32(g, m.i32(g).wrapping_mul(0x1400) >> 12);
     }
-    crate::init::race_start_setup(sim, e)?;
+    crate::ram::init::race_start_setup(sim, e)?;
     let m = &mut sim.mem;
     m.set_u16(e + 0xA, m.u16(e + 0xA) | 0x20);
     if m.u16(e) as u32 == m.u32(PLAYER) {
@@ -264,7 +264,7 @@ fn wingman_setup(m: &mut Mem) {
 /// (count 0x15, x from 0 to `+0x274`, values at `+0x27C`), found by running the gearbox at each speed.
 fn speed_curve(m: &mut Mem, e: u32) {
     let p = m.u32(e + 0x8C);
-    let h = crate::car::HANDLING + m.u8(e + 0x89) as u32 * 0x158;
+    let h = crate::ram::car::HANDLING + m.u8(e + 0x89) as u32 * 0x158;
     let prof = m.u32(PROFILE);
     m.set_u32(prof + 0x270, 0);
     m.set_u32(prof + 0x26C, 0x15);
@@ -282,7 +282,7 @@ fn speed_curve(m: &mut Mem, e: u32) {
             ratio = m.i32((p + 0x408).wrapping_add(m.u32(p + 0x40).wrapping_mul(4)));
             let rpm = div((mul64(k.wrapping_mul(step), ratio) >> 30) as i32, 6);
             m.set_i32(p + 0x3C, rpm);
-            crate::car::auto_shift(m, e);
+            crate::ram::car::auto_shift(m, e);
         }
         m.set_u32(RACE_PHASE, 9);
         if m.i32(p + 0x454) < m.i32(p + 0x3C) {
@@ -292,7 +292,7 @@ fn speed_curve(m: &mut Mem, e: u32) {
             m.set_i32(p + 0x3C, m.i32(h + 0x68));
         }
         let rpm = m.i32(p + 0x3C);
-        let t = crate::car::torque(m, p, rpm);
+        let t = crate::ram::car::torque(m, p, rpm);
         let drive = mul64(t.wrapping_mul(0x9999), ratio) >> 15;
         let drive = (drive.wrapping_mul(m.i32(p + 0x4BC) as i64) >> 15) as i32;
         let prof = m.u32(PROFILE);
@@ -436,7 +436,7 @@ fn step(sim: &mut Sim, e: u32) -> Result<i32> {
     let p = m.u32(e + 0x8C);
     let target = m.u32(p + 0x4F4);
     let mut ahead = 0xC80;
-    crate::car::nitro(m, e);
+    crate::ram::car::nitro(m, e);
     let seg_rec = |m: &Mem| m.u32(W_SEGMENTS) + m.u16(e + 0x72) as u32 * 8;
     let mut wp = m.i16(e + 0x90) as i32;
     let mut a = route::waypoint_at(m, m.u16(e + 0x72) as u32, wp);
@@ -452,7 +452,7 @@ fn step(sim: &mut Sim, e: u32) -> Result<i32> {
         let player_wp = m.i16(m.u32(PLAYER_ENTITY) + 0x90) as i32;
         if stuck > 0xFA || (m.u16(e + 0xA) & 4 == 0 && player_wp != wp && player_wp != wp + 1) {
             m.set_i32(p + 0x4B0, 0);
-            crate::car::put_back_on_road(m, e, b);
+            crate::ram::car::put_back_on_road(m, e, b);
         }
     }
     if m.u16(e + 0x4A) == 2 {
@@ -602,7 +602,7 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     let dt = recip(m, frame_time << 8).min(0xC00);
     if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
         let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
-        crate::car::put_back_on_road(m, e, w);
+        crate::ram::car::put_back_on_road(m, e, w);
         m.set_i16(p + 0x4E4, 0);
     }
     for k in 0..4 {
@@ -848,7 +848,7 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
     } else {
         let prof = m.u32(PROFILE);
         let x = (m.i32(p + 0x3DC) >> 8).wrapping_mul(0x109A) >> 8;
-        throttle = throttle.wrapping_mul(crate::car::curve(m, prof + 0x26C, x) >> 15);
+        throttle = throttle.wrapping_mul(crate::ram::car::curve(m, prof + 0x26C, x) >> 15);
         m.i32(p + 0x28)
     };
     for k in 0..4 {
@@ -882,10 +882,13 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.i32(b + body::MOMENTUM + 4) + (dt * (m.i32(0x0300_6030).wrapping_mul(m.i32(b)) >> 12) >> 11),
     );
     if m.i32(p + 0x138) < 0xF21 {
-        crate::contact::tipped(sim, e, dt);
+        crate::ram::contact::tipped(sim, e, dt);
         let m = &mut sim.mem;
         for k in 0..4u32 {
-            m.set_i32(p + crate::contact::WHEELS + crate::contact::WHEEL_SIZE * k + 0x64, 0);
+            m.set_i32(
+                p + crate::ram::contact::WHEELS + crate::ram::contact::WHEEL_SIZE * k + 0x64,
+                0,
+            );
         }
         m.set_i16(p + 0x4E4, m.i16(p + 0x4E4).wrapping_add(1));
     } else {
@@ -899,7 +902,7 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.i32(e + 0x14).wrapping_add(m.i32(p + 0x148) * 3) >> 8,
     );
     let (y, sector) = (m.i32(e + 0x10) >> 8, m.u16(e + 0x78) as u32);
-    crate::walls::walls(sim, e, x, z, y, sector, false)?;
+    crate::ram::walls::walls(sim, e, x, z, y, sector, false)?;
     let m = &mut sim.mem;
     let start = m.vec3(e + 0xC);
     body::integrate(m, b, dt << 1);
@@ -938,7 +941,7 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.set_vec3(p + 0xD0, crate::math::add(m.vec3(e + 0xC), offset));
     }
     if m.u16(e + 8) & 4 != 0 {
-        crate::walls::racers(sim, e, dt)?;
+        crate::ram::walls::racers(sim, e, dt)?;
     }
     let m = &mut sim.mem;
     if m.u16(e + 0x4A) == 2 {

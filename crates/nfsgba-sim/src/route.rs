@@ -1,98 +1,42 @@
-//! Race-route tracking: which route segment (entity `+0x72`) and waypoint (entity `+0x90`) a car is at, its
-//! progress along the route, laps and the gap to the car ahead.
-//!
-//! World `+0x40` holds the route segments (8 bytes: u16 waypoint count, u32 first waypoint) and `+0x44` the
-//! waypoints (0x18 bytes: x, z, ..., u16 `+0x0C` linked segment, u16 `+0x0E` waypoint in it, `+0x10`
-//! distance). Segment 0 is the main route; the others are side branches. The per-waypoint lines at `*0x03005FB4`
-//! (0x20 bytes) and the join table at `*0x03005FB8` are built at race start.
+//! Race-route tracking on typed state: which route section (entity `segment`) and waypoint (entity `waypoint`) a
+//! car is at, its progress along the route, laps and the gap to the car ahead. The route is
+//! `nfsgba_formats::career::RacingLine` (sections, waypoints, branch scales) with its plane table and back
+//! table; section 0 is the main route, the others are side branches. This is the one racing-line model (D16):
+//! the tracker (`FUN_0813edd8`) and the lap crossing (`FUN_0813f098`) are the formats' `track_player` and
+//! `lap_crossing`.
 
-use crate::Result;
-use crate::math::{cos, div, dot, sin};
-use crate::mem::Mem;
-use crate::world::{NONE, PLAYER, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, entity};
-use nfsgba_formats::career::{RacingLine, Section};
+use crate::carworld::{CarWorld, Slot};
+use crate::layout::Ptr;
+use crate::math::{cos, div, sin};
 
-/// Non-zero for a circuit (waypoint indices wrap around segment 0).
-pub const CIRCUIT: u32 = 0x0300_608C;
-const WAYPOINT_LINES: u32 = 0x0300_5FB4;
-const SEGMENT_JOINS: u32 = 0x0300_5FB8;
-const SEGMENT_LENGTHS: u32 = 0x0300_6120;
-const SEGMENT_VISITED: u32 = 0x0300_60C0;
-const ROUTE_INDEX: u32 = 0x0300_5720;
-/// Per route: pointer to the list of side segments and the sectors that belong to them (`FUN_0813f234`).
-const SIDE_SEGMENT_SECTORS: u32 = 0x087F_37D8;
-pub const RACE_TIME: u32 = 0x0300_5800;
-pub const OPPONENTS: u32 = 0x0300_5784;
-const LAPS: u32 = 0x0300_56E4;
-
-fn segment(mem: &Mem, seg: u32) -> u32 {
-    mem.u32(W_SEGMENTS) + seg * 8
+/// `FUN_0813e860`: normalise waypoint `index` of section `seg`, following links into the next or previous section
+/// and wrapping on circuits. Returns the index and the section it lies in.
+pub fn advance(w: &CarWorld, seg: u32, index: i32) -> (i32, u32) {
+    let (s, i) = w.route.line.step(w.g.circuit != 0, &w.route.back, seg as usize, index);
+    (i, s as u32)
 }
 
-/// `FUN_0814007c`: address of waypoint `index` of segment `seg`.
-pub fn waypoint(mem: &Mem, seg: u32, index: i32) -> u32 {
-    let first = mem.i32(segment(mem, seg) + 4);
-    mem.u32(W_WAYPOINTS)
-        .wrapping_add((first.wrapping_add(index) as u32).wrapping_mul(0x18))
+/// `FUN_0814007c`: the point number of waypoint `index` of section `seg` (no range check, like the game).
+pub fn waypoint(w: &CarWorld, seg: u32, index: i32) -> usize {
+    (w.route.line.sections[seg as usize].first as i32).wrapping_add(index) as usize
 }
 
-/// `FUN_0813e860`: normalise waypoint `index` of segment `seg`, following links into the next or previous
-/// segment and wrapping on circuits. Returns the index and the segment it lies in.
-pub fn advance(mem: &Mem, seg: u32, index: i32) -> (i32, u32) {
-    let rec = segment(mem, seg);
-    let count = mem.u16(rec) as i32;
-    let last = count - 1;
-    let (next_seg, next_index) = if last < index {
-        if seg == 0 {
-            return (if mem.i32(CIRCUIT) != 0 { index + 1 - count } else { last }, seg);
-        }
-        let w = mem.u32(W_WAYPOINTS) + (mem.i32(rec + 4) + count - 1) as u32 * 0x18;
-        if mem.u16(w + 0xE) as u32 == NONE {
-            return (last, seg);
-        }
-        (mem.u16(w + 0xC) as u32, mem.u16(w + 0xE) as i32 + index - count + 1)
-    } else {
-        if index >= 0 {
-            return (index, seg);
-        }
-        if seg == 0 {
-            return (if mem.i32(CIRCUIT) == 0 { 0 } else { index - 1 + count }, seg);
-        }
-        let w = mem.u32(W_WAYPOINTS) + mem.i32(rec + 4) as u32 * 0x18;
-        let back = mem.u16(w + 0xE) as u32;
-        if back == NONE {
-            (seg, mem.i32(mem.u32(SEGMENT_JOINS) + seg * 4) + index)
-        } else {
-            (mem.u16(w + 0xC) as u32, back as i32 + index)
-        }
-    };
-    advance(mem, next_seg, next_index)
+/// `FUN_0814009c`: the normalised waypoint.
+pub fn waypoint_at(w: &CarWorld, seg: u32, index: i32) -> usize {
+    let (i, s) = advance(w, seg, index);
+    waypoint(w, s, i)
 }
 
-/// `FUN_0814009c`: address of the normalised waypoint.
-pub fn waypoint_at(mem: &Mem, seg: u32, index: i32) -> u32 {
-    let (i, s) = advance(mem, seg, index);
-    waypoint(mem, s, i)
-}
-
-/// `FUN_0813e93c`: how far the car is along its current waypoint's line (`*0x03005FB4` record: direction at
-/// `+0x00/+0x04`, widening terms `+0x08/+0x0C`, length `+0x1C`), divided by 8.
-pub fn along_line(mem: &Mem, e: u32) -> i32 {
-    let (seg, wp) = (mem.u16(e + 0x72) as u32, mem.i16(e + 0x90) as i32);
-    let (i1, s1) = advance(mem, seg, wp);
-    let line = i1 + mem.i32(segment(mem, s1) + 4);
-    let (i2, s2) = advance(mem, seg, wp);
-    let w = waypoint(mem, s2, i2);
-    let dx = (mem.i32(e + 0xC) >> 8).wrapping_sub(mem.i32(w));
-    let dz = (mem.i32(e + 0x14) >> 8).wrapping_sub(mem.i32(w + 4));
-    let r = mem.u32(WAYPOINT_LINES).wrapping_add((line as u32).wrapping_mul(0x20));
-    let (a, b, c, d, len) = (
-        mem.i32(r),
-        mem.i32(r + 4),
-        mem.i32(r + 8),
-        mem.i32(r + 0xC),
-        mem.i32(r + 0x1C),
-    );
+/// `FUN_0813e93c`: how far the car is along its current waypoint's line (plane row: direction `[0]`/`[1]`,
+/// widening terms `[2]`/`[3]`, length `[7]`), divided by 8.
+pub fn along_line(w: &CarWorld, i: usize) -> i32 {
+    let e = &w.slots[i].e;
+    let (i1, s1) = advance(w, e.segment as u32, e.waypoint as i32);
+    let line = i1.wrapping_add(w.route.line.sections[s1 as usize].first as i32);
+    let p = w.route.line.points[waypoint(w, s1, i1)];
+    let dx = (e.pos[0] >> 8).wrapping_sub(p.x);
+    let dz = (e.pos[2] >> 8).wrapping_sub(p.z);
+    let [a, b, c, d, .., len] = w.route.planes[line as usize];
     let along = dx.wrapping_mul(a).wrapping_add(b.wrapping_mul(dz)) >> 8;
     let across = b.wrapping_mul(dx).wrapping_sub(a.wrapping_mul(dz)) >> 8;
     let num = along + (across.wrapping_mul(c) >> 12);
@@ -105,220 +49,140 @@ pub fn along_line(mem: &Mem, e: u32) -> i32 {
 }
 
 /// `FUN_0814032c`: race progress (distance along the route), 0 before the start line.
-pub fn progress(mem: &Mem, e: u32, p: u32) -> i32 {
-    let (seg, wp) = (mem.u16(e + 0x72) as u32, mem.i16(e + 0x90));
-    let w = waypoint_at(mem, seg, wp as i32);
-    if (mem.i32(CIRCUIT) == 0 && wp == 0) || mem.u16(p + 0x4D8) & 1 != 0 {
+pub fn progress(w: &CarWorld, i: usize) -> i32 {
+    let Slot { e, c, .. } = &w.slots[i];
+    let wp = waypoint_at(w, e.segment as u32, e.waypoint as i32);
+    if (w.g.circuit == 0 && e.waypoint == 0) || c.route_flags & 1 != 0 {
         return 0;
     }
-    let t = along_line(mem, e);
-    mem.i32(w + 0x10) + (t * 8 * mem.i32(SEGMENT_LENGTHS + seg * 4) >> 8)
+    let t = along_line(w, i);
+    w.route.line.points[wp].distance + (t.wrapping_mul(8).wrapping_mul(w.g.scales[e.segment as usize]) >> 8)
 }
 
-fn dist2_16(mem: &Mem, e: u32, w: u32) -> i32 {
-    let dx = ((mem.i32(e + 0xC) >> 8) - mem.i32(w)) >> 4;
-    let dz = ((mem.i32(e + 0x14) >> 8) - mem.i32(w + 4)) >> 4;
+fn dist2_16(w: &CarWorld, i: usize, wp: usize) -> i32 {
+    let (e, p) = (&w.slots[i].e, &w.route.line.points[wp]);
+    let dx = ((e.pos[0] >> 8) - p.x) >> 4;
+    let dz = ((e.pos[2] >> 8) - p.z) >> 4;
     dx * dx + dz * dz
 }
 
-/// `FUN_0813f234`: switch between the main route and side segments by the sector the car is in, using the
-/// route's side-segment table (per entry: segment id, its sectors, -1). Returns 1 when nothing changed.
-pub fn track_segment(mem: &mut Mem, e: u32) -> i32 {
-    let list = mem.u32(SIDE_SEGMENT_SECTORS + mem.u32(ROUTE_INDEX) * 4);
-    let cur = mem.u16(e + 0x72) as u32;
-    mem.set_u32(SEGMENT_VISITED + cur * 4, 1);
-    if list == 0 {
-        return 0;
-    }
-    let sector = mem.u16(e + 0x78) as u32;
-    let mut at = list + 4;
-    let entries = mem.u32(list);
-    // The waypoint to rejoin at: the first waypoint's join (`*0x03005FB8`) if the car is nearer the segment's
-    // first waypoint than its last, else the last waypoint's link.
-    let rejoin = |mem: &Mem, seg: u32| -> u16 {
-        let first = waypoint(mem, seg, 0);
-        let last = waypoint(mem, seg, mem.u16(segment(mem, seg)) as i32 - 1);
-        if dist2_16(mem, e, first) < dist2_16(mem, e, last) {
-            mem.u32(mem.u32(SEGMENT_JOINS) + seg * 4) as u16
+/// `FUN_0813f234`: switch between the main route and side sections by the sector the car is in, using the
+/// route's side-section table (per entry: section, its sectors). Returns 1 when nothing changed.
+pub fn track_segment(w: &mut CarWorld, i: usize) -> i32 {
+    let data = w.data;
+    let list = data.car.side_segments[w.g.route_index as usize].as_deref();
+    let cur = w.slots[i].e.segment as u32;
+    w.g.visited[cur as usize] = 1;
+    let Some(list) = list else { return 0 };
+    let sector = w.slots[i].e.sector as u32;
+    let count = |w: &CarWorld, seg: u32| i32::from(w.route.line.sections[seg as usize].count);
+    // The waypoint to rejoin at: the section's join if the car is nearer its first waypoint than its last, else
+    // the last waypoint's link.
+    let rejoin = |w: &CarWorld, seg: u32| -> u16 {
+        let first = waypoint(w, seg, 0);
+        let last = waypoint(w, seg, count(w, seg) - 1);
+        if dist2_16(w, i, first) < dist2_16(w, i, last) {
+            w.route.back[seg as usize] as u16
         } else {
-            mem.u16(last + 0xE)
+            w.route.line.points[last].link_index
         }
     };
     if cur == 0 {
-        for _ in 0..entries {
-            let seg = mem.u32(at);
-            at += 4;
-            while mem.u32(at) != u32::MAX {
-                let s = mem.u32(at);
-                at += 4;
-                if s == sector {
-                    mem.set_u16(e + 0x72, seg as u16);
-                    let first = waypoint(mem, seg, 0);
-                    let count = mem.u16(segment(mem, seg)) as i32;
-                    let last = waypoint(mem, seg, count - 1);
-                    let v = if dist2_16(mem, e, first) < dist2_16(mem, e, last) {
-                        0
-                    } else {
-                        count - 1
-                    };
-                    mem.set_i16(e + 0x90, v as i16);
-                    return 1;
-                }
+        for (seg, sectors) in list {
+            if sectors.contains(&sector) {
+                w.slots[i].e.segment = *seg as u16;
+                let first = waypoint(w, *seg, 0);
+                let n = count(w, *seg);
+                let last = waypoint(w, *seg, n - 1);
+                let v = if dist2_16(w, i, first) < dist2_16(w, i, last) {
+                    0
+                } else {
+                    n - 1
+                };
+                w.slots[i].e.waypoint = v as i16;
+                return 1;
             }
-            at += 4;
         }
         return 0;
     }
-    for _ in 0..entries {
-        let seg = mem.u32(at);
-        at += 4;
-        if seg == cur {
-            // Still in one of this segment's sectors?
-            while mem.u32(at) != u32::MAX {
-                if mem.u32(at) == sector {
-                    return 1;
-                }
-                at += 4;
+    for (seg, sectors) in list {
+        if *seg == cur {
+            // Still in one of this section's sectors?
+            if sectors.contains(&sector) {
+                return 1;
             }
-            let v = rejoin(mem, seg);
-            mem.set_u16(e + 0x90, v);
-            mem.set_u16(e + 0x72, 0);
+            let v = rejoin(w, *seg);
+            let e = &mut w.slots[i].e;
+            e.waypoint = v as i16;
+            e.segment = 0;
             return 0;
         }
-        while mem.u32(at) != u32::MAX {
-            let s = mem.u32(at);
-            at += 4;
-            if s == sector {
-                let v = rejoin(mem, cur);
-                mem.set_u16(e + 0x90, v);
-                mem.set_u16(e + 0x72, seg as u16);
-                return 0;
-            }
+        if sectors.contains(&sector) {
+            let v = rejoin(w, cur);
+            let e = &mut w.slots[i].e;
+            e.waypoint = v as i16;
+            e.segment = *seg as u16;
+            return 0;
         }
-        at += 4;
     }
     1
 }
 
-/// `FUN_0813edd8`: count steps driving against the route (`+0x4EC`, sets 0x03005384 past 27), then advance or
-/// step back the waypoint when the car crosses a waypoint line, flagging the start/finish area in `+0x4D8`.
-pub fn track_waypoint(mem: &mut Mem, e: u32) -> Result<()> {
-    let seg = mem.u16(e + 0x72) as u32;
-    let seg_rec = segment(mem, seg);
-    let wp = mem.i16(e + 0x90) as i32;
-    let p = mem.u32(e + 0x8C);
-    let (next, s) = advance(mem, seg, wp + 1);
-    let first = mem.i32(segment(mem, s) + 4);
-    let lines = mem.u32(WAYPOINT_LINES);
-    let line = lines.wrapping_add(((first + wp) as u32).wrapping_mul(0x20));
-    let dir = [mem.i32(line), 0, mem.i32(line + 4)];
-    let fwd = dot(mem.vec3(p + 0x11C), dir);
-    let wrong = fwd < -10 || (fwd < 1 && dot(mem.vec3(p + 0x140), dir) < 0);
-    let count = if wrong { mem.i16(p + 0x4EC) + 1 } else { 0 };
-    mem.set_i16(p + 0x4EC, count);
-    mem.set_u32(0x0300_5384, (mem.i16(p + 0x4EC) > 0x1B) as u32);
-    let r = lines.wrapping_add(((next + first) as u32).wrapping_mul(0x20));
-    let (x, z) = (mem.i32(e + 0xC) >> 8, mem.i32(e + 0x14) >> 8);
-    let side = |mem: &Mem, r: u32| {
-        x.wrapping_mul(mem.i32(r + 0x10))
-            .wrapping_add(z.wrapping_mul(mem.i32(r + 0x14)))
-            .wrapping_sub(mem.i32(r + 0x18))
-    };
-    if side(mem, r) < 1 {
-        let r = lines.wrapping_add(((wp + mem.i32(seg_rec + 4)) as u32).wrapping_mul(0x20));
-        if side(mem, r) >= 0 {
-            return Ok(());
-        }
-        if seg != 0 {
-            mem.set_i16(e + 0x90, mem.i16(e + 0x90) - 1);
-            return Ok(());
-        }
-        let cur = mem.i16(e + 0x90);
-        if cur == 2 {
-            mem.set_u16(p + 0x4D8, mem.u16(p + 0x4D8) & 0xFFFD);
-        }
-        let start = if mem.i32(CIRCUIT) == 0 { 1 } else { 0 };
-        if cur == start {
-            mem.set_u16(p + 0x4D8, mem.u16(p + 0x4D8) | 1);
-        }
-        let (back, _) = advance(mem, seg, wp - 1);
-        mem.set_i16(e + 0x90, back as i16);
-        return Ok(());
+/// `FUN_0813edd8`: `RacingLine::track_player` on the car: counts steps driving against the route (sets the
+/// wrong-way flag past 27), advances or steps back the waypoint when the car crosses a waypoint line, and runs
+/// the lap crossing when it advanced.
+pub fn track_waypoint(w: &mut CarWorld, i: usize) {
+    let mut race = w.race();
+    let mut r = w.slots[i].racer();
+    let b = &w.slots[i].c.body;
+    let vectors = [b.vel[0], b.vel[1], b.vel[2], b.rot[6], b.rot[7], b.rot[8]];
+    let armed = w
+        .route
+        .line
+        .track_player(&w.route.planes, &w.route.back, &mut race, &mut r, vectors);
+    w.g.wrong_way = race.wrong_way as u32;
+    w.slots[i].set_racer(&r);
+    if armed {
+        lap(w, i);
     }
-    if seg == 0 {
-        if ((wp - 1) as u32) < 9 {
-            mem.set_u16(p + 0x4D8, mem.u16(p + 0x4D8) | 2);
-        }
-        let count = mem.u16(seg_rec) as i32;
-        if wp == count - 2 || wp == 0 {
-            mem.set_u16(p + 0x4D8, mem.u16(p + 0x4D8) & 0xFFFE);
-        }
-        let (fwd, _) = advance(mem, seg, wp + 1);
-        mem.set_i16(e + 0x90, fwd as i16);
-        if fwd as i16 as i32 == count - 1 {
-            mem.set_u16(e + 0x90, 0);
-        }
-    } else {
-        mem.set_i16(e + 0x90, mem.i16(e + 0x90) + 1);
-        mem.set_u16(p + 0x4D8, mem.u16(p + 0x4D8) | 2);
-    }
-    lap(mem, e)
 }
 
-/// `FUN_0813f098` (`lap_crossing`): `nfsgba_formats::career::RacingLine::lap_crossing` on the race's RAM: an armed
-/// car crossing the line completes a lap (times, laps left), knocks out the last car in elimination, and finishes
-/// when no laps are left or in a sprint. The lap's section count is the race's own (world `+0x40`), which in
-/// sprints is two points longer than the ROM's.
-pub fn lap(mem: &mut Mem, e: u32) -> Result<()> {
-    let line = RacingLine {
-        sections: vec![Section {
-            count: mem.u16(mem.u32(W_SEGMENTS)),
-            flags: 0,
-            first: 0,
-        }],
-        points: Vec::new(),
-        scales: Vec::new(),
-    };
-    let mut race = crate::car::race(mem);
+/// `FUN_0813f098` (`lap_crossing`): an armed car crossing the line completes a lap (times, laps left), knocks out
+/// the last car in elimination, and finishes when no laps are left or in a sprint. The lap's section count is
+/// the race's own, which in sprints is two points longer than the ROM's.
+pub fn lap(w: &mut CarWorld, i: usize) {
+    let mut race = w.race();
     // The racers, and the car crossing (a wingman's car has an id above the opponents).
-    let who = mem.u16(e) as u32;
-    let n = (race.player + race.opponents + 1).max(who + 1);
-    let mut cars: Vec<_> = (0..n).map(|i| crate::car::racer(mem, entity(mem, i))).collect();
-    line.lap_crossing(&mem.rom, &mut race, &mut cars, who as usize);
-    for (i, c) in cars.iter().enumerate() {
-        crate::car::store_racer(mem, entity(mem, i as u32), c);
+    let n = (race.player + race.opponents + 1).max(i as u32 + 1) as usize;
+    let mut cars: Vec<_> = w.slots[..n].iter().map(Slot::racer).collect();
+    w.route.line.lap_crossing(w.rom, &mut race, &mut cars, i);
+    for (s, c) in w.slots.iter_mut().zip(&cars) {
+        s.set_racer(c);
     }
-    crate::car::store_race(mem, &race);
-    Ok(())
+    w.set_race(&race);
 }
 
-/// `FUN_0813ebac`: the time gap to the car one place ahead (or, for the leader, behind), into 0x0300615C.
-pub fn gap(mem: &mut Mem, e: u32) {
-    let opponents = mem.i32(OPPONENTS);
-    mem.set_i32(0x0300_615C, 0);
-    let p = mem.u32(e + 0x8C);
-    let place = mem.i32(p + 0xA8);
+/// `FUN_0813ebac`: the time gap to the car one place ahead (or, for the leader, behind), into `g.gap`.
+pub fn gap(w: &mut CarWorld, i: usize) {
+    w.g.gap = 0;
+    let place = w.slots[i].c.position;
     let target = if place == 1 { 2 } else { place - 1 };
-    let entities = mem.u32(W_ENTITIES);
-    let distance = |mem: &Mem, q: u32| {
-        if mem.i32(CIRCUIT) == 0 {
-            mem.i32(q + 0xAC)
+    let (laps, lap_len, circuit) = (w.g.laps, w.route.line.lap_length(), w.g.circuit != 0);
+    let distance = |c: &crate::state::Car| {
+        if !circuit {
+            c.progress
         } else {
-            let segs = mem.u32(W_SEGMENTS);
-            let lap_len =
-                mem.i32(mem.u32(W_WAYPOINTS) + mem.i32(segs + 4) as u32 * 0x18 + mem.u16(segs) as u32 * 0x18 - 8);
-            (mem.i32(LAPS) - mem.i8(q + 0xC5) as i32) * lap_len + mem.i32(q + 0xAC)
+            (laps - c.laps_left as i32) * lap_len + c.progress
         }
     };
-    for k in 0..opponents.max(0) as u32 {
-        // The game looks at entity k + 1's physics struct (`entities + 0x130 + k * 0xA4`).
-        let q = mem.u32(entities + 0x130 + k * 0xA4);
-        if mem.i32(q + 0xA8) != target {
+    for k in 0..(w.g.opponents as i32).max(0) as usize {
+        // The game looks at entity k + 1's driver.
+        let q = &w.slots[k + 1].c;
+        if q.position != target {
             continue;
         }
-        let other = distance(mem, q);
-        let mine = distance(mem, p);
-        let time = mem.i32(RACE_TIME);
+        let (other, mine) = (distance(q), distance(&w.slots[i].c));
+        let time = w.g.time as i32;
         if place == 1 {
             let mine = match mine >> 4 {
                 0 => 1,
@@ -327,7 +191,7 @@ pub fn gap(mem: &mut Mem, e: u32) {
             if mine <= other >> 4 {
                 return;
             }
-            mem.set_i32(0x0300_615C, time - div((other >> 4) * time, mine));
+            w.g.gap = time - div((other >> 4) * time, mine);
         } else {
             let other = match other >> 4 {
                 0 => 1,
@@ -336,32 +200,34 @@ pub fn gap(mem: &mut Mem, e: u32) {
             if other <= mine >> 4 {
                 return;
             }
-            mem.set_i32(0x0300_615C, time - div((mine >> 4) * time, other));
+            w.g.gap = time - div((mine >> 4) * time, other);
         }
         return;
     }
 }
 
-/// `FUN_081402bc`: signed distance of the car from its waypoint across the route direction (waypoint `+0x0A`
-/// angle), in city units.
-pub fn lateral(mem: &Mem, e: u32) -> i32 {
-    let w = waypoint_at(mem, mem.u16(e + 0x72) as u32, mem.i16(e + 0x90) as i32);
-    if mem.u32(W_SEGMENTS) == 0 {
+/// `FUN_081402bc`: signed distance of the car from its waypoint across the route direction (the waypoint's
+/// heading), in city units.
+pub fn lateral(w: &CarWorld, i: usize) -> i32 {
+    if w.route.line.sections.is_empty() {
         return 0;
     }
-    let a = mem.u16(w + 0xA) as i32 - 0x1000;
-    let v = cos(mem, a)
-        .wrapping_mul((mem.i32(e + 0xC) >> 8) - mem.i32(w))
-        .wrapping_add(((mem.i32(e + 0x14) >> 8) - mem.i32(w + 4)).wrapping_mul(sin(mem, a)));
+    let e = &w.slots[i].e;
+    let wp = waypoint_at(w, e.segment as u32, e.waypoint as i32);
+    let (p, x) = (&w.route.line.points[wp], &w.route.extra[wp]);
+    let a = x.heading as i32 - 0x1000;
+    let v = cos(w.rom, a)
+        .wrapping_mul((e.pos[0] >> 8) - p.x)
+        .wrapping_add(((e.pos[2] >> 8) - p.z).wrapping_mul(sin(w.rom, a)));
     (if v < 0 { v + 0x3FFF } else { v }) >> 14
 }
 
-/// `FUN_08140274`: which of the four lane offsets at 0x087F4120 (enabled by bit mask `lanes`) is nearest `x`.
-pub fn nearest_lane(mem: &Mem, x: i32, lanes: i32) -> u32 {
+/// `FUN_08140274`: which of the four lane offsets (enabled by bit mask `lanes`) is nearest `x`.
+pub fn nearest_lane(w: &CarWorld, x: i32, lanes: i32) -> u32 {
     let (mut best, mut lane) = (i32::MAX, 0);
     for k in 0..4u32 {
         if (lanes >> k) & 1 != 0 {
-            let d = (mem.i32(0x087F_4120 + 4 * k) - x).wrapping_abs();
+            let d = (w.data.car.lanes[k as usize] - x).wrapping_abs();
             if d < best {
                 best = d;
                 lane = k;
@@ -371,69 +237,69 @@ pub fn nearest_lane(mem: &Mem, x: i32, lanes: i32) -> u32 {
     lane
 }
 
-/// `FUN_08143b2c` (player only): the traffic-spawn countdown.
-pub fn traffic_countdown(mem: &mut Mem) -> Result<()> {
-    if mem.u8(0x0300_6250) != 0 {
-        mem.set_u8(0x0300_6250, 0);
-        return Ok(());
+/// `FUN_08143b2c` (player only), up to the spawn: the traffic-spawn countdown. True when a traffic car is to be
+/// spawned now (the caller spawns it and reports back with [`traffic_spawned`]).
+pub fn traffic_wants_spawn(w: &mut CarWorld) -> bool {
+    let g = &mut w.g;
+    if g.u_6250 != 0 {
+        g.u_6250 = 0;
+        return false;
     }
-    if mem.u8(0x0300_6298) != 0 && mem.u8(0x0300_6240) < 4 {
-        let near = crate::world::entity(mem, mem.u32(0x0300_57F8));
-        let c = mem.u8(0x0300_6264).wrapping_sub(1);
-        mem.set_u8(0x0300_6264, c);
-        if c == 0 {
-            if crate::traffic::spawn(mem, near, 1)? != NONE {
-                mem.set_u8(0x0300_6240, mem.u8(0x0300_6240).wrapping_add(1));
-            }
-            mem.set_u8(0x0300_6264, mem.u32(0x0300_6260) as u8);
-        }
+    if g.traffic_on != 0 && g.traffic_count < 4 {
+        g.traffic_timer = g.traffic_timer.wrapping_sub(1);
+        return g.traffic_timer == 0;
     }
-    Ok(())
+    false
 }
 
-/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (0x03006104 = 1..=12), commands
-/// left (0x030061DC), none running (0x030061E8) and the cooldown (0x030061D8) over. The attacker (0x030061F8 = 0)
-/// targets the best-placed racer other than 0x0300619C (the wingman's car); otherwise the command flag 0x0300618C
-/// is set. A given command costs one of 0x030061DC and starts the cooldown 0x1E000.
-pub fn wingman_command(mem: &mut Mem) -> Result<()> {
-    if mem.i32(0x0300_6104).wrapping_sub(1) as u32 >= 0xC {
-        return Ok(());
+/// The rest of the countdown after the spawn (`made`: the spawner found a free entity and a place).
+pub fn traffic_spawned(w: &mut CarWorld, made: bool) {
+    let g = &mut w.g;
+    if made {
+        g.traffic_count = g.traffic_count.wrapping_add(1);
     }
-    if mem.i32(0x0300_61DC) == 0 || mem.i32(0x0300_61E8) != 0 || mem.i32(0x0300_61D8) != 0 {
-        return Ok(());
+    g.traffic_timer = g.traffic_period as u8;
+}
+
+/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (`g.wingman` = 1..=12),
+/// commands left, none running and the cooldown over. The attacker (`wingman_attacker` = 0) targets the
+/// best-placed racer other than the wingman's car; otherwise the command flag is set. A given command costs one
+/// command and starts the cooldown 0x1E000.
+pub fn wingman_command(w: &mut CarWorld) {
+    let g = &w.g;
+    if g.wingman.wrapping_sub(1) as u32 >= 0xC {
+        return;
     }
-    let given = if mem.i32(0x0300_61F8) == 0 {
-        let racers = mem.u32(OPPONENTS);
-        let (mut target, mut place) = (0u32, 100);
+    if g.wingman_commands == 0 || g.wingman_running != 0 || g.wingman_cooldown != 0 {
+        return;
+    }
+    let given = if g.wingman_attacker == 0 {
+        let racers = g.opponents;
+        let (mut target, mut place) = (Ptr::NULL, 100);
         if racers != u32::MAX {
-            let mut e = mem.u32(W_ENTITIES);
-            for _ in 0..=racers {
-                let p = mem.i32(mem.u32(e + 0x8C) + 0xA8);
-                if e != mem.u32(0x0300_619C) && mem.u16(e) as u32 <= racers && p < place {
-                    (target, place) = (e, p);
+            for (k, s) in w.slots.iter().enumerate().take(racers as usize + 1) {
+                let at = w.entities.at(k as u32);
+                if at != g.wingman_car && s.e.index as u32 <= racers && s.c.position < place {
+                    (target, place) = (at, s.c.position);
                 }
-                e += 0xA4;
             }
         }
-        mem.set_u32(0x0300_61E4, mem.u32(0x0300_6188));
-        mem.set_u32(0x0300_6178, target);
-        mem.set_u32(0x0300_61FC, 0);
-        mem.set_u32(0x0300_61F0, 0);
-        (target.wrapping_neg() | target) >> 31 != 0
+        let g = &mut w.g;
+        g.u_61e4 = g.u_6188;
+        g.wingman_target = target;
+        g.u_61fc = 0;
+        g.u_61f0 = 0;
+        !target.is_null()
     } else {
-        mem.set_u32(0x0300_618C, 1);
-        mem.set_u32(0x0300_61E4, mem.u32(0x0300_6188));
+        let g = &mut w.g;
+        g.u_618c = 1;
+        g.u_61e4 = g.u_6188;
         true
     };
     if given {
-        mem.set_i32(0x0300_61DC, mem.i32(0x0300_61DC) - 1);
-        mem.set_u32(0x0300_61E8, 1);
-        mem.set_u32(0x0300_61D8, 0x1_E000);
+        let g = &mut w.g;
+        g.wingman_commands -= 1;
+        g.wingman_running = 1;
+        g.wingman_cooldown = 0x1_E000;
     }
-    Ok(())
-}
-
-/// Whether entity `index` is the local player.
-pub fn is_player(mem: &Mem, index: u32) -> bool {
-    index == mem.u32(PLAYER)
 }

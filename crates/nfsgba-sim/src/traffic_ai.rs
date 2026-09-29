@@ -11,7 +11,7 @@
 
 use crate::math::{cos, div, isqrt, sin};
 use crate::mem::Mem;
-use crate::route::CIRCUIT;
+use crate::ram::route::CIRCUIT;
 use crate::sound::Command;
 use crate::traffic::atan2_fast;
 use crate::world::{self, NONE, W_ENTITIES, W_QUERY, W_QUERY_SECTOR, W_SECTORS, W_SEGMENTS, W_WALLS, W_WAYPOINTS};
@@ -455,8 +455,8 @@ fn respond(sim: &mut Sim, o: u32, t: u32) -> Result<bool> {
         (speed.wrapping_mul(m.i32(t + 0x18)), speed.wrapping_mul(m.i32(t + 0x20)))
     };
     let rel = [
-        (dt.wrapping_mul(m.i32(b + crate::body::VEL)) >> 11) - tx,
-        (dt.wrapping_mul(m.i32(b + crate::body::VEL + 8)) >> 11) - tz,
+        (dt.wrapping_mul(m.i32(b + crate::ram::body::VEL)) >> 11) - tx,
+        (dt.wrapping_mul(m.i32(b + crate::ram::body::VEL + 8)) >> 11) - tz,
     ];
     let vn = (rel[0].wrapping_mul(n[0]) >> 6) + (rel[1].wrapping_mul(n[2]) >> 6);
     if vn >= 0 {
@@ -485,7 +485,7 @@ fn respond(sim: &mut Sim, o: u32, t: u32) -> Result<bool> {
     if j > 0x4000 {
         m.set_u32(q + 0x4B4, m.u32(q + 0x4B4) | 4);
     }
-    if m.u16(o) as u32 > m.u32(crate::route::OPPONENTS) && m.i32(0x0300_61F0) != 0 {
+    if m.u16(o) as u32 > m.u32(crate::ram::route::OPPONENTS) && m.i32(0x0300_61F0) != 0 {
         m.set_u32(0x0300_61F0, 0);
     }
     if m.i32(0x0300_56E0) == 2 && m.u16(o + 0x4A) != 2 {
@@ -496,14 +496,14 @@ fn respond(sim: &mut Sim, o: u32, t: u32) -> Result<bool> {
     }
     let shift = m.u32(0x087F_5684 + kind * 4) & 0xFF;
     let imp = [asr(imp[0], shift), 0, asr(imp[2], shift)];
-    let mom = crate::body::MOMENTUM;
+    let mom = crate::ram::body::MOMENTUM;
     m.set_i32(b + mom, m.i32(b + mom).wrapping_add(imp[0]));
     m.set_i32(b + mom + 8, m.i32(b + mom + 8).wrapping_add(imp[2]));
     let turn = crate::math::cross(r_o, [imp[0] >> 8, 0, imp[2] >> 8]);
-    let ang = b + crate::body::ANG_MOMENTUM;
+    let ang = b + crate::ram::body::ANG_MOMENTUM;
     m.set_vec3(ang, crate::math::sub(m.vec3(ang), turn));
-    crate::body::update_velocities(m, b);
-    let lane = crate::route::nearest_lane(m, crate::route::lateral(m, o), -1);
+    crate::ram::body::update_velocities(m, b);
+    let lane = crate::ram::route::nearest_lane(m, crate::ram::route::lateral(m, o), -1);
     m.set_u16(q + 0xC0, lane as u16);
     if m.u16(o) as u32 == m.u32(world::PLAYER) {
         sim.sounds.push(Command::Stop(0x15));

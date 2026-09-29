@@ -8,7 +8,7 @@ use crate::Result;
 use crate::heap;
 use crate::math::{div, isqrt};
 use crate::mem::Mem;
-use crate::route::CIRCUIT;
+use crate::ram::route::CIRCUIT;
 use crate::world::{self, NONE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
 
 /// The live traffic cars (entity addresses, 0 = free).

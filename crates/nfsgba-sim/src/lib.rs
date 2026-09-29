@@ -13,13 +13,16 @@
 pub mod ai;
 pub mod body;
 pub mod car;
+pub mod carworld;
 pub mod contact;
 pub mod data;
+pub mod decal;
 pub mod heap;
 pub mod init;
 pub mod layout;
 pub mod math;
 pub mod mem;
+pub mod ram;
 pub mod route;
 pub mod sound;
 pub mod state;

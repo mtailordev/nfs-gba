@@ -24,9 +24,7 @@ use nfsgba_formats::{
     city, hud, paint, render, sector_light, sky, tint_palette,
     ui::{self, SpriteBank},
 };
-use nfsgba_sim::{
-    Mem, Sim, Unported, ai, car, data::GameData, layout::Field, sound::Command, state::Camera, traffic_ai,
-};
+use nfsgba_sim::{Mem, Sim, Unported, ai, data::GameData, layout::Field, sound::Command, state::Camera, traffic_ai};
 
 use view::WORLD;
 
@@ -313,7 +311,7 @@ impl Game {
             inc(m, 0x0300_53B4);
             if self.race_time_runs() {
                 let m = &mut self.sim.mem;
-                inc(m, nfsgba_sim::route::RACE_TIME);
+                inc(m, nfsgba_sim::ram::route::RACE_TIME);
             }
             let m = &mut self.sim.mem;
             inc(m, 0x0300_0044);
@@ -390,7 +388,7 @@ impl Game {
             Some(n) if self.race_time_runs() => n.saturating_sub(self.irqs),
             _ => 0,
         };
-        let rt = nfsgba_sim::route::RACE_TIME;
+        let rt = nfsgba_sim::ram::route::RACE_TIME;
         let m = &mut self.sim.mem;
         m.set_u32(rt, m.u32(rt).wrapping_add(lent));
         let r = step(&mut self.sim);
@@ -522,7 +520,7 @@ impl Game {
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
                     // the IRQs themselves run after it, between the sound commands they fell between.
                     let at = t.gap_reads.first().copied().or(t.gap);
-                    self.lend(at, |sim| car::handler(sim, e))?;
+                    self.lend(at, |sim| nfsgba_sim::ram::car_handler(sim, e))?;
                     // route_gap reads the race time again after its division (split = rt₂ − x·rt₁ / y); the sim
                     // reads it once, so an IRQ in between adds its tick afterwards.
                     if let [first, second, ..] = t.gap_reads[..]

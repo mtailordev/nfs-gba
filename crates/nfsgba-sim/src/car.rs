@@ -1,459 +1,475 @@
-//! The car entity's per-frame update: the handler (`FUN_0814bd4c`), the racing step (`FUN_0814b168`) and the
-//! car dynamics (`FUN_0813d1f0`) with the engine, gearbox, steering, brakes and the order of the sub-steps.
+//! The car entity's per-frame update on typed state: the handler (`FUN_0814bd4c`), the racing step
+//! (`FUN_0814b168`) and the car dynamics (`FUN_0813d1f0`) with the engine, gearbox, steering, brakes and the order
+//! of the sub-steps.
 //!
-//! Entity (0xA4 bytes) fields used: `+0x00` index, `+0x02` sector-list link, `+0x08/+0x0A` flags, `+0x0C/+0x10/
-//! +0x14` position (8.8 city units, `-y` up), `+0x2C` heading << 8, `+0x4A` state (0 init, 0x100 racing, 2
-//! finished: set by `lap_crossing`),
-//! `+0x72` route segment, `+0x78` sector, `+0x89` handling record, `+0x8C` physics struct, `+0x90` waypoint.
-//! The physics struct (0x4FC bytes) is described in `docs/engine/physics.md`.
+//! The step runs on a [`CarWorld`] (`carworld.rs`); `ram.rs` loads it from the RAM image and stores it back. The
+//! one thing it cannot do itself is spawn traffic (the spawner is still RAM-image code): [`handler`] then returns
+//! [`Flow::Spawn`], the adapter spawns and calls it again with `resume`, which continues where it stopped.
+//! The physics struct is described in `docs/engine/physics.md`.
 
 use crate::body;
+use crate::carworld::{CarWorld, NONE, Pending};
 use crate::contact;
-use crate::math::{atan2, cos, div, dot, mat_mul, mul12, mul64, normalize, recip, scale, shr64, sin, sub};
-use crate::mem::Mem;
+use crate::math::{add, atan2, div, dot, mat_mul, mul12, mul64, normalize, recip, scale, shr64, sub};
 use crate::route;
 use crate::sound::Command;
+use crate::state::{Car, CarGlobals};
 use crate::walls;
-use crate::world::{self, AUTOMATIC, DT, INPUT, NONE, PLAYER, PROFILE, RACE_PHASE, W_SEGMENTS, WORLD, control, entity};
-use crate::{Result, Sim};
-use nfsgba_formats::career::{self, Race, Racer};
+use nfsgba_formats::career;
 
-/// Handling records (0x158 bytes), one per car: `+0x54` top gear, `+0x68` idle rpm, `+0x11C` drag,
-/// `+0x148` yaw damping (`docs/engine/physics.md`).
-pub const HANDLING: u32 = 0x087F_1100;
-
-/// Control actions (binding table rows, `world::control`).
+/// Control actions (binding table rows, [`CarWorld::control`]).
 const ACCELERATE: u32 = 0;
 const BRAKE: u32 = 1;
 const HANDBRAKE: u32 = 6;
 const NITRO: u32 = 7;
 const WINGMAN: u32 = 8;
 
-/// `FUN_0814bd4c`: the car handler (entity handler table 0x087F38B8, entries 0..3).
-pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
-    let index = sim.mem.u16(e) as u32;
-    world::unlink_entity(&mut sim.mem, index);
-    match sim.mem.u16(e + 0x4A) {
+/// Where a step stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Done,
+    /// The step wants a traffic car spawned now (the adapter does it and resumes the step).
+    Spawn,
+}
+
+impl CarWorld<'_> {
+    /// `FUN_08144f38`: whether control action `action` is active for the held and newly pressed keys.
+    pub fn control(&self, held: u32, pressed: u32, action: u32) -> bool {
+        let b = self.data.car.bindings[self.g.binding_set as usize][(action & 0xFFFF) as usize];
+        (b[0] as u32 & held) == b[1] as u32 && (b[2] as u32 & pressed) == b[3] as u32
+    }
+}
+
+macro_rules! car {
+    ($w:ident, $i:ident) => {
+        $w.slots[$i].c
+    };
+}
+macro_rules! ent {
+    ($w:ident, $i:ident) => {
+        $w.slots[$i].e
+    };
+}
+
+/// `FUN_0814bd4c`: the car handler (entity handler table entries 0..3). `resume`: continue after a traffic spawn.
+pub fn handler(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
+    let index = ent!(w, i).index as u32;
+    match ent!(w, i).race_state {
         2 => {
             // Finished: keep driving; the first finisher sets the race-over flag and starts the palette fade,
             // and once the fade is done the race ends (phase 3) with this car's index.
-            racing_step(sim, e)?;
-            let m = &mut sim.mem;
-            if m.i32(0x0300_5780) == 0 {
-                m.set_i32(0x0300_5780, 1);
-                m.set_i32(0x0300_5630, -0x10);
+            if racing_step(w, i, resume) == Flow::Spawn {
+                return Flow::Spawn;
             }
-            if m.i32(0x0300_5624) == 0 && m.i32(0x0300_5780) != 0 && m.i32(0x0300_5630) == 0 {
-                m.set_i32(RACE_PHASE, 3);
-                m.set_u32(0x0300_57D0, index);
+            let g = &mut w.g;
+            if g.race_over == 0 {
+                g.race_over = 1;
+                g.fade = -0x10;
+            }
+            if g.link == 0 && g.race_over != 0 && g.fade == 0 {
+                g.phase = 3;
+                g.over_index = index;
             }
         }
-        0 => crate::init::car_init(sim, e)?,
-        0x100 => racing_step(sim, e)?,
+        0 => crate::init::car_init(w, i),
+        0x100 => return racing_step(w, i, resume),
         _ => {}
     }
-    world::link_entity(&mut sim.mem, index);
-    Ok(())
+    Flow::Done
 }
 
-/// `FUN_0814b168`: nitro drain, dynamics, visibility flags, and (unless 0x0300610C is set) the suspension
-/// step `FUN_0814de40` with the body height from the four wheels.
-fn racing_step(sim: &mut Sim, e: u32) -> Result<()> {
-    let m = &sim.mem;
-    let dt = m.i32(DT);
-    let phase = m.i32(RACE_PHASE);
+/// `FUN_0814b168`: nitro drain, dynamics, visibility flags, and (unless `g.settled` is set) the suspension step
+/// `FUN_0814de40` with the body height from the four wheels.
+fn racing_step(w: &mut CarWorld, i: usize, resume: bool) -> Flow {
+    let (dt, phase) = (w.g.dt, w.g.phase);
     if phase == 0 {
-        return Ok(());
+        return Flow::Done;
     }
-    let index = m.u16(e) as u32;
+    let index = ent!(w, i).index as u32;
     if phase != 1 && phase != 4 {
-        // Rendering, done by `nfsgba-game` (`slots.rs`), not here: for the player, seen from the side, the game redraws the decal onto the car's
-        // texture atlas here (`draw_decal_on_atlas`, `FUN_0813bd90`). That belongs to the renderer.
-        nitro(&mut sim.mem, e);
-        let input = sim.mem.u16(INPUT + index * 2) as u32;
-        dynamics(sim, e, input, dt)?;
+        // Rendering, done by `nfsgba-game` (`slots.rs`), not here: for the player, seen from the side, the game
+        // redraws the decal onto the car's texture atlas here (`draw_decal_on_atlas`, `FUN_0813bd90`).
+        if !resume {
+            nitro(&mut car!(w, i), &mut w.g, dt);
+        }
+        let input = w.g.input[index as usize] as u32;
+        if dynamics(w, i, input, dt, resume) == Flow::Spawn {
+            return Flow::Spawn;
+        }
     }
-    let m = &mut sim.mem;
-    if m.u32(0x0300_57F8) == index {
-        m.set_u16(e + 0xA, m.u16(e + 0xA) | 1);
-        if m.u32(0x0300_55F8) > 1 {
-            m.set_u16(e + 8, m.u16(e + 8) | 4);
+    let g = &w.g;
+    let e = &mut ent!(w, i);
+    if g.focus == index {
+        e.flags |= 1;
+        if g.view > 1 {
+            e.state |= 4;
         } else {
-            m.set_u16(e + 8, m.u16(e + 8) & 0xFFFB);
+            e.state &= 0xFFFB;
         }
     } else {
-        m.set_u16(e + 0xA, m.u16(e + 0xA) & 0xFFFE);
-        m.set_u16(e + 8, m.u16(e + 8) | 4);
+        e.flags &= 0xFFFE;
+        e.state |= 4;
     }
-    if m.i32(0x0300_610C) != 0 {
-        return Ok(());
+    if g.settled != 0 {
+        return Flow::Done;
     }
-    // Unreachable in Carbon: `race_init` and every dynamics step set 0x0300610C to 1 (no trace step has it 0).
+    // Unreachable in Carbon: `race_init` and every dynamics step set `settled` to 1 (no trace step has it 0).
     // Four points around the car; their y is uninitialised stack in the game, but always overwritten with the
     // floor height (the sector query falls back to the car's sector, never 0xFFFF at a car step).
     let mut pts = [[-0x20, 0, 0x55], [0x20, 0, 0x55], [-0x20, 0, -0x2A], [0x20, 0, -0x2A]];
-    let hits = contact::suspension(m, e, &mut pts, &mut [0; 4], dt);
-    let p = m.u32(e + 0x8C);
-    m.set_i32(p + 0x48, hits);
-    let front = m.i32(p + 0x6C).wrapping_add(m.i32(p + 0x70)) >> 1;
-    let rear = m.i32(p + 0x74).wrapping_add(m.i32(p + 0x78)) >> 1;
-    m.set_i32(e + 0x10, front.wrapping_add(rear) >> 1);
-    Ok(())
+    let hits = contact::suspension(w, i, &mut pts, &mut [0; 4], dt);
+    let c = &mut car!(w, i);
+    c.points_on_floor = hits;
+    let front = c.point_height[0].wrapping_add(c.point_height[1]) >> 1;
+    let rear = c.point_height[2].wrapping_add(c.point_height[3]) >> 1;
+    ent!(w, i).pos[1] = front.wrapping_add(rear) >> 1;
+    Flow::Done
 }
 
-/// `FUN_0814b098`: drain the nitro tank (`+0x4C8`) while nitro is on (`+0x4D1`).
-pub(crate) fn nitro(m: &mut Mem, e: u32) {
-    let rate = div(600, div(m.i32(DT) << 6, 0x1C));
-    let p = m.u32(e + 0x8C);
-    if m.u8(p + 0x4D1) == 0 {
+/// `FUN_08148 ...` `iwram_divmod`: the quotient, and the remainder into the globals' scratch word.
+fn divmod(g: &mut CarGlobals, a: i32, b: i32) -> i32 {
+    let (q, r) = nfsgba_fixed::iwram_divmod(a, b);
+    g.div_rem = r;
+    q
+}
+
+/// `FUN_0814b098`: drain the nitro tank while nitro is on.
+pub(crate) fn nitro(c: &mut Car, g: &mut CarGlobals, dt: i32) {
+    let rate = div(600, div(dt << 6, 0x1C));
+    if c.nitro_on == 0 {
         return;
     }
-    // The IWRAM division's quotient is discarded here; only its remainder store (0x03006480) is kept.
-    let factor = m.u16(p + 0x4CC);
-    if factor == 0 {
-        world::iwram_divmod(m, m.i32(p + 0x4C8), 1, 0x0300_6480);
-    } else {
-        world::iwram_divmod(m, m.i32(p + 0x4C8), factor as i32, 0x0300_6480);
-    }
-    let divisor = world::iwram_divmod(m, rate << 16, 0x1500, 0x0300_6480);
+    // The IWRAM division's quotient is discarded here; only its remainder store is kept.
+    let factor = c.nitro_drain;
+    divmod(g, c.nitro_tank, if factor == 0 { 1 } else { factor as i32 });
+    let divisor = divmod(g, rate << 16, 0x1500);
     let drain = div((factor as i32) << 8, divisor);
-    if m.i32(0x0300_6150) == 0 {
-        m.set_i32(p + 0x4C8, m.i32(p + 0x4C8) - drain);
+    if g.nitro_free == 0 {
+        c.nitro_tank -= drain;
     }
-    if m.i32(p + 0x4C8) < 0 {
-        m.set_i32(p + 0x4C8, 0);
-    }
-}
-
-/// A piecewise-linear curve: `+0x00` point count, `+0x04` x of the first point, `+0x08` x of the last, `+0x0C`
-/// pointer to the y values (`FUN_0813d1f0` inlines this for the tables at 0x087F4164 and 0x087F41A0).
-pub(crate) fn curve(m: &Mem, table: u32, x: i32) -> i32 {
-    let (count, x0, x1, ys) = (m.i32(table), m.i32(table + 4), m.i32(table + 8), m.u32(table + 0xC));
-    let step = div(x1 - x0, count - 1);
-    let k = div(x - x0, step);
-    if k < 1 {
-        m.i32(ys)
-    } else if k < count {
-        let y = m.i32(ys + k as u32 * 4);
-        y + div((m.i32(ys + k as u32 * 4 + 4) - y).wrapping_mul(x - step * k), step)
-    } else {
-        m.i32(ys + count as u32 * 4 - 4)
+    if c.nitro_tank < 0 {
+        c.nitro_tank = 0;
     }
 }
 
-/// Engine torque at `rpm` from the car's torque curve (`+0x464`, 10 points over 0..`+0x454` rpm).
-pub fn torque(m: &Mem, p: u32, rpm: i32) -> i32 {
-    let step = m.i32(p + 0x454) >> 3;
+/// Engine torque at `rpm` from the car's torque curve (10 points over 0..`max_rpm`).
+pub fn torque(c: &Car, rpm: i32) -> i32 {
+    let step = c.max_rpm >> 3;
     let k = div(rpm, step);
     if k < 9 {
-        let t = p + 0x464;
-        let y = m.i32(t.wrapping_add((k * 4) as u32));
-        y + div(
-            (m.i32(t.wrapping_add((k * 4 + 4) as u32)) - y).wrapping_mul(rpm - step * k),
-            step,
-        )
+        // A negative rpm reads the words before the curve (whatever the struct holds there).
+        let at = |k: i32| match k {
+            0.. => c.torque_curve[k as usize],
+            _ => c.word(0x464 + 4 * k),
+        };
+        let y = at(k);
+        y + div((at(k + 1) - y).wrapping_mul(rpm - step * k), step)
     } else {
         0
     }
 }
 
-fn player_physics(m: &Mem) -> u32 {
-    m.u32(entity(m, m.u32(PLAYER)) + 0x8C)
-}
-
-/// Flag a gear change for the HUD (profile `+0x2E0`) when it is the player's car.
-fn gear_changed(m: &mut Mem, p: u32) {
-    if p == player_physics(m) {
-        let s = m.u32(PROFILE);
-        m.set_i32(s + 0x2E0, 1);
+/// Flag a gear change for the HUD (profile) when it is the player's car.
+fn gear_changed(w: &mut CarWorld, player: bool) {
+    if player {
+        w.profile.gear_changed = 1;
     }
 }
 
-/// `FUN_0813c02c`: the automatic gearbox, at most one shift every 5 steps (`+0x9C`).
-pub(crate) fn auto_shift(m: &mut Mem, e: u32) {
-    let p = m.u32(e + 0x8C);
-    if m.i32(p + 0x9C) > 0 {
+/// `FUN_0813c02c`: the automatic gearbox, at most one shift every 5 steps (`gearbox_pause`).
+pub(crate) fn auto_shift(w: &mut CarWorld, i: usize) {
+    let c = &car!(w, i);
+    if c.gearbox_pause > 0 {
         return;
     }
-    let gear = m.i32(p + 0x40);
-    if m.i32(p + 0x444) != 0 && gear != 1 {
+    let gear = c.gear;
+    if c.launch != 0 && gear != 1 {
         return;
     }
-    let handling = HANDLING + m.u8(e + 0x89) as u32 * 0x158;
-    let ratio = |m: &Mem, g: i32| m.i32((p + 0x408).wrapping_add((g * 4) as u32));
-    let shift = if gear == 1 || (m.i32(p + 0x44C) <= m.i32(p + 0x3C) && gear < m.i32(handling + 0x54) && gear != 0) {
+    let top_gear = w.data.car.handling[ent!(w, i).car as usize][0x15];
+    let ratio = |g: i32| c.gear_ratios[g as usize];
+    let shift = if gear == 1 || (c.upshift_rpm <= c.revs && gear < top_gear && gear != 0) {
         Some(gear + 1)
     } else if gear >= 3 {
-        let wheel_rpm = 0x109A * (m.i32(p + 0x3DC) >> 8);
-        let down_rpm = div(shr64(mul64(wheel_rpm, ratio(m, gear - 1)), 30), 6);
-        let now = torque(m, p, m.i32(p + 0x3C));
-        let down = torque(m, p, down_rpm);
-        (down.wrapping_mul(ratio(m, gear - 1)) > ratio(m, gear).wrapping_mul(now)).then_some(gear - 1)
+        let wheel_rpm = 0x109A * (c.wheel_spin >> 8);
+        let down_rpm = div(shr64(mul64(wheel_rpm, ratio(gear - 1)), 30), 6);
+        let now = torque(c, c.revs);
+        let down = torque(c, down_rpm);
+        (down.wrapping_mul(ratio(gear - 1)) > ratio(gear).wrapping_mul(now)).then_some(gear - 1)
     } else {
         None
     };
+    let player = w.is_player(i);
     if let Some(new) = shift
-        && m.i32(RACE_PHASE) != 9
+        && w.g.phase != 9
     {
         if gear != new {
-            gear_changed(m, p);
+            gear_changed(w, player);
         }
-        m.set_i32(p + 0x40, new);
+        car!(w, i).gear = new;
     }
-    m.set_i32(p + 0x9C, 5);
+    car!(w, i).gearbox_pause = 5;
 }
 
-/// `FUN_0813d1f0`: one step of the car: controls, engine and drivetrain, tyres, collisions, integration.
-pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()> {
-    let m = &mut sim.mem;
-    let handling = HANDLING + m.u8(e + 0x89) as u32 * 0x158;
-    let p = m.u32(e + 0x8C);
-    let b = p + 0xC8;
-    let index = m.u16(e) as u32;
-    let player = route::is_player(m, index);
-    let old_sector = m.u16(e + 0x78);
-
-    // Off-route warning (0x0300601C): far from the racing line while going fast.
-    let (wp, seg) = route::advance(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32 + 1);
-    let line = wp + m.i32(m.u32(W_SEGMENTS) + seg * 8 + 4);
-    let w = route::waypoint(m, seg, line);
-    let dx = m.i32(w).wrapping_sub(m.i32(p + 0xD0) >> 8);
-    let dz = m.i32(w + 4).wrapping_sub(m.i32(p + 0xD8) >> 8);
-    let mut off = 0;
-    if dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) > 0x17_8000 {
-        off = m.i32(m.u32(0x0300_5FB4).wrapping_add((line as u32).wrapping_mul(0x20)) + 8);
-    }
-    m.set_i32(0x0300_601C, 0);
-    if div(m.i32(p + 0x44), 0x2393) > 0x3C {
-        if off > 0xA00 {
-            m.set_i32(0x0300_601C, -1);
-        }
-        if off < -0xA00 {
-            m.set_i32(0x0300_601C, 1);
-        }
-    }
-
-    let pressed = input & !(m.u16(p + 0x4AE) as u32) & 0xFFFF;
-    m.set_u16(p + 0x4AE, input as u16);
+/// `FUN_0813d1f0`: one step of the car: controls, engine and drivetrain, tyres, collisions, integration. It
+/// stops at the traffic spawn ([`Flow::Spawn`]) and continues when called again with `resume`.
+pub fn dynamics(w: &mut CarWorld, i: usize, input: u32, frame_time: i32, resume: bool) -> Flow {
+    let (data, rom) = (w.data, w.rom);
+    let handling = &data.car.handling[ent!(w, i).car as usize];
+    let index = ent!(w, i).index as u32;
+    let player = index == w.g.player;
     let held = input & 0xFFFF;
-    if control(m, held, pressed, WINGMAN) {
-        route::wingman_command(m)?;
+    let (old_sector, pressed);
+    if resume {
+        // The countdown's tail; the rest of the step follows.
+        let made = w.spawned.take().unwrap_or(false);
+        route::traffic_spawned(w, made);
+        let p = w.pending.take().expect("a resumed step has its pending state");
+        (old_sector, pressed) = (p.old_sector, p.pressed);
+    } else {
+        old_sector = ent!(w, i).sector;
+
+        // Off-route warning: far from the racing line while going fast.
+        let (wp, seg) = route::advance(w, ent!(w, i).segment as u32, ent!(w, i).waypoint as i32 + 1);
+        let line = wp + w.route.line.sections[seg as usize].first as i32;
+        // (`line` is added to the section's first waypoint again: the game's own arithmetic)
+        let at = route::waypoint(w, seg, line);
+        let pt = w.route.line.points[at];
+        let pos = car!(w, i).body.pos;
+        let dx = pt.x.wrapping_sub(pos[0] >> 8);
+        let dz = pt.z.wrapping_sub(pos[2] >> 8);
+        let mut off = 0;
+        if dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz)) > 0x17_8000 {
+            off = w.route.planes[line as usize][2];
+        }
+        w.g.off_route = 0;
+        if div(car!(w, i).speed, 0x2393) > 0x3C {
+            if off > 0xA00 {
+                w.g.off_route = -1;
+            }
+            if off < -0xA00 {
+                w.g.off_route = 1;
+            }
+        }
+
+        pressed = input & !(car!(w, i).prev_control as u32) & 0xFFFF;
+        car!(w, i).prev_control = input as u16;
+        if w.control(held, pressed, WINGMAN) {
+            route::wingman_command(w);
+        }
+        let c = &car!(w, i);
+        if c.tipped > 100 && c.airborne == 0 && c.speed <= 0x7FFF {
+            // Tipped over for more than 100 steps with a corner down, and slow: back onto the racing line.
+            let wp = route::waypoint_at(w, ent!(w, i).segment as u32, ent!(w, i).waypoint as i32);
+            put_back_on_road(w, i, wp);
+            car!(w, i).tipped = 0;
+        }
+        route::track_segment(w, i);
+        if w.camera_player == i as u32 && route::traffic_wants_spawn(w) {
+            w.pending = Some(Pending { old_sector, pressed });
+            return Flow::Spawn;
+        }
     }
-    if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
-        // Tipped over for more than 100 steps with a corner down, and slow: back onto the racing line.
-        let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
-        put_back_on_road(m, e, w);
-        m.set_i16(p + 0x4E4, 0);
-    }
-    route::track_segment(m, e);
-    if m.u32(0x0300_53AC) == e {
-        route::traffic_countdown(m)?;
-    }
-    m.set_i32(p + 0x9C, m.i32(p + 0x9C) - 1);
-    world::select_bindings(m, m.i32(AUTOMATIC));
-    let dt = recip(m, frame_time << 8).min(0xC00);
-    let ratio = m.i32((p + 0x408).wrapping_add((m.i32(p + 0x40) * 4) as u32));
-    m.set_i32(p + 0x28, 0);
-    let timer = m.i32(p + 0x42C) - m.i32(DT);
-    m.set_i32(p + 0x42C, timer);
+    car!(w, i).gearbox_pause -= 1;
+    w.g.binding_set = (w.g.automatic == 0) as u8;
+    let dt = recip(rom, frame_time << 8).min(0xC00);
+    let ratio = car!(w, i).gear_ratios[car!(w, i).gear as usize];
+    car!(w, i).brake = 0;
+    let timer = car!(w, i).torque_timer - w.g.dt;
+    car!(w, i).torque_timer = timer;
     if timer < 0 {
-        m.set_i32(p + 0x428, 0x8000);
-        m.set_i32(p + 0x42C, 0);
+        car!(w, i).torque_multiplier = 0x8000;
+        car!(w, i).torque_timer = 0;
     }
 
-    // Steering (+0x20): raw LEFT/RIGHT bits, not the bindings.
+    // Steering: raw LEFT/RIGHT bits, not the bindings.
+    let c = &mut car!(w, i);
     let mut steer_rate = 0;
     if input & 0x20 == 0 {
         if input & 0x10 == 0 {
-            m.set_i32(p + 0x20, 0);
+            c.steering = 0;
         } else {
-            if m.i32(p + 0x20) < 0 {
-                m.set_i32(p + 0x20, 0);
+            if c.steering < 0 {
+                c.steering = 0;
             }
-            if m.i32(p + 0x20) <= 0x7_FFFF {
+            if c.steering <= 0x7_FFFF {
                 steer_rate = 0xA000;
             }
         }
     } else {
-        if m.i32(p + 0x20) > 0 {
-            m.set_i32(p + 0x20, 0);
+        if c.steering > 0 {
+            c.steering = 0;
         }
-        if m.i32(p + 0x20) > -0x8_0000 {
+        if c.steering > -0x8_0000 {
             steer_rate = -0xA000;
         }
     }
-    m.set_i32(p + 0x20, m.i32(p + 0x20) + steer_rate);
+    c.steering += steer_rate;
 
-    // Speed along the car's forward axis (+0xA0 signed, +0x44 magnitude), race statistics.
-    let forward = dot(m.vec3(p + 0x11C), m.vec3(p + 0x140));
-    m.set_i32(p + 0xA0, forward * 0x20);
+    // Speed along the car's forward axis (signed and magnitude), race statistics.
+    let fwd = [c.body.rot[6], c.body.rot[7], c.body.rot[8]];
+    let forward = dot(c.body.vel, fwd);
+    c.forward_speed = forward * 0x20;
     let speed = if forward * 0x20 < 0 {
         forward * -0x20
     } else {
         forward * 0x20
     };
-    m.set_i32(p + 0x44, speed);
-    let stats = m.u32(PROFILE);
-    m.set_i32(stats + 0x2D0, m.i32(stats + 0x2D0) + (speed >> 12));
-    if m.i32(stats + 0x2DC) < m.i32(p + 0x44) {
-        m.set_i32(stats + 0x2DC, m.i32(p + 0x44));
+    c.speed = speed;
+    w.profile.distance += speed >> 12;
+    if w.profile.top_speed < speed {
+        w.profile.top_speed = speed;
     }
 
-    // Throttle (+0x24), brake (+0x28) and the reverse gear; the pedals are frozen once the race is over
-    // (0x03005780).
-    if m.i32(0x0300_5780) == 0 {
-        let throttle = if m.i32(AUTOMATIC) == 0 {
-            m.set_i32(p + 0x28, control(m, held, pressed, BRAKE) as i32);
-            if control(m, held, pressed, ACCELERATE) {
+    // Throttle, brake and the reverse gear; the pedals are frozen once the race is over.
+    if w.g.race_over == 0 {
+        let throttle = if w.g.automatic == 0 {
+            car!(w, i).brake = w.control(held, pressed, BRAKE) as i32;
+            if w.control(held, pressed, ACCELERATE) {
                 if player {
-                    m.set_i32(stats + 0x2E8, 1);
+                    w.profile.accelerating = 1;
                 }
-                m.i32(p + 0x24) + 0x2000
+                car!(w, i).throttle + 0x2000
             } else {
-                release_accelerator(m, player, stats);
+                release_accelerator(w, player);
                 0
             }
-        } else if m.i32(p + 0x40) == 0 {
+        } else if car!(w, i).gear == 0 {
             // In reverse: accelerate shifts into first gear (2) at low speed; brake is the throttle.
-            if control(m, held, pressed, ACCELERATE) {
+            if w.control(held, pressed, ACCELERATE) {
                 if player {
-                    m.set_i32(stats + 0x2E8, 1);
+                    w.profile.accelerating = 1;
                 }
-                if m.i32(p + 0x44) <= 0x2FFF && m.i32(RACE_PHASE) != 9 {
-                    if m.i32(p + 0x40) != 2 && p == player_physics(m) {
-                        m.set_i32(stats + 0x2E0, 1);
+                if car!(w, i).speed <= 0x2FFF && w.g.phase != 9 {
+                    if car!(w, i).gear != 2 {
+                        gear_changed(w, player);
                     }
-                    m.set_i32(p + 0x40, 2);
+                    car!(w, i).gear = 2;
                 }
-                m.set_i32(p + 0x28, 1);
-            } else if m.i32(stats + 0x2E8) != 0 && player {
-                m.set_i32(stats + 0x2E8, 0);
-                m.set_i32(stats + 0x2E0, 1);
+                car!(w, i).brake = 1;
+            } else if w.profile.accelerating != 0 && player {
+                w.profile.accelerating = 0;
+                w.profile.gear_changed = 1;
             }
-            if !control(m, held, pressed, BRAKE) || m.i32(p + 0x28) != 0 {
+            if !w.control(held, pressed, BRAKE) || car!(w, i).brake != 0 {
                 0
             } else {
-                m.i32(p + 0x24) + 0x2000
+                car!(w, i).throttle + 0x2000
             }
         } else {
             // Forward gears: brake at low speed shifts into reverse (0).
-            if control(m, held, pressed, BRAKE) {
-                let accelerating = control(m, held, pressed, ACCELERATE);
-                if m.i32(p + 0x44) <= 0x2FFF && !accelerating && m.i32(RACE_PHASE) != 9 {
-                    if m.i32(p + 0x40) != 0 && p == player_physics(m) {
-                        m.set_i32(stats + 0x2E0, 1);
+            if w.control(held, pressed, BRAKE) {
+                let accelerating = w.control(held, pressed, ACCELERATE);
+                if car!(w, i).speed <= 0x2FFF && !accelerating && w.g.phase != 9 {
+                    if car!(w, i).gear != 0 {
+                        gear_changed(w, player);
                     }
-                    m.set_i32(p + 0x40, 0);
+                    car!(w, i).gear = 0;
                 }
-                m.set_i32(p + 0x28, 1);
+                car!(w, i).brake = 1;
             }
-            if control(m, held, pressed, ACCELERATE) {
+            if w.control(held, pressed, ACCELERATE) {
                 if player {
-                    m.set_i32(stats + 0x2E8, 1);
+                    w.profile.accelerating = 1;
                 }
-                m.i32(p + 0x24) + 0x2000
+                car!(w, i).throttle + 0x2000
             } else {
-                release_accelerator(m, player, stats);
+                release_accelerator(w, player);
                 0
             }
         };
-        m.set_i32(p + 0x24, throttle);
+        car!(w, i).throttle = throttle;
     }
 
-    // Nitro (+0x4D1 on, +0x4C8 tank).
-    let nitro_on = control(m, held, pressed, NITRO) && m.i32(p + 0x4C8) >= 2 && m.i32(p + 0x40) >= 2;
+    // Nitro.
+    let nitro_on = w.control(held, pressed, NITRO) && car!(w, i).nitro_tank >= 2 && car!(w, i).gear >= 2;
     if nitro_on {
-        if m.u8(p + 0x4D1) == 0 && player {
-            sim.sounds.push(Command::Stop(0x22));
-            sim.sounds.push(Command::Play(0x22));
+        if car!(w, i).nitro_on == 0 && player {
+            w.sounds.push(Command::Stop(0x22));
+            w.sounds.push(Command::Play(0x22));
         }
-        sim.mem.set_u8(p + 0x4D1, 1);
-    } else if sim.mem.u8(p + 0x4D1) != 0 {
-        sim.mem.set_u8(p + 0x4D1, 0);
+        car!(w, i).nitro_on = 1;
+    } else if car!(w, i).nitro_on != 0 {
+        car!(w, i).nitro_on = 0;
         if player {
-            sim.sounds.push(Command::Stop(0x22));
-            sim.sounds.push(Command::Play(0x23));
+            w.sounds.push(Command::Stop(0x22));
+            w.sounds.push(Command::Play(0x23));
         }
     }
-    let m = &mut sim.mem;
-    if nitro_on && m.u8(p + 0x4D1) != 0 && m.i32(p + 0x4C8) == 0 {
-        m.set_u8(p + 0x4D1, 0);
+    if nitro_on && car!(w, i).nitro_on != 0 && car!(w, i).nitro_tank == 0 {
+        car!(w, i).nitro_on = 0;
         if player {
-            sim.sounds.push(Command::Stop(0x22));
-            sim.sounds.push(Command::Play(0x23));
+            w.sounds.push(Command::Stop(0x22));
+            w.sounds.push(Command::Play(0x23));
         }
     }
-    let m = &mut sim.mem;
 
     // Slip angle: velocity direction against the car's heading.
-    let mut slip = atan2(m.i32(p + 0x11C), m.i32(p + 0x124)) - atan2(m.i32(p + 0x140), m.i32(p + 0x148));
+    let c = &mut car!(w, i);
+    let mut slip = atan2(c.body.vel[0], c.body.vel[2]) - atan2(c.body.rot[6], c.body.rot[8]);
     if slip > 0x2000 {
         slip -= 0x4000;
     }
     if slip < -0x2000 {
         slip += 0x4000;
     }
-    let yaw = m.i32(p + 0x15C) * 0x10;
-    if m.u16(p + 0x4D8) & 0x10 == 0 && yaw.wrapping_mul(slip) > 0 {
-        // Counter-steer damping of the yaw rate (+0x114 angular momentum y).
-        let k = curve(m, 0x087F_4164, slip.abs());
-        let damp = mul12(mul12(yaw, m.i32(handling + 0x148)), k >> 1);
-        m.set_i32(p + 0x114, m.i32(p + 0x114) - damp);
+    let yaw = c.body.ang_vel[1] * 0x10;
+    if c.route_flags & 0x10 == 0 && yaw.wrapping_mul(slip) > 0 {
+        // Counter-steer damping of the yaw rate (angular momentum y).
+        let k = data.car.slip_damping.eval(slip.abs());
+        let damp = mul12(mul12(yaw, handling[0x52]), k >> 1);
+        c.body.ang_momentum[1] -= damp;
     }
     // Rear grip from slip angle and yaw rate.
     let x = 0x733 * slip.abs() + yaw.abs() * 0x8CD >> 12;
-    let g = curve(m, 0x087F_41A0, x) - 0x1000;
-    m.set_i32(p + 0x20C, m.i32(p + 0x210));
-    m.set_i32(p + 0x2A0, m.i32(p + 0x2A4));
-    let rear = mul12((g >> 1) + 0x1000, m.i32(p + 0x338));
-    m.set_i32(p + 0x334, rear);
-    m.set_i32(p + 0x3C8, rear);
+    let g = data.car.rear_grip.eval(x) - 0x1000;
+    c.wheels[0].grip = c.wheels[0].base_grip;
+    c.wheels[1].grip = c.wheels[1].base_grip;
+    let rear = mul12((g >> 1) + 0x1000, c.wheels[2].base_grip);
+    c.wheels[2].grip = rear;
+    c.wheels[3].grip = rear;
 
     // Speed from the normalised velocity (the direction itself goes unused, see the "drag" below).
-    let speed_len = normalize(m, &mut m.vec3(p + 0x11C));
+    let speed_len = normalize(rom, &mut c.body.vel.clone());
     if speed_len < 0x10 {
-        m.set_i16(p + 0x4EE, m.i16(p + 0x4EE) + 1);
+        c.stationary = c.stationary.wrapping_add(1);
     } else {
-        m.set_i16(p + 0x4EE, 0);
+        c.stationary = 0;
     }
     let drag_speed = speed_len >> 3;
 
     // Rev-limiter and neutral handling.
-    if m.i32(p + 0x40) == 1 {
-        if m.i32(p + 0x3C) == m.i32(p + 0x454) {
-            m.set_i32(p + 0x444, 0xF);
+    if c.gear == 1 {
+        if c.revs == c.max_rpm {
+            c.launch = 0xF;
         } else {
-            m.set_i32(p + 0x444, 0);
-            let half = m.i32(p + 0x454) >> 1;
-            let d = half - m.i32(p + 0x3C);
-            let near = if d < 0 {
-                m.i32(p + 0x3C) - half <= 0x12B
-            } else {
-                d <= 0x12B
-            };
-            m.set_i32(p + 0x460, if near { 0x1800 } else { 0x1000 });
+            c.launch = 0;
+            let half = c.max_rpm >> 1;
+            let d = half - c.revs;
+            let near = if d < 0 { c.revs - half <= 0x12B } else { d <= 0x12B };
+            c.neutral_torque = if near { 0x1800 } else { 0x1000 };
         }
-    } else if m.i32(p + 0x444) != 0 {
-        if speed_len < 0x801 && m.i32(p + 0x3C) > 0x1387 {
-            m.set_i32(p + 0x444, m.i32(p + 0x444) - 1);
-            for k in 0..4u32 {
-                m.set_i32(p + 0x3C8 - 0x94 * k, 0x80);
+    } else if c.launch != 0 {
+        if speed_len < 0x801 && c.revs > 0x1387 {
+            c.launch -= 1;
+            for wheel in &mut c.wheels {
+                wheel.grip = 0x80;
             }
         } else {
-            m.set_i32(p + 0x444, 0);
+            c.launch = 0;
         }
     }
 
-    // Engine rpm (+0x3C) from throttle or from the wheels through the gear ratio.
-    if m.i32(p + 0x24) > 0x9999 {
-        m.set_i32(p + 0x24, 0x9999);
+    // Engine rpm from throttle or from the wheels through the gear ratio.
+    if c.throttle > 0x9999 {
+        c.throttle = 0x9999;
     }
     let mut engine_brake = 0;
     let mut rpm_step = if ratio == 0 {
-        m.i32(p + 0x24) * 2 - 300
+        c.throttle * 2 - 300
     } else {
-        let wheel_rpm = 0x109A * (m.i32(p + 0x3DC) >> 8);
-        div(shr64(mul64(wheel_rpm, ratio), 30), 6) - m.i32(p + 0x3C)
+        let wheel_rpm = 0x109A * (c.wheel_spin >> 8);
+        div(shr64(mul64(wheel_rpm, ratio), 30), 6) - c.revs
     };
     if rpm_step > 1000 {
         engine_brake = (-ratio >> 4).wrapping_mul(rpm_step - 1000) >> 9;
@@ -463,176 +479,166 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         engine_brake = -((-ratio >> 4).wrapping_mul(1000 - rpm_step) >> 9);
         rpm_step = -1000;
     }
-    let rpm = m.i32(p + 0x3C) + rpm_step;
-    m.set_i32(p + 0x3C, rpm.min(m.i32(p + 0x454)));
-    if m.i32(p + 0x3C) < m.i32(handling + 0x68) {
-        m.set_i32(p + 0x3C, m.i32(handling + 0x68));
+    let rpm = c.revs + rpm_step;
+    c.revs = rpm.min(c.max_rpm);
+    if c.revs < handling[0x1A] {
+        c.revs = handling[0x1A];
     }
-    if m.i32(p + 0x460) > 0x1000 {
-        m.set_i32(p + 0x460, m.i32(p + 0x460) - 0x80);
+    if c.neutral_torque > 0x1000 {
+        c.neutral_torque -= 0x80;
     }
-    let rpm = m.i32(p + 0x3C);
-    let tq = torque(m, p, rpm);
-    let mut t = if rpm == m.i32(p + 0x454) {
-        m.i32(p + 0x460) * tq >> 13
+    let rpm = c.revs;
+    let tq = torque(c, rpm);
+    let mut t = if rpm == c.max_rpm {
+        c.neutral_torque * tq >> 13
     } else {
-        m.i32(p + 0x460) * tq >> 12
+        c.neutral_torque * tq >> 12
     };
-    if m.u8(p + 0x4D1) != 0 {
-        t = (t as u32).wrapping_mul(m.u16(p + 0x4CE) as u32) as i32 >> 12;
+    if c.nitro_on != 0 {
+        t = (t as u32).wrapping_mul(c.nitro_torque as u32) as i32 >> 12;
     }
-    let drive = shr64(mul64(t.wrapping_mul(m.i32(p + 0x24)), ratio), 15);
-    let drive = shr64(mul64(drive, m.i32(p + 0x4BC)), 15);
-    let mut drive = shr64(mul64(drive, m.i32(p + 0x428)), 15);
-    let gear = m.i32(p + 0x40);
+    let drive = shr64(mul64(t.wrapping_mul(c.throttle), ratio), 15);
+    let drive = shr64(mul64(drive, c.torque_scale), 15);
+    let mut drive = shr64(mul64(drive, c.torque_multiplier), 15);
+    let gear = c.gear;
     if gear >= 2 {
-        drive = drive.wrapping_sub(rpm.wrapping_mul(m.i32(p + 0x458)));
+        drive = drive.wrapping_sub(rpm.wrapping_mul(c.engine_braking));
     } else if gear < 1 {
-        drive = drive.wrapping_add(rpm.wrapping_mul(m.i32(p + 0x458)));
+        drive = drive.wrapping_add(rpm.wrapping_mul(c.engine_braking));
     }
-    let handbrake = control(m, held, pressed, HANDBRAKE);
+    let handbrake = w.control(held, pressed, HANDBRAKE);
     let torque_in = drive >> 10;
+    let c = &mut car!(w, i);
     if handbrake {
-        for k in 2..4u32 {
-            let w = p + contact::WHEELS + contact::WHEEL_SIZE * k;
-            m.set_i32(w + 0x80, m.i32(w + 0x80) >> 1);
-            let spin = m.i32(w + 0x64);
-            let brake = m.i32(w + 0x74) * 4;
+        for wheel in &mut c.wheels[2..] {
+            wheel.grip >>= 1;
+            let spin = wheel.spin;
+            let brake = wheel.brake * 4;
             let v = if spin < 0 { spin + brake } else { spin - brake };
-            m.set_i32(
-                w + 0x64,
-                if (spin < 0 && v > 0) || (spin >= 0 && v < 0) {
-                    0
-                } else {
-                    v
-                },
-            );
+            wheel.spin = if (spin < 0 && v > 0) || (spin >= 0 && v < 0) {
+                0
+            } else {
+                v
+            };
         }
     }
-    for k in 0..4u32 {
-        let w = p + contact::WHEELS + contact::WHEEL_SIZE * k;
-        let spin = m.i32(w + 0x64) + ((torque_in + engine_brake).wrapping_mul(m.i32(w + 0x70) >> 4) >> 8);
-        m.set_i32(w + 0x64, spin);
-        if m.i32(p + 0x28) > 0 {
-            let brake = m.i32(w + 0x74);
+    for wheel in &mut c.wheels {
+        let spin = wheel.spin + ((torque_in + engine_brake).wrapping_mul(wheel.drive >> 4) >> 8);
+        wheel.spin = spin;
+        if c.brake > 0 {
+            let brake = wheel.brake;
             let v = if spin < 0 { spin + brake } else { spin - brake };
-            m.set_i32(
-                w + 0x64,
-                if (spin < 0 && v > 0) || (spin >= 0 && v < 0) {
-                    0
-                } else {
-                    v
-                },
-            );
+            wheel.spin = if (spin < 0 && v > 0) || (spin >= 0 && v < 0) {
+                0
+            } else {
+                v
+            };
         }
     }
 
     // Sector before the step.
-    m.set_u16(WORLD + 0xEA, m.u16(e + 0x78));
-    let s = world::find_sector(
-        m,
-        m.u16(e + 0x78) as u32,
-        m.i32(e + 0xC),
-        m.i32(e + 0x10),
-        m.i32(e + 0x14),
-    )?;
-    m.set_u16(e + 0x78, if s & 0xFFFF == NONE { old_sector as u32 } else { s } as u16);
-    m.set_i32(0x0300_610C, 1);
-    m.set_i32(
-        p + 0xFC,
-        m.i32(p + 0xFC) + (dt * (m.i32(0x0300_6030) * m.i32(b) >> 12) >> 11),
-    );
+    let e = &ent!(w, i);
+    w.query.sector = e.sector;
+    let s = w.find_sector(e.sector as u32, e.pos[0], e.pos[1], e.pos[2]);
+    ent!(w, i).sector = if s & 0xFFFF == NONE { old_sector as u32 } else { s } as u16;
+    w.g.settled = 1;
+    let pull = dt * (w.g.gravity * car!(w, i).body.mass >> 12) >> 11;
+    car!(w, i).body.momentum[1] += pull;
 
-    // Ground contact, or the body corners when the car is tipped over (then the wheels stop and +0x4E4 counts).
-    let grounded = if m.i32(p + 0x138) < 0xF21 {
-        contact::tipped(sim, e, dt);
-        let m = &mut sim.mem;
-        for k in 0..4u32 {
-            m.set_i32(p + contact::WHEELS + contact::WHEEL_SIZE * k + 0x64, 0);
+    // Ground contact, or the body corners when the car is tipped over (then the wheels stop and `tipped` counts).
+    let grounded = if car!(w, i).body.rot[4] < 0xF21 {
+        contact::tipped(w, i, dt);
+        let c = &mut car!(w, i);
+        for wheel in &mut c.wheels {
+            wheel.spin = 0;
         }
-        m.set_i16(p + 0x4E4, m.i16(p + 0x4E4).wrapping_add(1));
+        c.tipped = c.tipped.wrapping_add(1);
         0
     } else {
-        let n = contact::wheels(sim, e, dt)?;
-        sim.mem.set_i16(p + 0x4E4, 0);
+        let n = contact::wheels(w, i, dt);
+        car!(w, i).tipped = 0;
         n
     };
-    walls::racers(sim, e, dt)?;
-    let m = &mut sim.mem;
+    walls::racers(w, i, dt);
     if speed_len < 0xA0
         && grounded == 4
-        && m.u32(p + 0x448) & 1 == 0
-        && !control(m, held, pressed, ACCELERATE)
-        && !control(m, held, pressed, BRAKE)
+        && car!(w, i).contact & 1 == 0
+        && !w.control(held, pressed, ACCELERATE)
+        && !w.control(held, pressed, BRAKE)
     {
-        // Parked: stop all motion (the zero vector at 0x087F3DD0).
-        let rest = [m.i32(0x087F_3DD0), m.i32(0x087F_3DD4), m.i32(0x087F_3DD8)];
-        for a in [p + 0xF8, p + 0x11C, p + 0x110, p + 0x158] {
-            m.set_vec3(a, rest);
-        }
-        for k in 0..4u32 {
-            m.set_i32(p + contact::WHEELS + contact::WHEEL_SIZE * k + 0x64, 0);
+        // Parked: stop all motion.
+        let rest = data.car.rest;
+        let c = &mut car!(w, i);
+        c.body.momentum = rest;
+        c.body.vel = rest;
+        c.body.ang_momentum = rest;
+        c.body.ang_vel = rest;
+        for wheel in &mut c.wheels {
+            wheel.spin = 0;
         }
     }
-    m.set_u32(p + 0x448, m.u32(p + 0x448) & 8);
-    walls::collide(sim, e)?;
-    let m = &mut sim.mem;
-    let start = m.vec3(e + 0xC);
-    body::integrate(m, b, dt);
-    body::integrate(m, b, dt);
+    car!(w, i).contact &= 8;
+    walls::collide(w, i);
+    let start = ent!(w, i).pos;
+    let c = &mut car!(w, i);
+    body::integrate(rom, &mut c.body, dt);
+    body::integrate(rom, &mut c.body, dt);
 
     // Entity position: body position minus the rotated centre-of-mass offset.
-    let offset = [0, m.i32(p + 0x43C), m.i32(p + 0x440)];
-    let rot: [i32; 9] = std::array::from_fn(|k| m.i32(p + 0x128 + 4 * k as u32));
-    let offset = mat_mul(offset, &rot);
-    m.set_vec3(e + 0xC, sub(m.vec3(p + 0xD0), offset));
-    let sector = m.u16(e + 0x78) as u32;
-    m.set_u16(WORLD + 0xEA, sector as u16);
-    let s = world::find_sector(m, sector, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
-    m.set_u16(e + 0x78, s as u16);
+    let offset = [0, c.centre_of_mass[1], c.centre_of_mass[2]];
+    let offset = mat_mul(offset, &c.body.rot);
+    ent!(w, i).pos = sub(car!(w, i).body.pos, offset);
+    let sector = ent!(w, i).sector as u32;
+    w.query.sector = sector as u16;
+    let pos = ent!(w, i).pos;
+    let s = w.find_sector(sector, pos[0], pos[1], pos[2]);
+    ent!(w, i).sector = s as u16;
     if s as u16 as u32 == NONE {
-        // Out of every sector (0x0813DF98): halve the step's move up to 6 times, searching from the sector the
-        // step started in, then pull the car back 0x6400 along the move and rebuild the body position.
-        let mut mv = sub(m.vec3(e + 0xC), start);
+        // Out of every sector: halve the step's move up to 6 times, searching from the sector the step started
+        // in, then pull the car back 0x6400 along the move and rebuild the body position.
+        let mut mv = sub(ent!(w, i).pos, start);
         for _ in 0..6 {
             mv = scale(mv, 0x800);
-            m.set_u16(WORLD + 0xEA, old_sector);
-            m.set_u16(e + 0x78, old_sector);
-            m.set_vec3(e + 0xC, crate::math::add(mv, start));
-            let s = world::find_sector(m, old_sector as u32, m.i32(e + 0xC), m.i32(e + 0x10), m.i32(e + 0x14))?;
-            m.set_u16(e + 0x78, s as u16);
+            w.query.sector = old_sector;
+            ent!(w, i).sector = old_sector;
+            ent!(w, i).pos = add(mv, start);
+            let p = ent!(w, i).pos;
+            let s = w.find_sector(old_sector as u32, p[0], p[1], p[2]);
+            ent!(w, i).sector = s as u16;
             if s as u16 as u32 != NONE {
                 break;
             }
         }
-        normalize(m, &mut mv);
-        m.set_vec3(e + 0xC, sub(m.vec3(e + 0xC), scale(mv, 0x6400)));
-        m.set_vec3(p + 0xD0, crate::math::add(m.vec3(e + 0xC), offset));
-        if m.u16(e + 0x78) as u32 == NONE {
-            m.set_u16(e + 0x78, old_sector);
+        normalize(rom, &mut mv);
+        ent!(w, i).pos = sub(ent!(w, i).pos, scale(mv, 0x6400));
+        car!(w, i).body.pos = add(ent!(w, i).pos, offset);
+        if ent!(w, i).sector as u32 == NONE {
+            ent!(w, i).sector = old_sector;
         }
     }
 
-    // "Drag": the game scales the vector in the stack slot that held the normalised velocity, but by now
-    // that slot holds the rotated centre-of-mass offset, so the offset direction is what gets subtracted
-    // from the velocity (reproduced as is). Then momentum from velocity.
+    // "Drag": the game scales the vector in the stack slot that held the normalised velocity, but by now that
+    // slot holds the rotated centre-of-mass offset, so the offset direction is what gets subtracted from the
+    // velocity (reproduced as is). Then momentum from velocity.
+    let c = &mut car!(w, i);
     let drag = scale(
         offset,
-        (drag_speed * drag_speed >> 16).wrapping_mul(m.i32(handling + 0x11C)) >> 6,
+        (drag_speed * drag_speed >> 16).wrapping_mul(handling[0x47]) >> 6,
     );
-    let v = sub(m.vec3(p + 0x11C), drag);
-    m.set_vec3(p + 0x11C, v);
-    m.set_vec3(p + 0xF8, scale(v, m.i32(b)));
-    m.set_i32(p + 0x90, m.i32(p + 0x90) + m.i32(p + 0xA0));
+    let v = sub(c.body.vel, drag);
+    c.body.vel = v;
+    c.body.momentum = scale(v, c.body.mass);
+    c.wheel_angle += c.forward_speed;
     if player {
-        m.set_i32(0x0300_0030, 0);
+        w.g.u_0030 = 0;
     }
-    let heading = atan2(m.i32(p + 0x140) >> 4, m.i32(p + 0x148) >> 4);
-    m.set_i32(p, heading);
-    m.set_i32(p + 4, heading >> 31);
-    m.set_i32(e + 0x2C, heading << 8);
+    let heading = atan2(c.body.rot[6] >> 4, c.body.rot[8] >> 4);
+    c.heading = heading;
+    c.heading_sign = heading >> 31;
+    ent!(w, i).heading = heading << 8;
     if player {
-        let (rpm, top) = (m.i32(p + 0x3C), m.i32(p + 0x454));
+        let c = &car!(w, i);
+        let (rpm, top) = (c.revs, c.max_rpm);
         let r = if rpm < 0 {
             0
         } else if rpm > top {
@@ -641,195 +647,96 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
             rpm
         };
         let pitch = div(r * 700, top);
-        let effect = m.i8(m.u32(PROFILE) + 0x2EF) as i32 as u32;
-        sim.sounds.push(Command::Pitch(effect, pitch + 400));
+        let effect = w.profile.engine_sound as i32 as u32;
+        w.sounds.push(Command::Pitch(effect, pitch + 400));
     }
-    let m = &mut sim.mem;
-    let slip_sum = (0..4u32)
-        .map(|k| m.i32(p + contact::WHEELS + contact::WHEEL_SIZE * k + 0x7C))
+    let slip_sum = car!(w, i)
+        .wheels
+        .iter()
+        .map(|wheel| wheel.slip)
         .fold(0i32, i32::wrapping_add)
         >> 2;
-    let stats = m.u32(PROFILE);
     if slip_sum > 0x3_D090 {
-        m.set_i32(stats + 0x2D8, m.i32(stats + 0x2D8) + 1);
-        let flag = stats + 0x318 + index * 4;
+        w.profile.skids += 1;
         let mut sound = true;
-        if m.i32(flag) == 0 {
-            m.set_i32(flag, 1);
+        if w.profile.skid_sound[index as usize] == 0 {
+            w.profile.skid_sound[index as usize] = 1;
             if !player {
                 sound = false;
             } else {
-                sim.sounds.push(Command::Play(0x1C));
+                w.sounds.push(Command::Play(0x1C));
             }
         }
         if sound && player {
-            let pitch = div(sim.mem.i32(p + 0x44), 0x1388);
-            sim.sounds.push(Command::Pitch(0x1C, pitch + 0x4B0));
+            let pitch = div(car!(w, i).speed, 0x1388);
+            w.sounds.push(Command::Pitch(0x1C, pitch + 0x4B0));
         }
     } else {
-        m.set_i32(stats + 0x318 + index * 4, 0);
+        w.profile.skid_sound[index as usize] = 0;
         if player {
-            sim.sounds.push(Command::Stop(0x1C));
+            w.sounds.push(Command::Stop(0x1C));
         }
     }
-    let m = &mut sim.mem;
 
-    // Gears: automatic, or the manual shift state machine on L/R (0x03006074).
-    if m.i32(AUTOMATIC) != 0 {
-        if m.i32(p + 0x40) != 0 {
-            auto_shift(m, e);
+    // Gears: automatic, or the manual shift state machine on L/R.
+    if w.g.automatic != 0 {
+        if car!(w, i).gear != 0 {
+            auto_shift(w, i);
         }
     } else {
-        manual_shift(m, p, handling, input, pressed);
+        manual_shift(w, i, input, pressed);
     }
-    route::track_waypoint(m, e)?;
-    if m.u16(e + 0x4A) != 2 {
-        let v = route::progress(m, e, p);
-        m.set_i32(p + 0xAC, v);
+    route::track_waypoint(w, i);
+    if ent!(w, i).race_state != 2 {
+        car!(w, i).progress = route::progress(w, i);
     }
-    route::gap(m, e);
-    let lane = nearest_lane_of(m, e);
-    m.set_u16(p + 0xC0, lane as u16);
-    if m.i32(0x0300_56E0) == 2 {
+    route::gap(w, i);
+    let lane = route::nearest_lane(w, route::lateral(w, i), -1);
+    car!(w, i).lane = lane as u16;
+    if w.g.mode == 2 {
         // `FUN_08140f78` (`hunter_life_tick`).
-        let mut r = racer(m, e);
-        career::hunter_life_tick(&race(m), &mut r);
-        store_racer(m, e, &r);
+        let mut r = w.slots[i].racer();
+        career::hunter_life_tick(&w.race(), &mut r);
+        w.slots[i].set_racer(&r);
     }
-    Ok(())
+    Flow::Done
 }
 
-/// The race globals of `nfsgba_formats::career::Race` from RAM.
-pub fn race(m: &Mem) -> Race {
-    let mut results = [0; 0x40];
-    results.copy_from_slice(m.bytes(0x0300_5650, 0x40));
-    Race {
-        mode: m.u32(0x0300_56E0),
-        lapped: m.i32(route::CIRCUIT) != 0,
-        laps: m.i32(0x0300_56E4),
-        opponents: m.u32(route::OPPONENTS),
-        time: m.u32(0x0300_5800),
-        finished: m.i32(0x0300_61A4) != 0,
-        view: m.u32(0x0300_57F8),
-        player: m.u32(PLAYER),
-        difficulty: m.u32(0x0300_5608),
-        state48: m.u32(RACE_PHASE),
-        rand: m.u32(0x0300_64C8),
-        wrong_way: m.i32(0x0300_5384) != 0,
-        results,
-    }
+/// `FUN_0814efa8`: put car `i` back on the road at waypoint `wp`: the entity on the floor there with the
+/// waypoint's heading as is, the body 0x1900 above it, upright along the waypoint's line. Momenta and velocities
+/// are kept.
+pub(crate) fn put_back_on_road(w: &mut CarWorld, i: usize, wp: usize) {
+    let e = &ent!(w, i);
+    let (index, seg) = route::advance(w, e.segment as u32, e.waypoint as i32);
+    let first = w.route.line.sections[seg as usize].first as i32;
+    let (p, extra) = (w.route.line.points[wp], w.route.extra[wp]);
+    let (x, z) = (p.x << 8, p.z << 8);
+    let sector = extra.sector as u16;
+    let y = w.floor_height(sector as u32, x >> 8, z >> 8);
+    let line = w.route.planes[(index + first) as usize];
+    let heading = atan2(line[0], line[1]);
+    let e = &mut ent!(w, i);
+    e.pos = [x, y, z];
+    e.heading = extra.heading as i32;
+    e.sector = sector;
+    let rom = w.rom;
+    let body = &mut car!(w, i).body;
+    body.pos = [x, y.wrapping_sub(0x1900), z];
+    crate::init::orient(rom, body, heading);
 }
 
-/// Writes back what the race rules change: someone finished (0x030061A4), the result bytes (0x03005650..), the
-/// rand_table index.
-pub fn store_race(m: &mut Mem, r: &Race) {
-    if r.finished != (m.i32(0x0300_61A4) != 0) {
-        m.set_i32(0x0300_61A4, r.finished as i32);
-    }
-    m.set_bytes(0x0300_5650, &r.results);
-    m.set_u32(0x0300_64C8, r.rand);
-}
-
-/// Car `e` as `nfsgba_formats::career::Racer`: entity `+0x00` id, `+0x08` flags, `+0x0C/+0x14` position, `+0x4A`
-/// state, `+0x72` section, `+0x90` segment; driver `+0xA8` place, `+0xAC` distance, `+0xB4/+0xB8/+0xBC` best lap,
-/// lap start, finish, `+0xC5` laps left, `+0xF8..` knock-out words, `+0x444` side, `+0x4D6` section changed,
-/// `+0x4D8` flags, `+0x4E8` life, `+0x4EC/+0x4EE/+0x4F0` wrong-way, wall and hit counters.
-pub fn racer(m: &Mem, e: u32) -> Racer {
-    let p = m.u32(e + 0x8C);
-    Racer {
-        id: m.u16(e),
-        section: m.u16(e + 0x72),
-        segment: m.i16(e + 0x90),
-        state: m.u16(e + 0x4A),
-        entity_flags: m.u16(e + 8),
-        x: m.i32(e + 0xC),
-        z: m.i32(e + 0x14),
-        place: m.i32(p + 0xA8),
-        distance: m.i32(p + 0xAC),
-        best_lap: m.u32(p + 0xB4),
-        lap_start: m.u32(p + 0xB8),
-        finish: m.u32(p + 0xBC),
-        laps_left: m.i8(p + 0xC5),
-        flags: m.u16(p + 0x4D8),
-        life: m.i32(p + 0x4E8),
-        wrong_way: m.i16(p + 0x4EC),
-        wall: m.i16(p + 0x4EE),
-        hit: m.i16(p + 0x4F0),
-        knockout: [m.u32(p + 0xF8), m.u32(p + 0xFC), m.u32(p + 0x100)],
-        side: m.i32(p + 0x444),
-        section_changed: m.u16(p + 0x4D6),
+fn release_accelerator(w: &mut CarWorld, player: bool) {
+    if player && w.profile.accelerating != 0 {
+        w.profile.accelerating = 0;
+        w.profile.gear_changed = 1;
     }
 }
 
-/// Writes car `e`'s `Racer` fields back (unchanged ones rewrite the same bytes).
-pub fn store_racer(m: &mut Mem, e: u32, r: &Racer) {
-    let p = m.u32(e + 0x8C);
-    m.set_u16(e + 0x72, r.section);
-    m.set_i16(e + 0x90, r.segment);
-    m.set_u16(e + 0x4A, r.state);
-    m.set_u16(e + 8, r.entity_flags);
-    m.set_i32(p + 0xA8, r.place);
-    m.set_i32(p + 0xAC, r.distance);
-    m.set_u32(p + 0xB4, r.best_lap);
-    m.set_u32(p + 0xB8, r.lap_start);
-    m.set_u32(p + 0xBC, r.finish);
-    m.set_u8(p + 0xC5, r.laps_left as u8);
-    m.set_u16(p + 0x4D8, r.flags);
-    m.set_i32(p + 0x4E8, r.life);
-    m.set_i16(p + 0x4EC, r.wrong_way);
-    m.set_i16(p + 0x4EE, r.wall);
-    m.set_i16(p + 0x4F0, r.hit);
-    m.set_vec3(p + 0xF8, r.knockout.map(|v| v as i32));
-    m.set_i32(p + 0x444, r.side);
-    m.set_u16(p + 0x4D6, r.section_changed);
-}
-
-/// `FUN_0814efa8`: put car `e` back on the road at waypoint `w` (24 bytes: x, z, `+0x0A` u16 heading, `+0x14`
-/// sector): the entity on the floor there with heading `+0x0A` as is, the body 0x1900 above it, upright along the
-/// waypoint's line (`*0x03005FB4`, 0x20 bytes per line). Momenta and velocities are kept.
-pub(crate) fn put_back_on_road(m: &mut Mem, e: u32, w: u32) {
-    let p = m.u32(e + 0x8C);
-    let (index, seg) = route::advance(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
-    let first = m.i32(m.u32(W_SEGMENTS) + seg * 8 + 4);
-    let (x, z) = (m.i32(w) << 8, m.i32(w + 4) << 8);
-    m.set_i32(e + 0xC, x);
-    m.set_i32(e + 0x14, z);
-    m.set_u32(e + 0x2C, m.u16(w + 10) as u32);
-    m.set_u16(e + 0x78, m.i32(w + 0x14) as u16);
-    let y = world::floor_height(m, m.u16(e + 0x78) as u32, x >> 8, z >> 8);
-    m.set_i32(e + 0x10, y);
-    m.set_vec3(p + 0xD0, [x, y.wrapping_sub(0x1900), z]);
-    let line = m.u32(0x0300_5FB4).wrapping_add((index + first) as u32 * 0x20);
-    let heading = atan2(m.i32(line), m.i32(line + 4));
-    crate::init::orient(m, p + 0xC8, heading);
-}
-
-fn release_accelerator(m: &mut Mem, player: bool, stats: u32) {
-    if player && m.i32(stats + 0x2E8) != 0 {
-        m.set_i32(stats + 0x2E8, 0);
-        m.set_i32(stats + 0x2E0, 1);
-    }
-}
-
-/// The lane nearest the car (`FUN_0813d1f0` tail, as `FUN_081402bc` + `FUN_08140274` with all lanes).
-fn nearest_lane_of(m: &Mem, e: u32) -> u32 {
-    let w = route::waypoint_at(m, m.u16(e + 0x72) as u32, m.i16(e + 0x90) as i32);
-    let x = if m.u32(W_SEGMENTS) == 0 {
-        0
-    } else {
-        let a = m.u16(w + 0xA) as i32 - 0x1000;
-        let v = cos(m, a)
-            .wrapping_mul((m.i32(e + 0xC) >> 8) - m.i32(w))
-            .wrapping_add(((m.i32(e + 0x14) >> 8) - m.i32(w + 4)).wrapping_mul(sin(m, a)));
-        (if v < 0 { v + 0x3FFF } else { v }) >> 14
-    };
-    route::nearest_lane(m, x, -1)
-}
-
-/// Manual gearbox: R shifts up, L down, both together wait for release (state at 0x03006074).
-fn manual_shift(m: &mut Mem, p: u32, handling: u32, input: u32, pressed: u32) {
-    const STATE: u32 = 0x0300_6074;
-    let state = m.i16(STATE);
+/// Manual gearbox: R shifts up, L down, both together wait for release (state in `g.shift_state`).
+fn manual_shift(w: &mut CarWorld, i: usize, input: u32, pressed: u32) {
+    let state = w.g.shift_state;
+    let top_gear = w.data.car.handling[ent!(w, i).car as usize][0x15];
+    let player = w.is_player(i);
     let next = match state {
         1 => {
             if input & 0x100 != 0 {
@@ -838,12 +745,13 @@ fn manual_shift(m: &mut Mem, p: u32, handling: u32, input: u32, pressed: u32) {
                 if input & 0x200 != 0 {
                     return;
                 }
-                let g = (m.i32(p + 0x40) - 1).max(0);
-                if m.i32(RACE_PHASE) != 9 {
-                    if m.i32(p + 0x40) != g {
-                        gear_changed(m, p);
+                let gear = car!(w, i).gear;
+                let g = (gear - 1).max(0);
+                if w.g.phase != 9 {
+                    if gear != g {
+                        gear_changed(w, player);
                     }
-                    m.set_i32(p + 0x40, g);
+                    car!(w, i).gear = g;
                 }
                 0
             }
@@ -866,12 +774,13 @@ fn manual_shift(m: &mut Mem, p: u32, handling: u32, input: u32, pressed: u32) {
                 if input & 0x100 != 0 {
                     return;
                 }
-                let g = (m.i32(p + 0x40) + 1).min(m.i32(handling + 0x54));
-                if m.i32(RACE_PHASE) != 9 {
-                    if m.i32(p + 0x40) != g {
-                        gear_changed(m, p);
+                let gear = car!(w, i).gear;
+                let g = (gear + 1).min(top_gear);
+                if w.g.phase != 9 {
+                    if gear != g {
+                        gear_changed(w, player);
                     }
-                    m.set_i32(p + 0x40, g);
+                    car!(w, i).gear = g;
                 }
                 0
             }
@@ -879,5 +788,5 @@ fn manual_shift(m: &mut Mem, p: u32, handling: u32, input: u32, pressed: u32) {
         3 if input & 0x300 == 0 => 0,
         _ => return,
     };
-    m.set_i16(STATE, next);
+    w.g.shift_state = next;
 }

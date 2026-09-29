@@ -5,7 +5,10 @@ use nfsgba_game::trace::Trace;
 use nfsgba_sim::{
     Mem,
     layout::{Field, Layout, Ptr},
-    state::{Camera, Car, Entity, Input, Race, Screen, WORLD, WorldHeader},
+    state::{
+        Camera, Car, CarGlobals, CarProfile, Entity, Input, Query, Race, Screen, SectionRec, WORLD, WaypointRec,
+        WorldHeader,
+    },
 };
 
 const TRACES: [(&str, &str); 5] = [
@@ -35,6 +38,15 @@ fn round_trip(m: &Mem) -> Mem {
     copy::<Input>(m, &mut c, 0);
     copy::<Camera>(m, &mut c, 0);
     copy::<Screen>(m, &mut c, 0);
+    copy::<CarGlobals>(m, &mut c, 0);
+    copy::<Query>(m, &mut c, 0);
+    copy::<CarProfile>(m, &mut c, m.u32(0x0300_56EC));
+    for k in 0..10 {
+        copy::<SectionRec>(m, &mut c, w.sections + 8 * k);
+    }
+    for k in 0..0x100 {
+        copy::<WaypointRec>(m, &mut c, w.racing_line + 0x18 * k);
+    }
     w.view.write(&mut c, &w.view.read(m));
     w.visible.write(&mut c, &w.visible.read(m));
     race.profile.write(&mut c, &race.profile.read(m));
@@ -85,6 +97,27 @@ fn store_of_load_changes_no_byte() {
                 .map(|o| 0x0300_0000 + o as u32));
             assert_eq!(diff, None, "{name} state {k}: a store changed {diff:#x?}");
         }
+    }
+}
+
+/// The car step's stores (`nfsgba_sim::ram::store`) write these together: no field of one may overlap another's.
+#[test]
+fn car_step_globals_are_disjoint() {
+    let Some(dir) = nfsgba_testkit::fixture("game-loop") else {
+        return;
+    };
+    let trace = Trace::load(&dir, "drive").unwrap();
+    let s = &trace.states[0];
+    let m = Mem::new(Vec::new(), s[..0x4_0000].to_vec(), s[0x4_0000..0x4_8000].to_vec());
+    let mut all = [
+        spans::<CarGlobals>(0),
+        spans::<Query>(0),
+        spans::<CarProfile>(m.u32(0x0300_56EC)),
+    ]
+    .concat();
+    all.sort_by_key(|&(_, a, _)| a);
+    for p in all.windows(2) {
+        assert!(p[0].2 <= p[1].1, "{} overlaps {}", p[0].0, p[1].0);
     }
 }
 

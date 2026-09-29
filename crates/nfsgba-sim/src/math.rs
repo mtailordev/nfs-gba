@@ -2,8 +2,6 @@
 //! root, and the 20.12 fixed-point vector, matrix and quaternion helpers. Every function names the game function
 //! it reproduces. Arithmetic wraps like the ARM does.
 
-use crate::mem::Mem;
-
 /// `atan2_q14` (`FUN_0815f9cc`); see `nfsgba_fixed::atan2_q14`.
 pub use nfsgba_fixed::atan2_q14 as atan2;
 pub use nfsgba_fixed::{angle_diff, div, isqrt, udiv, umod};
@@ -29,23 +27,23 @@ pub fn mul12(a: i32, b: i32) -> i32 {
 }
 
 /// `sin_q14` (`FUN_0815f948`) on the ROM in `mem`.
-pub fn sin(mem: &Mem, angle: i32) -> i32 {
-    nfsgba_fixed::sin_q14(&mem.rom, angle)
+pub fn sin(rom: &(impl AsRef<[u8]> + ?Sized), angle: i32) -> i32 {
+    nfsgba_fixed::sin_q14(rom.as_ref(), angle)
 }
 
 /// `cos_q14` (`FUN_0815f988`) on the ROM in `mem`.
-pub fn cos(mem: &Mem, angle: i32) -> i32 {
-    nfsgba_fixed::cos_q14(&mem.rom, angle)
+pub fn cos(rom: &(impl AsRef<[u8]> + ?Sized), angle: i32) -> i32 {
+    nfsgba_fixed::cos_q14(rom.as_ref(), angle)
 }
 
 /// `recip_q24` (`FUN_08149178`) on the ROM in `mem`.
-pub fn recip(mem: &Mem, x: i32) -> i32 {
-    nfsgba_fixed::recip_q24(&mem.rom, x)
+pub fn recip(rom: &(impl AsRef<[u8]> + ?Sized), x: i32) -> i32 {
+    nfsgba_fixed::recip_q24(rom.as_ref(), x)
 }
 
 /// Reciprocal table entry (`FUN_08147b18`, `FUN_0814ca84`) on the ROM in `mem`.
-pub fn recip_entry(mem: &Mem, k: i32) -> i32 {
-    nfsgba_fixed::recip(&mem.rom, k)
+pub fn recip_entry(rom: &(impl AsRef<[u8]> + ?Sized), k: i32) -> i32 {
+    nfsgba_fixed::recip(rom.as_ref(), k)
 }
 
 pub type V3 = [i32; 3];
@@ -91,14 +89,14 @@ pub fn mat_mul(v: V3, m: &[i32; 9]) -> V3 {
 }
 
 /// `FUN_08147a6c`: normalise to length 0x1000 (through `isqrt` and `recip`); returns the length.
-pub fn normalize(mem: &Mem, v: &mut V3) -> i32 {
+pub fn normalize(rom: &(impl AsRef<[u8]> + ?Sized), v: &mut V3) -> i32 {
     let sq = v[0]
         .wrapping_mul(v[0])
         .wrapping_add(v[1].wrapping_mul(v[1]))
         .wrapping_add(v[2].wrapping_mul(v[2]));
     let len = isqrt(sq as u32);
     if len != 0 {
-        let r = recip(mem, len);
+        let r = recip(rom, len);
         *v = [mul12(v[0], r), mul12(v[1], r), mul12(r, v[2])];
     }
     len

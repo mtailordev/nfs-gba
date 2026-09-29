@@ -21,6 +21,12 @@ pub struct Mem {
     data: OnceLock<Arc<GameData>>,
 }
 
+impl AsRef<[u8]> for Mem {
+    fn as_ref(&self) -> &[u8] {
+        &self.rom
+    }
+}
+
 impl Mem {
     /// ROM plus RAM snapshots (256 KiB EWRAM, 32 KiB IWRAM), e.g. from `mgba_remote.lua`'s `dump`.
     pub fn new(rom: Vec<u8>, ewram: Vec<u8>, iwram: Vec<u8>) -> Self {

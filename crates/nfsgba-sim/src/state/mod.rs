@@ -3,6 +3,9 @@
 //! `docs/engine/address-map.md`; an offset the ported code touches without a known meaning is `u_<offset>`.
 //! Bytes no field declares are ones no ported code reads or writes.
 
+pub mod car;
+pub use car::*;
+
 use nfsgba_formats::render::Piece;
 
 use crate::layout;
@@ -99,6 +102,7 @@ layout! {
         0x48 material: u16,
         /// 0 init, 0x100 racing, 2 finished.
         0x4A race_state: u16,
+        0x4C u_4c: u16,
         /// Handler index (table `0x087F38B8`).
         0x4E handler: u16,
         /// Traffic: speed-up counter, knocked-away timer.
@@ -130,163 +134,6 @@ layout! {
         0x9C traffic_waypoint: i16,
         0x9E traffic_mode: i16,
         0xA0 u_a0: u16,
-    }
-
-    /// The car's rigid body (physics struct `+0xC8`; `body.rs`).
-    pub struct RigidBody: 0xB4 {
-        0x00 mass: i32,
-        0x04 inv_mass: i32,
-        /// 8.8.
-        0x08 pos: [i32; 3],
-        /// x, y, z, w; 1.0 = 0x1000.
-        0x20 quat: [i32; 4],
-        0x30 momentum: [i32; 3],
-        0x48 ang_momentum: [i32; 3],
-        0x54 vel: [i32; 3],
-        /// 3×3 row-major, 20.12; row 2 is forward.
-        0x60 rot: [i32; 9],
-        0x90 ang_vel: [i32; 3],
-        0x9C quat_rate: [i32; 4],
-        0xAC inertia: i32,
-        0xB0 inv_inertia: i32,
-    }
-
-    /// A wheel (physics struct `+0x18C + 0x94·i`; 0 and 1 front).
-    pub struct Wheel: 0x94 {
-        0x0C contact: [i32; 3],
-        /// In world axes, then in car axes.
-        0x18 world_pos: [i32; 3],
-        0x48 car_pos: [i32; 3],
-        0x64 spin: i32,
-        0x68 spring: i32,
-        0x6C damping: i32,
-        0x70 drive: i32,
-        0x74 brake: i32,
-        0x78 ride_height: i32,
-        0x7C slip: i32,
-        0x80 grip: i32,
-        0x84 base_grip: i32,
-        0x88 u_88: i32,
-        0x8C u_8c: i32,
-        /// The sector under the wheel.
-        0x90 sector: u16,
-        0x92 u_92: u16,
-    }
-
-    /// The car physics struct (0x4FC bytes, heap, entity `+0x8C`): the driver of a player, opponent or wingman car.
-    pub struct Car: 0x4FC {
-        /// The heading the chase camera follows (14-bit), and its sign word.
-        0x000 heading: i32,
-        0x004 heading_sign: i32,
-        /// Suspension per point: vertical speed.
-        0x008 point_speed: [i32; 4],
-        0x018 u_018: i32,
-        0x01C u_01c: i32,
-        /// ±0x80000.
-        0x020 steering: i32,
-        /// 0..0x9999.
-        0x024 throttle: i32,
-        0x028 brake: i32,
-        0x02C u_02c: i32,
-        /// Inertia terms from handling `+0x00/+0x08/+0x0C/+0x10`.
-        0x034 inertia: [i32; 2],
-        0x03C revs: i32,
-        /// 0 reverse, 1 neutral, 2..7 first..sixth.
-        0x040 gear: i32,
-        /// |`forward_speed`|.
-        0x044 speed: i32,
-        /// Suspension: points on the floor, spring position, spring rate and height per point.
-        0x048 points_on_floor: i32,
-        0x04C spring: [i32; 4],
-        0x05C spring_rate: [i32; 4],
-        0x06C point_height: [i32; 4],
-        /// Wheel angle (`>> 8`; the rim redraw rotates by it). physics.md calls it the odometer.
-        0x090 wheel_angle: i32,
-        /// AI: target heading (14-bit), curve term.
-        0x094 target_heading: i32,
-        0x098 curve: i32,
-        0x09C gearbox_pause: i32,
-        /// Forward speed × 32.
-        0x0A0 forward_speed: i32,
-        /// Race position (1-based) and race progress.
-        0x0A8 position: i32,
-        0x0AC progress: i32,
-        0x0B0 u_0b0: i32,
-        /// Best lap time and lap start time (race time).
-        0x0B4 best_lap: i32,
-        0x0B8 lap_start: i32,
-        0x0BC u_0bc: u32,
-        /// Nearest lane (`0x087F4120`).
-        0x0C0 lane: u16,
-        0x0C2 u_0c2: u16,
-        0x0C5 laps_left: i8,
-        0x0C6 laps: u8,
-        0x0C8 body: RigidBody,
-        /// Grid/skill value.
-        0x188 grid: i32,
-        0x18C wheels: [Wheel; 4],
-        /// Sum of the wheel spins.
-        0x3DC wheel_spin: i32,
-        /// Upgrade levels (the last is 1 in career mode 2).
-        0x3E0 upgrades: [i32; 10],
-        /// Gear ratios × final drive: reverse, neutral, first..sixth.
-        0x408 gear_ratios: [i32; 8],
-        /// Torque multiplier (0x8000 once the timer runs out), its timer, 1 << lane.
-        0x428 torque_multiplier: i32,
-        0x42C torque_timer: i32,
-        0x430 lane_bit: u32,
-        0x434 u_434: u16,
-        0x436 u_436: u16,
-        /// Centre-of-mass offset (y forced to −0x1800).
-        0x438 centre_of_mass: [i32; 3],
-        /// Launch/limiter counter.
-        0x444 launch: i32,
-        /// Contact flags: 0x10 wall, 2/4 side, 1 blocks the parked stop, 8 kept.
-        0x448 contact: u32,
-        0x44C upshift_rpm: i32,
-        0x450 lower_rpm: i32,
-        0x454 max_rpm: i32,
-        0x458 engine_braking: i32,
-        /// Shift rpm (torque peak).
-        0x45C shift_rpm: i32,
-        /// Neutral revs torque multiplier (0x1000..0x1800).
-        0x460 neutral_torque: i32,
-        /// Torque curve (18 words from handling `+0x6C`; 10 used).
-        0x464 torque_curve: [i32; 18],
-        0x4AE prev_control: u16,
-        0x4B0 u_4b0: i32,
-        /// Bit 0: hard wall hit.
-        0x4B4 hard_hit: u32,
-        0x4B8 u_4b8: i32,
-        0x4BC torque_scale: i32,
-        /// Last touched wall with flag 0x4000.
-        0x4C0 wall_4000: u32,
-        0x4C4 u_4c4: u32,
-        /// Nitro: tank, drain and torque factors, on.
-        0x4C8 nitro_tank: i32,
-        0x4CC nitro_drain: u16,
-        0x4CE nitro_torque: u16,
-        0x4D0 u_4d0: u8,
-        0x4D1 nitro_on: u8,
-        0x4D2 u_4d2: u16,
-        0x4D4 u_4d4: u16,
-        0x4D6 u_4d6: u16,
-        /// 1 before the start line, 2 after waypoints 1..9, 8 out of the ranking, 0x10 no yaw damping.
-        0x4D8 route_flags: u16,
-        0x4DA u_4da: u16,
-        0x4DC u_4dc: i16,
-        0x4DE u_4de: i16,
-        0x4E0 u_4e0: i16,
-        0x4E2 u_4e2: u16,
-        0x4E4 tipped: i16,
-        0x4E6 airborne: i16,
-        0x4E8 hunter_life: i32,
-        0x4EC wrong_way: i16,
-        0x4EE stationary: i16,
-        0x4F0 u_4f0: u16,
-        0x4F2 u_4f2: u16,
-        0x4F4 u_4f4: u32,
-        0x4F8 u_4f8: u16,
     }
 
     /// The race globals (IWRAM).
@@ -425,6 +272,11 @@ mod tests {
         assert_disjoint::<ListEntry>("ListEntry");
         assert_disjoint::<Profile>("Profile");
         assert_disjoint::<Piece>("Piece");
+        assert_disjoint::<CarProfile>("CarProfile");
+        assert_disjoint::<Query>("Query");
+        assert_disjoint::<CarGlobals>("CarGlobals");
+        assert_disjoint::<SectionRec>("SectionRec");
+        assert_disjoint::<WaypointRec>("WaypointRec");
         assert!(<Camera as crate::layout::Layout>::FIELDS.contains(&("matrix", CAMERA_MATRIX, 48)));
     }
 }

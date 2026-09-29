@@ -3,7 +3,7 @@
 //! random inputs (`vehicle-physics/suspension.jsonl`). Each case must give the same return value, points, sector
 //! outputs and RAM writes. Skipped when the cases are absent.
 
-use nfsgba_sim::{Mem, contact};
+use nfsgba_sim::{Mem, ram::contact};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
