@@ -65,6 +65,8 @@ Then: boot → menus → race at 240×160 (a playable reference), the timing mod
 
 ## Environment notes
 
+- **GitHub:** private repo `mtailordev/nfs-gba` (`origin`); push `main` only. The account blocks pushes that expose its private email, so this repo commits as `18623619+mtailordev@users.noreply.github.com` (local git config). On 2026-09-29 the whole history was rewritten to that address (a backup bundle of the old refs is in `data/work/_archive/pre-email-rewrite.bundle`). Branches made before the rewrite (the old `worktree-agent-*` ones, and the dedup agent's) must be **rebased** onto `main`, never merged, or the old addresses come back and the push is refused.
+
 - Toolchains: Rust 1.98.1 (clippy, rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10); the analysis venv is `.venv` (unicorn, capstone, numpy, pillow).
 - `~/.cargo/bin` may be missing from PATH in the tool shells: prefix `export PATH="/c/Users/cyntrex/.cargo/bin:$PATH"`.
 - In the Bash tool, `python` is a pyenv-win batch shim. **Never run `python -` or multi-line `python -c`**: they hang, and stopping the shell task leaves the `python.exe` running (three strays were found and ended by PID in the review). Write a script file and run it with `.venv/Scripts/python.exe`.
