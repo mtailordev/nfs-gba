@@ -2,9 +2,9 @@
 
 Session state for whoever picks this up next. Read `AGENTS.md` first, then this file, then `docs/DECISIONS.md` (the newest entries set the contract) and `docs/FIDELITY.md` (every open deviation).
 
-## Status (2026-09-29, after the project review)
+## Status (2026-09-29, after the tooling bake-off)
 
-**Phase: consolidation, then milestones.** Next session: the tooling bake-off first ("Start here" below). No new subsystems until the consolidation is done (user decision, `docs/DECISIONS.md`).
+**Phase: consolidation, then milestones.** The toolchain is decided (`docs/DECISIONS.md`, "tooling bake-off"). Next session: the consolidation ("Start here" below). No new subsystems until it is done (user decision, `docs/DECISIONS.md`).
 
 What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 - **Data:** every asset family decoded from the ROM (text, images, models, city, routes, audio, career tables, fonts, HUD and menu layouts); 98.9% of the ROM's bytes attributed (`tools/rom_attribution.py`).
@@ -36,23 +36,16 @@ What exists and is exact (details and evidence in `docs/FIDELITY.md` "Closed"):
 
 ## Start here (next session)
 
-Everything is merged and pushed (`origin/main`), nothing runs, the gate passes 7/7. The first session spent far too many tokens (about 15–20 M in agents; see "How we work" for why). The next session starts with a **small tooling bake-off**, decides the toolchain, records it in `docs/DECISIONS.md`, and only then continues the consolidation below, under the efficiency rules.
+Everything is merged and pushed (`origin/main`), nothing runs, the gate passes.
 
-### 1. Tooling bake-off (first task, timeboxed: a few hours, well under 1 M tokens)
+### 1. Toolchain (decided 2026-09-29; results in `docs/engine/harness.md` "Tool bake-off")
 
-Goal: stop playing the game in the mGBA window to reach states. For each candidate, run one small test, measure, and fill the results table in `docs/engine/harness.md` ("Tool bake-off"). Then pick the stack.
+- **Porting a function:** the oracle, `tools/oracle/cases.py` (a case set module, JSONL, a Rust replay test; example: `cases.py unlock` → `crates/nfsgba-formats/src/unlock.rs`, about 3 minutes for a small function).
+- **A race state for any setup:** `cases.py synth make NAME ENV ROUTE MODE CAR` → `cargo run -p nfsgba-game --example synth_race -- NAME` → `cases.py synth check NAME` (our `race_start` against the game's code), then `Game::frame` for later frames.
+- **Any other state, long runs, screenshots:** the headless mGBA core, `tools/retro.py` (loads `.ss`, key scripts from power-on, 22× real time, `Retro.dump` → oracle snapshot). Never drive the mGBA window by hand.
+- **Breakpoint recordings** (car-step traces, IRQ timing, coverage): the existing `tools/record.py` recorders in mGBA, only when a new trace is really needed. If that becomes frequent, gba-recomp's `gba-core` (Rust, hooks at any PC; its timing differs from mGBA) is the candidate.
 
-| # | Candidate | Small test | Measure |
-|---|---|---|---|
-| B1 | **No emulator: the function oracle** (`tools/oracle`, unicorn) plus **synthesized states** (our exact `race_init::race_start` builds race states from setup inputs; poke the few RAM variables that select a screen/mode) | Port-check one small unported function end to end with `tools/oracle/cases.py` (cases → Rust test green); build a race state for a route/car/mode not in any fixture and run one original function on it | Time and tokens from nothing to a green test; calls/s; can the synthesized state replace an mGBA capture? |
-| B2 | **Headless mGBA as a libretro core** (`mgba_libretro.dll` from the libretro buildbot into `ext/`, never committed; MPL-2.0) driven from Python via `ctypes` (a ~200-line host: load core and ROM, `retro_run` per frame, input per frame, memory via the core's memory maps, `retro_serialize`/`unserialize`) | Reproduce an existing game-loop fixture (`game-loop/*` trace frames or `race-init` captures) byte for byte at frame boundaries; run the same input twice (determinism); try loading `race.ss` | Frames/s (target: far above real time); exact vs the fixtures; determinism; can it load our savestates, or do we reach states by input/RAM pokes? |
-| B3 | **gba-recomp** (`ext/gba-recomp`, a release build exists; MIT/Apache/CC0; generated code stays local, never committed) | Build a native Carbon binary; run to the reference race; compare RAM at a frame boundary with the `mgba/race` dump; try a hook on `main_frame` | Does it run Carbon correctly? Speed; hook API usability; exactness |
-| B4 | **mGBA's GDB stub** (`ext/mgba-dev/mgba-sdl.exe -g`), driven from Python over the GDB remote protocol | Break at `main_frame` (`0x0812ae64`), read IWRAM, continue 10 times | Latency per breakpoint; stability. Only needed if B2/B3 can't break on functions |
-| B5 | **Our own rewrite as the driver** (`nfsgba-game` from `race_start`) | Run 600 frames of a synthesized race with scripted keys, headless | Frames/s; is it a usable state generator for the oracle? |
-
-Decide by: exactness against the existing fixtures, speed, determinism, setup and maintenance cost, breakpoint support, licence. Expected outcome (to be confirmed, not assumed): B1 for all function-level porting; B2 (or B3 if it works) for whole-frame and long-run checks; B4 only as a fallback; the mGBA window and the Lua file-polling remote retired except for occasional manual looks. Write the decision into `docs/DECISIONS.md`, update `docs/TOOLS.md`, delete the losers' code.
-
-### 2. Consolidation (after the bake-off)
+### 2. Consolidation (next)
 
 Done: the test kit and merge gate (`tools/gate.py`, `docs/engine/testkit.md`, `docs/engine/fixtures.csv`); one recorder, one oracle CLI, one script loader (`tools/record.py`, `tools/oracle/cases.py`); one copy of the game's maths (`crates/nfsgba-fixed`), one decoder, one dump reader, one copy of each shared helper; ledgers gated (every `NOT 1:1` names an open ID).
 

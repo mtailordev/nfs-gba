@@ -1,5 +1,5 @@
 """Headless mGBA libretro core driven through ctypes. Core: ext/libretro/mgba_libretro.dll (never committed).
-CLI: retro.py [--ss race.ss] FRAMES   (runs, prints IWRAM sha1).  Not a game-code runtime; a test oracle only."""
+CLI: retro.py [--ss race.ss] FRAMES [--dump PREFIX]   (runs, prints the RAM sha1, writes an oracle snapshot).  Not a game-code runtime; a test oracle only."""
 import ctypes as C
 import hashlib
 import struct
@@ -165,6 +165,16 @@ class Retro:
             im = Image.frombuffer("RGB", (pitch // 2, h), data, "raw", "BGR;16", 0, 1).crop((0, 0, w, h))
         im.convert("RGB").save(path)
 
+    DOMAINS = (("wram", 0x02000000, 0x40000), ("iwram", 0x03000000, 0x8000), ("io", 0x04000000, 0x400),
+               ("palette", 0x05000000, 0x400), ("vram", 0x06000000, 0x18000), ("oam", 0x07000000, 0x400))
+
+    def dump(self, prefix):
+        """Writes an oracle / `Dump::load` snapshot: work/e5298b24/PREFIX.<domain>.bin (no BIOS: the oracle runs SWIs itself)."""
+        out = data_dir() / "work" / "e5298b24" / prefix
+        out.parent.mkdir(parents=True, exist_ok=True)
+        for name, addr, size in self.DOMAINS:
+            Path(f"{out}.{name}.bin").write_bytes(self.read(addr, size))
+
     def ram_sha1(self):
         s = self.serialize()
         return hashlib.sha1(s[0x21000:0x61000] + s[0x19000:0x21000]).hexdigest()
@@ -175,5 +185,9 @@ if __name__ == "__main__":
     if a[:1] == ["--ss"]:
         r.load_ss(a[1])
         a = a[2:]
+    dump = a[a.index("--dump") + 1] if "--dump" in a else None
+    a = [x for x in a if x not in ("--dump", dump)]
     r.run(int(a[0]) if a else 1)
+    if dump:
+        r.dump(dump)
     print(r.version, r.frames, r.ram_sha1())

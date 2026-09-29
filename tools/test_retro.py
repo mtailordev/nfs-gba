@@ -17,9 +17,10 @@ class RetroTest(unittest.TestCase):
         r = Retro()
         r.load_ss(REF / "race.ss")
         r.run(1)
-        for name, addr in (("iwram", 0x03000000), ("wram", 0x02000000), ("palette", 0x05000000), ("oam", 0x07000000)):
-            ref = (REF / f"race.{name}.bin").read_bytes()
-            self.assertEqual(r.read(addr, len(ref)), ref, name)
+        r.dump("retro/test")  # io differs in 4 hardware-register bytes (SIOCNT, IF, HALTCNT), not game state
+        for name in ("wram", "iwram", "palette", "vram", "oam"):
+            got = (data_dir() / "work" / "e5298b24" / "retro" / f"test.{name}.bin").read_bytes()
+            self.assertEqual(got, (REF / f"race.{name}.bin").read_bytes(), name)
 
 
 if __name__ == "__main__":

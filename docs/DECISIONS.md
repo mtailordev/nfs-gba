@@ -2,6 +2,16 @@
 
 Newest first. Each entry: what, why, alternatives.
 
+## 2026-09-29 (tooling bake-off)
+
+- **The toolchain** (measurements in `docs/engine/harness.md` "Tool bake-off"):
+  - **Function porting: the oracle** (`tools/oracle`, `cases.py`) on snapshots, with **synthesized race states** (`cases.py synth`: the setup poked into a capture, our exact `race_start`, checked against the game's code). 9,000 cases green on the first run, about 3 minutes per small function.
+  - **States and long runs: the headless mGBA libretro core** (`tools/retro.py`, `ext/libretro/mgba_libretro.dll`, MPL-2.0). It loads our `.ss` files, reaches menus from power-on by scripted keys, and is byte-exact against the `mgba/race` fixture in RAM, VRAM, palette and OAM. It runs at 22× real time in a race and is deterministic. `Retro.dump` writes a snapshot the oracle and `Dump::load` read.
+  - **Race states after the start: `nfsgba-game`** (2,867 game frames/s, deterministic).
+  - **Breakpoint recordings** (per-car-step traces, IRQ timing points, coverage) stay on the existing mGBA Lua recorders (`tools/record.py`) until one is needed often. Nobody drives the mGBA window by hand to reach a state: states come from `retro.py` key scripts, `.ss` files or synthesis.
+  - Why: exact against the existing fixtures, fast, deterministic, no build and no window; together they cover every need except breakpoints, which the recorders already have.
+  - Alternatives: **gba-recomp** runs Carbon correctly and allows a hook at any PC from Rust, but its cycle model moves the timing bytes (frame counter, timer 3, rand index) within 300 frames, and it has no savestates. It stays in `ext/` as the candidate if a headless hook recorder becomes necessary. **The GDB stub** was not tried: gba-recomp answers whether headless breakpoints are possible, and they are not needed yet.
+
 ## 2026-09-29 (efficiency; the user's request)
 
 - **How we work from now on** (binding; details in `PROGRESS.md` "How we work"): fresh session per milestone with `PROGRESS.md` as the handoff; no forked agents, only fresh agents with a one-page brief; a cheaper model for mechanical porting, tests and tools, the top model for hard reverse engineering, design and review; at most 2–3 agents at once; oracle first and no playing the game in the emulator to reach states; exact where observable, invisible internals documented once and not chased; minimal docs; typed state and one copy of each helper in new code.

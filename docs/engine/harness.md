@@ -188,17 +188,17 @@ deterministic from a savestate (every recorder relies on this).
   - every environment once (sky, palette);
   - the pause menu options.
 
-## Tool bake-off (to fill in next session)
+## Tool bake-off (2026-09-29)
 
-Plan and candidates in `PROGRESS.md` ("Start here", B1–B5). One row per candidate; the decision goes into `docs/DECISIONS.md`.
+The decision is in `docs/DECISIONS.md`. Measured on the canonical ROM.
 
 | # | Candidate | Test run | Speed | Exact vs fixtures | Deterministic | Breakpoints | Setup / licence | Verdict |
 |---|---|---|---|---|---|---|---|---|
-| B1 | Oracle + synthesized states | | | | | | | |
-| B2 | Headless libretro mGBA core | | | | | | | |
-| B3 | gba-recomp native build | | | | | | | |
-| B4 | mGBA GDB stub (`mgba-sdl.exe -g`) | | | | | | | |
-| B5 | `nfsgba-game` as state generator | | | | | | | |
+| B1 | Oracle + synthesized states | Ported `unlock_table_index`/`unlock_id_adjust`/`unlock_group` (`cases.py unlock`, 9,000 cases → `nfsgba-formats` `unlock.rs`); two race setups in no fixture (`cases.py synth`: env 1 route 7 hunter car 6; env 9 route 20 mode 1 car 3) | ~7,000 calls/s; ~3 min to a green test, ~5 min per synthesized setup | 0 mismatches; Rust `race_start` = the game's code in every domain; the car handler runs on the result | yes | n/a: stubs and `max_insns`; no IRQs, timers, DMA, video | nothing new (unicorn, GPL-2.0, in `.venv`) | **Adopted**: all function porting; race states from setup inputs. Can't run menus/garage/boot whole, nor anything IRQ-timed |
+| B2 | Headless libretro mGBA core (`tools/retro.py`) | `race.ss` + 1 frame vs `mgba/race`; 600 scripted frames twice; power-on → main menu by keys | 1,340 frames/s in a race (22×), 2,400 from power-on; video can't be switched off (the core ignores `GET_AUDIO_VIDEO_ENABLE`) | EWRAM, IWRAM, palette, VRAM, OAM: 0 bytes differ; IO: 4 (SIOCNT, IF, HALTCNT) | yes | none (whole video frames) | 3 MB dll, libretro buildbot nightly, mGBA 0.11-212-7a12d6d; MPL-2.0; no build | **Adopted**: the reference emulator for reaching states and long runs; `Retro.dump` writes oracle snapshots |
+| B3 | gba-recomp (`crates/gba-core` interpreter; native build) | Boots Carbon (BIOS HLE, 0 unhandled SWIs), `--demo` reaches a race by frame 4,000; `build --ram` + `verify` MATCH; a Rust program hooking `main_frame`; power-on RAM vs B2 at frames 300/600/1200 | interpreter 400–540 frames/s (with the hook); native ~870 (still falls back to the interpreter); build 42 s | not vs mGBA: its "rough" cycle model changes the timing bytes within 300 frames (`0x03005628` frame counter, `0x03005934` timer 3, `0x030064C8` rand index, stack); all else equal | yes | any PC, in-process Rust (`Machine::step` + a PC check); interpreter only | path dependency, MIT/Apache (gamedb CC0); **no savestates**, can't load `.ss` | **Not adopted now.** Candidate for a headless hook-driven recorder if one is needed (timing is an input by the contract) |
+| B4 | mGBA GDB stub | not run | | | | | | **Dropped**: B3 shows headless breakpoints are possible; the rare breakpoint recording stays on the existing mGBA Lua recorders |
+| B5 | `nfsgba-game` as state generator | 600 frames from `game-loop/s18`, A held, a steering script, twice | 2,867 game frames/s in release (≈ 11,000 video frames/s) | 2,444 of 2,445 traced frames (`replay.rs`); live timing is `Timing::steady` (T1) | yes | n/a (our code) | none | **Adopted**: race states after the start (`synth` → `Game::frame` → snapshot); races only |
 
 ## Oracle gotcha (from the menus work)
 

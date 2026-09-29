@@ -12,9 +12,10 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 | Ghidra | 12.1.4 (2026-09-21) | scoop `ghidra` (extras): `~\scoop\apps\ghidra\current`; user env `GHIDRA_INSTALL_DIR` set | Apache-2.0 | `support\analyzeHeadless.bat` (usage) and a full headless import of `test.gba` | |
 | GBA loader for Ghidra | pudii/gba-ghidra-loader 1.1.0+ (9bfb2d1), built for 12.1.4 | clone `ext\gba-ghidra-loader`; built zip in its `dist\`; installed to `%APPDATA%\ghidra\ghidra_12.1.4_PUBLIC\Extensions\gba-ghidra-loader` | Apache-2.0 | headless `-import test.gba -loader GBALoader` -> "Using Loader: GBA Loader", `ARM:LE:32:v4t:default`, import + analysis succeeded | Local patch: removed an unused `org.python.bouncycastle` import (Jython is gone in 12.1). Rebuild after each Ghidra upgrade (command below). Fallback if it breaks: raw binary, `ARM:LE:32:v4t`, base `0x08000000` |
 | Arm GNU toolchain | 15.2.Rel1 (gcc 15.2.1, binutils 2.45.1, gdb 16.3.90) | scoop `gcc-arm-none-eabi` (extras); `bin` added to user PATH | GPL-3.0 | `arm-none-eabi-objdump/as/gcc/gdb --version` | |
+| mGBA libretro core | 0.11-212-7a12d6d (libretro buildbot nightly, 2026-09-29) | `ext\libretro\mgba_libretro.dll` from `https://buildbot.libretro.com/nightly/windows/x86_64/latest/mgba_libretro.dll.zip` | MPL-2.0 | `tools/test_retro.py`: `race.ss` + 1 frame equals the `mgba/race` dump (RAM, VRAM, palette, OAM) | Driven by `tools/retro.py` (ctypes). The core sends no memory maps: VRAM is read directly, the rest through the serialized state. It ignores `GET_AUDIO_VIDEO_ENABLE`. No breakpoints |
 | no$gba (debug version) | 3.06 (14 Apr 2025) | `ext\nogba\NO$GBA.EXE` from problemkaputt.de/no$gba.zip | Freeware (closed source) | exe present (GUI only) | |
 | GBATEK | fetched 2026-09-29 | `ext\docs\gbatek.htm` (+ `gbatek.txt`) | (c) Martin Korth, free to read | file contains "GBA Memory Map" | |
-| gba-recomp (Rust) | v0.4 (de4edf5, crate 0.2.0) | clone `ext\gba-recomp`; binaries in `target\release\` (`recomp`, `gba-launcher`, `gba-pack`) | MIT OR Apache-2.0; `gamedb.sqlite` CC0 | `cargo build --release` ok (4 min, warnings only); `recomp --help`, `recomp --version` | Not run on any ROM. Native translation wants `clang`/`gcc`/`cc` (or `GBA_RECOMP_CC`), else it uses its bundled TinyCC. clang only links inside a VS dev env (`vcvars64.bat`, see below). Useful subcommands: `dis`, `engine-scan`, `mp2k-scan`, `run --trace` |
+| gba-recomp (Rust) | v0.4 (de4edf5, crate 0.2.0) | clone `ext\gba-recomp`; binaries in `target\release\` (`recomp`, `gba-launcher`, `gba-pack`) | MIT OR Apache-2.0; `gamedb.sqlite` CC0 | `cargo build --release` ok (4 min, warnings only); `recomp --help`, `recomp --version` | Bake-off B3 (2026-09-29): runs Carbon under BIOS HLE; `build --ram` 42 s (it picked gcc from `~\.nimble\bin`), `verify` MATCH; not adopted (timing differs from mGBA, no savestates; `docs/DECISIONS.md`). Native translation wants `clang`/`gcc`/`cc` (or `GBA_RECOMP_CC`), else it uses its bundled TinyCC. clang only links inside a VS dev env (`vcvars64.bat`, see below). Useful subcommands: `dis`, `engine-scan`, `mp2k-scan`, `run --trace` |
 | gbarecomp (C++) | 3dc2379 (2026-09-27) + submodule arm-recomp-core 14be3cf | clone `ext\gbarecomp` (`--recurse-submodules`) | **PolyForm Noncommercial 1.0.0** (read-only reference; don't copy code into our repo) | `cmake -S . -B build; cmake --build build --config Release` with MSVC | `build\Release\gba_recompile.exe` + test exes built. `gbarecomp_runtime` fails on MSVC (`__builtin_clz`); upstream builds the runtime with MSYS2 MinGW64 (gcc, cmake, ninja, SDL2), see MSYS2 row |
 | MSYS2 | installer 2026-06-11 | winget `MSYS2.MSYS2` -> `C:\msys64` | mixed (GPL etc.) | **broken**: `usr\bin\pacman.exe` and `pacman-conf.exe` missing after install | Needs a clean reinstall by the user, then in the MINGW64 shell: `pacman -Syu`, `pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2` |
 | MSVC + Windows SDK | VS 2022 Community (MSVC 14.44.35207), VS 2022/2019 Build Tools; SDK 10.0.19041/22621/26100 | already installed | Microsoft EULA | `cargo new` + `cargo build` hello links and runs | VC tools live in the **Community** instance (2022 Build Tools has none) |
@@ -32,7 +33,18 @@ Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitig
 
 ## How to launch
 
-**Candidates under evaluation (bake-off, `PROGRESS.md` B1–B5):** a headless mGBA **libretro core** (`mgba_libretro.dll` from the libretro buildbot, MPL-2.0, into `ext/`) driven from Python via `ctypes`; **gba-recomp** (`ext/gba-recomp`, built; MIT/Apache/CC0; its generated code stays local); mGBA's **GDB stub** (`ext/mgba-dev/mgba-sdl.exe -g`); and the no-emulator path (the oracle plus synthesized states). The mGBA window with the Lua remote below is the current tool and is expected to be retired for everyday work.
+**The toolchain (bake-off, `docs/DECISIONS.md`):** the function oracle for porting; the headless libretro core for states and long runs; the mGBA window with the Lua remote only for breakpoint recordings (`tools/record.py`) and occasional manual looks.
+
+**Headless mGBA** (`tools/retro.py`, no window):
+
+```python
+sys.path.insert(0, "tools"); from retro import Retro
+r = Retro(); r.load_ss("data/work/e5298b24/mgba/race.ss")   # or start from power-on
+r.run(60, keys=("UP", "A"))            # or keys=lambda frame: (...), per frame
+r.read(0x03005640, 4); r.write(addr, data); r.screenshot(path); r.dump("retro/name")   # oracle snapshot
+```
+
+CLI: `.venv/Scripts/python.exe tools/retro.py [--ss FILE] FRAMES [--dump PREFIX]`. `read`/`write` outside VRAM go through the serialized state (~0.4 MB), so read once per step, not per byte.
 
 **mGBA with a Lua script** (nightly, portable):
 
@@ -51,6 +63,7 @@ Lua API: `callbacks:add("frame", fn)`, `emu:currentFrame()`, `emu:readRegister("
 
 - **Menus** need presses of at least 10 frames.
 - **Route to a race from a fresh save:** A (language: English) → A → A → START → A (intro screens) → profile name (DOWN, A, START) → main menu → A (Quick Play) → A (Random) → A → A.
+- **Headless from power-on** (`retro.py`, no save file): `A A A START A`, then about 900 frames of timed logo screens (a START pressed earlier is lost), START at "PRESS START", then `A START` on the name screen → main menu.
 - **Savestates** `mainmenu.ss` and `race.ss` are kept in the work folder.
 
 **Ghidra headless** (GBA loader installed). For the race-time IWRAM code, add `-scriptPath tools\ghidra -preScript LoadIwram.java <iwram dump> -postScript ExportDecomp.java <out.c>` (the output of the current run is `data\work\e5298b24\ghidra\carbon_decomp.c`):
