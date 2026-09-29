@@ -20,6 +20,10 @@ from pathlib import Path
 # The Quick Play menu route from mainmenu.ss (docs/TOOLS.md): Quick Play, Random, confirm, then the race info
 # screen's A starts the race (a 3-lap circuit, Mazda RX-7, heavy traffic).
 MENU_TO_RACE = ["load mainmenu", "wait 30", "hold A 10", "wait 60", "hold A 10", "wait 60", "hold A 10", "wait 60"]
+# The autopilot (tools/trace_autopilot.lua) drives the longer scenarios; each starts from its defaults.
+AUTOPILOT = [f"lua {Path(__file__).resolve().with_name('trace_autopilot.lua').as_posix()}", "luax AUTOPILOT.reset()"]
+# Race-info screens saved from a fresh profile (docs/engine/physics.md, "Scenarios"): hunter-info (Quick Play
+# Random: hunter, Southside, Mazda RX-7, easy, 3 opponents, heavy traffic).
 
 SCENARIOS = {
     "accel": ["hold A 240"],
@@ -34,6 +38,9 @@ SCENARIOS = {
              "hold A 150", "hold A,RIGHT 30", "hold A 200", "hold A,LEFT 40", "hold A 150"],
     # From the race info screen: the car's init step, the intro, the launch among the opponents, traffic.
     "start": [*MENU_TO_RACE, "trace", "hold A 10", "wait 100", "hold A 700"],
+    # Hunter race: the autopilot rams the nearest opponent (car-to-car response, hunter hits, tipping over).
+    "hunter": ["load hunter-info", *AUTOPILOT, "luax AUTOPILOT.hunt=4000", "wait 30", "trace", "hold A 10", "wait 60",
+               'luax AUTOPILOT.mode="race"', "wait 3000", 'luax AUTOPILOT.mode="off"'],
 }
 
 # Entity 0 fields for --summary: name, offset, size (see docs/engine/physics.md)

@@ -12,6 +12,8 @@
 --                              memory as NAME.<domain>.bin, and every call appends EWRAM + IWRAM to NAME.ram.bin
 --                              (tools/trace_race.py turns that into deltas). SKIP: calls to leave out first
 --                              (docs/engine/physics.md)
+--   lua FILE                   run a Lua file in this script's environment (probes such as tools/trace_probe.lua)
+--   luax STATEMENT             run one Lua statement written without spaces (e.g. luax AUTOPILOT.mode="race")
 local dir = os.getenv("NFSGBA_MGBA_DIR")
 local KEYS = {A = 0, B = 1, SELECT = 2, START = 3, RIGHT = 4, LEFT = 5, UP = 6, DOWN = 7, R = 8, L = 9}
 local queue, batch, wait, held = {}, nil, 0, false
@@ -99,6 +101,10 @@ local function run(line)
     for _, g in ipairs(GLOBALS) do table.insert(header, g[1]) end
     trace:write(table.concat(header, ",") .. ",entity,physics\n")
     breakpoint = emu:setBreakpoint(traceStep, 0x0814BD4C)
+  elseif op == "lua" then
+    dofile(a) -- extra probes (e.g. tools/trace_probe.lua); they see the globals emu, callbacks, C
+  elseif op == "luax" then
+    assert(load(a))() -- one Lua statement without spaces, e.g. luax AUTOPILOT.mode="race"
   elseif op == "untrace" then
     if breakpoint then emu:clearBreakpoint(breakpoint) end
     if trace then trace:close(); traceRam:close() end

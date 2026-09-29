@@ -651,9 +651,32 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let lane = nearest_lane_of(m, e);
     m.set_u16(p + 0xC0, lane as u16);
     if m.i32(0x0300_56E0) == 2 {
-        return Err(Unported("FUN_08140f78 (hunter_life_tick, hunter races)"));
+        hunter_life_tick(m, e);
     }
     Ok(())
+}
+
+/// `FUN_08140f78` (`hunter_life_tick`): one step of hunter life (`+0x4E8`, 0..0x80000), with the tuning globals
+/// of `hunter_tuning_init` (`FUN_081412ec`). Driving the wrong way (`+0x4EC` above `0x030061D0`) drains
+/// `0x030061F4`; standing still (`+0x4EE` above `0x030061E0`) drains `0x030061A8`; otherwise, until someone has
+/// finished (`0x030061A4`), life grows by the rate for the race position (`0x030061B0[+0xA8]`).
+fn hunter_life_tick(m: &mut Mem, e: u32) {
+    let p = m.u32(e + 0x8C);
+    let life = p + 0x4E8;
+    let drain = if m.i32(0x0300_61D0) < m.i16(p + 0x4EC) as i32 {
+        Some(0x0300_61F4)
+    } else if m.i32(0x0300_61E0) < m.i16(p + 0x4EE) as i32 {
+        Some(0x0300_61A8)
+    } else {
+        None
+    };
+    if let Some(rate) = drain {
+        let v = m.i32(life) - m.i32(rate);
+        m.set_i32(life, v.max(0));
+    } else if m.i32(0x0300_61A4) == 0 {
+        let v = m.i32(life) + m.i32((0x0300_61B0 + m.i32(p + 0xA8) * 4) as u32);
+        m.set_i32(life, v.min(0x8_0000));
+    }
 }
 
 fn release_accelerator(m: &mut Mem, player: bool, stats: u32) {

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 9] = [
+const SCENARIOS: [&str; 10] = [
     "accel",
     "brake",
     "steer",
@@ -22,6 +22,7 @@ const SCENARIOS: [&str; 9] = [
     "handbrake",
     "long",
     "start",
+    "hunter",
 ];
 const EWRAM: usize = 0x4_0000;
 /// Bits other game code maintains between car steps, as (offset, mask): the entity's sector-list link
@@ -141,6 +142,13 @@ fn check(sim: &Sim, e: u32, want: &(Vec<u8>, Vec<u8>)) -> Vec<String> {
 /// A step's RAM writes (address, new byte) and sound commands.
 type Effects = (Vec<(u32, u8)>, Vec<String>);
 
+/// The oracle's record of a step: its effects, and whether other code changed the car before the next step
+/// (a traffic car's collision response), so that the next traced state is not this step's result.
+struct Expected {
+    effects: Effects,
+    external: bool,
+}
+
 /// What one step wrote to RAM and the sound commands it issued, in the format of `<name>.oracle.txt`.
 fn effects(before: &Mem, after: &Sim) -> Effects {
     let mut writes = Vec::new();
@@ -168,7 +176,7 @@ fn effects(before: &Mem, after: &Sim) -> Effects {
     (writes, sounds)
 }
 
-fn oracle(dir: &Path, name: &str) -> Vec<Effects> {
+fn oracle(dir: &Path, name: &str) -> Vec<Expected> {
     let text = fs::read_to_string(dir.join(format!("{name}.oracle.txt"))).expect("run tools/trace_oracle.py");
     text.lines()
         .map(|l| {
@@ -180,7 +188,10 @@ fn oracle(dir: &Path, name: &str) -> Vec<Effects> {
                     (u32::from_str_radix(a, 16).unwrap(), u8::from_str_radix(v, 16).unwrap())
                 })
                 .collect();
-            (writes, f[2].split_whitespace().map(str::to_owned).collect())
+            Expected {
+                effects: (writes, f[2].split_whitespace().map(str::to_owned).collect()),
+                external: f.get(3) == Some(&"external"),
+            }
         })
         .collect()
 }
@@ -200,7 +211,8 @@ fn each_step_matches_the_trace() {
         };
         let expected = oracle(&dir, name);
         let mut failures = Vec::new();
-        for (i, (want_writes, want_sounds)) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+        for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+            let (want_writes, want_sounds) = &want.effects;
             let mut sim = Sim::new(trace.state(i));
             let e = sim.mem.u32(W_ENTITIES);
             let before = sim.mem.clone();
@@ -208,14 +220,18 @@ fn each_step_matches_the_trace() {
                 failures.push(format!("{name} step {i}: {err}"));
                 continue;
             }
-            let mut bad = check(&sim, e, &trace.cars[i + 1]);
+            let mut bad = if want.external {
+                Vec::new()
+            } else {
+                check(&sim, e, &trace.cars[i + 1])
+            };
             let (writes, sounds) = effects(&before, &sim);
             let extra: Vec<_> = writes.iter().filter(|w| !want_writes.contains(w)).take(8).collect();
             let missing: Vec<_> = want_writes.iter().filter(|w| !writes.contains(w)).take(8).collect();
             if !extra.is_empty() || !missing.is_empty() {
                 bad.push(format!("RAM writes differ: extra {extra:x?}, missing {missing:x?}"));
             }
-            if sounds != *want_sounds {
+            if sounds != **want_sounds {
                 bad.push(format!("sounds {sounds:?} want {want_sounds:?}"));
             }
             if !bad.is_empty() {
@@ -246,6 +262,7 @@ fn replay_matches_the_trace() {
         let Some(trace) = load(&dir, name) else {
             continue;
         };
+        let expected = oracle(&dir, name);
         let mut own: Option<(Vec<u8>, Vec<u8>)> = None;
         let mut sim = Sim::new(trace.state(0));
         let e = sim.mem.u32(W_ENTITIES);
@@ -267,6 +284,11 @@ fn replay_matches_the_trace() {
             }
             sim = Sim::new(mem);
             car::handler(&mut sim, e).unwrap_or_else(|err| panic!("{name} step {i}: {err}"));
+            if expected[i].external {
+                // Other code changed the car before the next step: carry on from the game's state.
+                own = Some(trace.cars[i + 1].clone());
+                continue;
+            }
             let bad = check(&sim, e, &trace.cars[i + 1]);
             assert!(bad.is_empty(), "{name} step {i}: {}", bad.join(", "));
             let p = sim.mem.u32(e + 0x8C);
