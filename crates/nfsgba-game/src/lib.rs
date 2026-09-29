@@ -465,7 +465,7 @@ impl Game {
                         nfsgba_sim::car::handler(w, i);
                         w.link(i);
                     });
-                    // The player's decal, unpacked into its rim buffer (NOT 1:1, R24: in the heap arena).
+                    // The player's decal, unpacked into its rim buffer: NOT 1:1 (R24), in the heap arena.
                     if state == 0 && i as u32 == self.world.g.player {
                         self.world.on_arena(&self.rom, i, nfsgba_sim::decal::unpack_decal);
                     }
