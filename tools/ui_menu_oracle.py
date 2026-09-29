@@ -87,7 +87,7 @@ KIND_SCREENS = {  # kind name -> (index in KIND_HANDLERS, screens)
     "intro": (6, [21, 22, 23, 24, 25, 26, 37, 47, 48]), "kind38": (7, [38, 39, 40, 41, 42, 43]),
 }
 # Ported handlers: every exit (each is only `FUN_081372D8(world)`), the intro kind and those listed per kind.
-PORTED_KINDS = ["intro", "kind7", "event", "career", "setup", "kind38"]
+PORTED_KINDS = ["intro", "kind7", "event", "career", "setup", "kind38", "list"]
 PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
@@ -106,6 +106,9 @@ STUBS.update({
     0x08141C88: 7,  # text box (font, key or pointer, x, y, width, lines, colour)
     0x0812EFE8: 0,  # career_race_payout
     0x08136028: 1, 0x0815240C: 0, 0x08164BEC: 4,  # stop sound, stop music, fill rectangle (rect on the stack)
+    0x0812BEEC: 0, 0x0812BF48: 0, 0x0812BFA4: 3, 0x0812FFB0: 0,  # garage car atlas, palette, draw; quick race
+    0x0812C81C: 1, 0x0812C8A8: 1, 0x081302C4: 1, 0x0812C5C4: 1,  # unlock state, buy, upgrades changed, owned
+    0x081300E0: 2, 0x08133D30: 4, 0x0812D960: 1,  # list item new mark, car stats, unlock price
 })
 STACK_TEXT = (0x0300_7000, 0x0300_7C00)  # stub pointer arguments in here are the game's stack strings
 STRUCT_ARGS = {0x08164BEC: (0, 16)}  # stub: (argument, bytes) passed by pointer to a stack struct
@@ -330,6 +333,30 @@ def kind_extra(rng, kind):
             (0x030053A4, word(pick([0, 8, 0x10, 0x3F]))), (0x03000050, word(pick([0, 1]))),
             (0x030064C0, struct.pack("<H", pick([0, 1, 1, 1, 0x10, 0x20, 0x40, 0x80, 0x200, 0x30]))),
         ]
+    if kind == "list":
+        counts = [struct.unpack("<h", SETUP_COUNTS_GBA.read_base(0x087E544C + 0x14 * i + 10, 2))[0] for i in range(17)]
+        stack = bytes(pick([0xD, 0x26, 7, 8, 9, 0xF, 3, 0, rng.randrange(0x31)]) for _ in range(8))
+        return [
+            (PROFILE_AT + 0x350, bytes(rng.randrange(max(c, 1)) for c in counts)),
+            (PROFILE_AT + 0x10, bytes([rng.randrange(15), rng.randrange(15), pick([0, 1]), 0])),
+            (PROFILE_AT + 0x200, word(pick([0, 0, 1, 2, 5, 10, 11, 12])) + bytes([pick([0, 1])])),
+            # Cash above 999,999 sends thousands_separator down its stale-register path (NOT 1:1, noted).
+            (PROFILE_AT + 0xC, word(pick([0, 999, 1000, 12345, 250000, 999999, rng.randrange(1000000)]))),
+            (PROFILE_AT + 0x1F8, bytes([pick([0, 1, 2]), pick([0, 0, 1]), 0, rng.randrange(6)])),
+            (PROFILE_AT + 0x256, struct.pack("<HH", pick([0, 1]), pick([0, 1]))),
+            (PROFILE_AT + 0x344, stack),
+            (0x0300593C, bytes([pick([0xFF, 0, 1, 2, 3])])),
+            (0x03005718, word(rng.randrange(15))),
+            (0x030056E0, word(rng.randrange(4))),
+            (0x03005784, word(pick([1, 2, 3]))),
+            (0x030059F4, word(pick([0, 1, 1, -1]))),
+            (0x03005954, word(pick([0, 1]))),
+            (0x030059F0, word(pick([-1, -1, -1, 0]))),  # message box closed, so the 0x8B question opens
+            (0x030064C4, struct.pack("<H", pick([0, 0x40, 0x80, 0xC0]))),
+            (0x03005F9C, word(rng.randrange(1 << 16))),
+            (0x03000060, word(rng.randrange(4))),
+            (0x030064C0, struct.pack("<H", pick([0, 1, 1, 1, 0x10, 0x20]))),
+        ]
     if kind == "kind38":
         hint = pick([0, 1, 2, 3, 2])
         page = pick([0, 1, 2, 3])
@@ -400,6 +427,11 @@ def kind_cases(rng, kind, n):
         fn, arg = entries[i % len(entries)]
         arg = rng.choice([0, 1]) if arg is None else arg
         ret = {0x08149FD8: rng.choice([0, 0, 1])}
+        if kind == "list":
+            pick = rng.choice
+            ret.update({0x0812C81C: pick([0, 1, 2, 3, 5]), 0x0812C5C4: pick([0, 1]), 0x081300E0: pick([0, 1]),
+                        0x081302C4: pick([0, 1]), 0x0812D960: pick([0, 500, 12000, 150000]),
+                        0x08141578: pick([0, 0x20, 0x44])})
         r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
         cases.append(dict(snap=snap, fn=hex(fn), arg=arg, mem=[[a, b.hex()] for a, b in mem],
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
@@ -427,13 +459,17 @@ def kind38(_gba, rng, n=1600):
     return kind_cases(rng, "kind38", n)
 
 
+def lists(_gba, rng, n=2400):
+    return kind_cases(rng, "list", n)
+
+
 def main(which):
     """`all` regenerates every set: needed after porting any kind, since handlers enter and draw arbitrary screens
     (menu_back, goto_screen) whose handlers were stubs when the older sets were made."""
     OUT.mkdir(parents=True, exist_ok=True)
     gba, rng = Gba("ui-2d/n7"), random.Random(0x6E66)
     if which == ["all"]:
-        which = ["fades", "toplevel", "intro"] + [k for k in PORTED_KINDS if k != "intro"]
+        which = ["fades", "toplevel", "intro"] + [{"list": "lists"}.get(k, k) for k in PORTED_KINDS if k != "intro"]
     for name in which or ["fades"]:
         cases = globals()[name](gba, rng)
         path = OUT / f"{name}.jsonl"
