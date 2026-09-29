@@ -81,10 +81,12 @@ Done:
 - the camera; the car step (`CarWorld`); the AI and traffic (on `CarWorld`, spawn inside the car step);
 - the matrix slots and effect sprites (`slots.rs`, `oam.rs`; `view/slots.rs`, `state/slots.rs`, `slot_data.rs`), the
   HUD adapters (`view/hud.rs`, `state/hud.rs`), the race readers (`view/race.rs`);
-- the menus' top level and the map, event and results screens (`nfsgba-game/src/menu/`, `state/menu.rs`; the typed
-  code reaches the rest through the `Host` trait, `menu/adapt.rs`).
+- the menus: the top level and every screen with a handler in Rust (Kind7 map, Event, Career results, List, Setup,
+  Kind38 hints, Intro; `nfsgba-game/src/menu/`, `state/menu.rs`); the typed code reaches the rest (scene setup,
+  palettes, frame buffers, the text and blit primitives, game functions not ported) through the `Host` trait,
+  `menu/adapt.rs`. Only the garage screens (Kind18, U3) and the exit handlers are unported calls.
 
-Still on RAM: the menus' List, Intro, Setup and Kind38 screens and their scene/palette/VRAM helpers; `race_init`;
+Still on RAM: the menus' scene/palette/VRAM helpers (`menu/mod.rs`, FIDELITY U7); `race_init`;
 heap alloc/free and the sector lists (recorded by typed code, replayed by `ram::with_world`); the rim redraw's heap
-reads (R24). Next: the remaining menu screens, and the flip: `race_start` builds a typed `World` and `Game` holds it,
+reads (R24). Next: the flip: `race_start` builds a typed `World` and `Game` holds it,
 with RAM images only in tests.

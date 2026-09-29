@@ -80,7 +80,10 @@ layout! {
         0x0300_64C0 keys: u16,
         /// The options screen's globals: units, sound flag, music and sound volumes (x8), and scratch the
         /// settings copy (`MenuProfile::settings`).
+        0x0300_0000 blink_dir: u32,
         0x0300_003C music_id: u32,
+        /// The running tick counter (intro deadlines compare with it).
+        0x0300_0044 ticks: i32,
         0x0300_0040 units: u32,
         0x0300_0050 u_0050: u32,
         0x0300_53E4 u_53e4: u32,
@@ -92,6 +95,16 @@ layout! {
         0x0300_59E8 page_wait: i32,
         /// The settings differ from the profile's copy (set by A on a settings screen).
         0x0300_5998 settings_changed: u32,
+        /// Language screen cursor, the credits list pointer (into the ROM) and their scratch, the name being
+        /// typed (9 bytes) and the keyboard's row (0..=4; row 4 holds DEL, SPACE and OK) and column (0..=9).
+        0x0300_5960 language_cursor: u32,
+        0x0300_5964 credits: u32,
+        0x0300_5970 name: [u8; 9],
+        0x0300_597C keyboard_row: i32,
+        0x0300_5980 u_5980: u32,
+        0x0300_5984 u_5984: u32,
+        0x0300_598C name_len: i32,
+        0x0300_5990 keyboard_column: i32,
         /// Frame counter of the blinking cursors (bit 4) and PRESS START.
         0x0300_53B4 flash: u32,
         /// Keys held (L and R turn the garage car).
@@ -130,7 +143,9 @@ layout! {
     }
 
     /// The profile fields the menu flow touches (the struct lives in EWRAM, `MenuGlobals::profile`).
-    pub struct MenuProfile: 0x4C8 {
+    pub struct MenuProfile: 0x4F0 {
+        /// The profile name (9 bytes, 0-terminated unless full).
+        0x00 name: [u8; 9],
         /// The car in Quick Play (`+0x11`) and career (`+0x10`).
         0x10 career_car: i8,
         0x11 car: i8,
@@ -164,12 +179,19 @@ layout! {
         /// Race end: a new record was set (`+0x3B4`), the payout (`+0x3B8`).
         0x3B4 record_flag: u32,
         0x3B8 payout: u32,
+        /// The intro screens' deadline (compared with the tick counter).
+        0x3B0 deadline: i32,
         0x3BC settings_head: u32,
         /// The settings screens' copy of the race and option settings (`setting_variable` 2..=0x10): reverse,
         /// laps, difficulty, opponents, traffic, `u_580c`, `u_53e4`, units, HUD, `u_5798`, music/8, sound/8,
         /// language, `u_0050`.
         0x3C0 settings: [u32; 15],
         /// A new track record (`+0x4A8`) and the unlock message keys (`+0x4AA`, 0-terminated).
+        /// Six counters the name entry clears for a new profile (`+0x478..+0x490`).
+        0x478 stats: [u32; 6],
+        /// A saved profile exists (`+0x490`); the language it was saved with (`+0x4E8`).
+        0x490 profile_exists: u16,
+        0x4E8 saved_language: u16,
         0x494 u_494: u16,
         0x4A8 new_record: u16,
         0x4AA unlock_messages: [u16; 14],

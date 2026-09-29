@@ -6,7 +6,8 @@
 use nfsgba_sim::state::MenuState;
 
 use super::{
-    Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, hints, list, map, results, setup, update_kind,
+    Kind, VBLANK_INTR_WAIT, draw_kind, enter_kind, event, exit_kind, hints, intro, list, map, results, setup,
+    update_kind,
 };
 
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
@@ -36,6 +37,11 @@ pub trait Host {
     fn clear_frame_buffers(&mut self);
     /// Fills the drawing page with colour 1.
     fn fill_page(&mut self);
+    /// A halfword of the game's memory (the credits pointer: ROM, or stale RAM before the screen is entered).
+    fn peek16(&self, addr: u32) -> u16;
+    /// Colour `i` of the second base palette buffer.
+    fn second_colour(&self, i: u32) -> u16;
+    fn set_second_colour(&mut self, i: u32, c: u16);
     /// Black BG palette RAM (`fill_bg_palette(0, 0, 0x100)`).
     fn black_bg_palette(&mut self);
     /// `copy_mem(dst, src, n, width)`.
@@ -474,7 +480,7 @@ pub fn is_typed(kind: Kind, phase: usize) -> bool {
     matches!(
         (kind, phase),
         (
-            Kind::Kind7 | Kind::Event | Kind::Career | Kind::List | Kind::Setup | Kind::Kind38,
+            Kind::Kind7 | Kind::Event | Kind::Career | Kind::List | Kind::Setup | Kind::Kind38 | Kind::Intro,
             0..=2
         )
     )
@@ -492,6 +498,9 @@ pub fn run_typed(st: &mut MenuState, h: &mut impl Host, kind: Kind, phase: usize
         (Kind::Career, 0) => results::enter(st, h),
         (Kind::Career, 1) => results::update(st, h),
         (Kind::Career, 2) => results::draw(st, h),
+        (Kind::Intro, 0) => intro::enter(st, h),
+        (Kind::Intro, 1) => intro::update(st, h),
+        (Kind::Intro, 2) => intro::draw(st, h),
         (Kind::Kind38, 0) => hints::enter(st, h),
         (Kind::Kind38, 1) => hints::update(st, h),
         (Kind::Kind38, 2) => hints::draw(st, h),

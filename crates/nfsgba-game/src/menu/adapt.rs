@@ -80,6 +80,15 @@ impl flow::Host for GbaHost<'_> {
         let (page, n) = (self.0.u32(self.0.u32(WORLD + 0x50)), screen_bytes(self.0));
         fill32(self.0, page, 0x0101_0101, n);
     }
+    fn peek16(&self, addr: u32) -> u16 {
+        self.0.u16(addr)
+    }
+    fn second_colour(&self, i: u32) -> u16 {
+        self.0.u16(self.0.u32(SECOND_PALETTE) + 2 * i)
+    }
+    fn set_second_colour(&mut self, i: u32, c: u16) {
+        self.0.set_u16(self.0.u32(SECOND_PALETTE) + 2 * i, c);
+    }
     fn black_bg_palette(&mut self) {
         fill_bg_palette(self.0, 0, 0, 0x100);
     }
