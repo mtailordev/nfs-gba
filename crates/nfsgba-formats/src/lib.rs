@@ -11,6 +11,7 @@ pub mod paint;
 pub mod render;
 pub mod sky;
 pub mod ui;
+pub mod unlock;
 
 pub const ROM_BASE: u32 = 0x0800_0000;
 /// BN7E level descriptors (0x68-byte records). Every record shares the city and the vehicle model bank.

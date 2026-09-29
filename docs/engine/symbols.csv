@@ -565,3 +565,6 @@ address,name,kind,comment
 0x08143c78,traffic_spawner_ahead,function,as traffic_spawner_behind with traffic kind 2 (section start; full speed)
 0x0814a974,spawner_handlers,function,(tentative) entity handler 0x28; the thunks 0x0814A9C0 (0x2A: traffic_spawner_ahead) and 0x0814A9D4/0x0814A9E0 (0x2D/0x2E: traffic_spawner_behind) sit inside it; no Carbon race creates such entities
 0x08141250,non_racer_car_hit,function,car-to-car hit of a non-racer: when 0x03006174 is set and it is not the first entity the other car's +0x4B8 = 0x40; clears 0x030061F0
+0x0812d7d4,unlock_table_index,function,row of an unlock id in the 0x7E4DE4 (id; price) table or -1; ported in nfsgba-formats unlock.rs
+0x0812d7f4,unlock_id_adjust,function,(id; car index at 0x03005718) ids 0xA1..0xA3 shifted by the sum of the first car-index slot bytes at 0x7F0626 minus the index; ported in unlock.rs
+0x0812d730,unlock_group,function,1..10 for the group-leader ids 0xC 0x19 0x26 0x33 0x40 0x4D 0x5A 0x67 0x70 0x78 else 0; ported in unlock.rs
