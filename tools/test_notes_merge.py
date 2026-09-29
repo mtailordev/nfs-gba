@@ -1,7 +1,7 @@
 """Test for tools/notes_merge.py. Run: python -m unittest test_notes_merge (from tools/)."""
 import unittest
 
-from notes_merge import insert_addresses, merge_symbols, read_rows
+from notes_merge import insert_addresses, merge_symbols, read_addresses, read_rows
 
 BASE = read_rows("address,name,kind,comment\n0x0816a708,__divsi3,function,div\n0x0815f948,sin_q14,function,sine\n")
 
@@ -51,6 +51,15 @@ MAP = """# Map
 |---|---|
 | `+0x10` | d a |
 """
+
+
+class ReadAddressesTest(unittest.TestCase):
+    def test_unquoted_commas_stay_in_what(self):
+        rows = read_addresses("region,address,size,what,doc\n"
+                              "io,0x04000050,4,BLDCNT 0x3F3F, BLDALPHA 0x0D0F (EVA 15/16, EVB 13/16),engine/x\n"
+                              'ram,0x03000010,4,"quoted, with comma",engine/y\n')
+        self.assertEqual(rows[0]["what"], "BLDCNT 0x3F3F, BLDALPHA 0x0D0F (EVA 15/16, EVB 13/16)")
+        self.assertEqual((rows[0]["doc"], rows[1]["what"], rows[1]["doc"]), ("engine/x", "quoted, with comma", "engine/y"))
 
 
 class InsertTest(unittest.TestCase):

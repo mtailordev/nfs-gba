@@ -56,13 +56,13 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **ai-traffic:** done and merged. Opponents, wingman and traffic exact (12,376 byte-exact calls, 12 traced races, free replay); `docs/engine/ai.md`. Remaining stops are D9–D11 (physics-paths).
 - **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.
 - **menus:** done and merged (first part). `menu.rs`: `main_frame`, the game state machine, the 49-screen menu machine, all six fades and the whole intro flow, exact on 5,400 oracle cases. Open: 7 of 8 screen kinds (U3), drawing onto VRAM (U7).
-- **game-loop:** new crate `nfsgba-game`: one exact game frame (main_frame order, IRQs) composing sim, render, paint, sky, hud and audio; a drivable race from a dump in the viewer (`NFSGBA_PLAY=1`), verified frame by frame against a recorded mGBA input run. Owns `crates/nfsgba-game`, `crates/nfsgba-viewer`, `docs/engine/game-loop.md`.
+- **game-loop:** done and merged. `nfsgba-game`: `Game::frame` is byte-exact on 149 of 149 traced frames, per frame and free-running (AI, `camera_update` and matrix slots stood in from the trace); viewer play mode `NFSGBA_PLAY=1 NFSGBA_DUMP=game-loop/s18`. Open: G1, G2, T1.
 - **menus-2:** U3/U4: the seven remaining screen kinds (25 screens), the message-box draw and the menu scene setups, oracle-first. Owns `menu.rs`, `docs/formats/ui.md`, `tools/ui_menu_oracle.py`, `docs/engine/notes/*.menus-2.csv`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
 Next, driven by `docs/FIDELITY.md`:
-1. **Viewer:** hook up `nfsgba-sim` (drive the player car live) and `hud`; painter's order (R10), the speed effect (R11), model index 0 (R14).
+1. **Live race, fully ported:** call the AI (`ai.rs`, `traffic_ai.rs`) from `nfsgba-game`; port `camera_update` and the matrix-slot code (R25) with the effect sprites; sound output; `race_init` so races start from ROM (G1). Then the typed-state refactor (`docs/DECISIONS.md`).
 2. **Viewer geometry (after viewer-sky-paint merges):** R8 portal step walls, R10 traversal and limits, R11 projection, R19 flat heights; optionally a 240×160 original-resolution mode from `render::draw_world`.
 2b. **Entity draw (R12):** reimplement `draw_sector_entities`/`raster_polygon` in `render.rs` and check the 536 car pixels of the reference frame.
 3. **R13:** decals and overlays on the player's atlas; opponent material choice.

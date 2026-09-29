@@ -19,6 +19,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 21. **The 128 bytes at `0x71F168`**, zero apart from one word, just before the city palettes.
 22. **Who calls `FUN_0814279c` (countdown timer), `FUN_08142aac` (best lap) and `FUN_08143094` (units panel)?** The HUD modes don't.
 23. **Keys and screens:** what `FUN_0812B084` does with the keys (hardware read, repeat?) and how `0x030064C0` is filled; which screen id is which menu for the seven non-intro kinds; where screen 0x25 (an intro-kind page with heading 960 and prompts 498/146 but no content) is reached.
+24. **What reads `0x03005724` and `0x03005728`** (counted and flagged by every VBlank IRQ)? **What are the handler-0x34 entities** spawned by the player's contacts (sparks?), and what does their handler do (D18)?
 16. **Audio module header bytes `+0x038` and `+0x138`** are never read by the player. What did they hold for the converter?
 17. **What calls the sound re-init/shutdown pair at `0x08149dbe`–`0x0814a018`?** Hypothesis: link play.
 

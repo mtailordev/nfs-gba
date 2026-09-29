@@ -39,8 +39,20 @@ def read_rows(text: str) -> list[dict]:
 
 
 def read_addresses(text: str) -> list[dict]:
-    """addresses.<agent>.csv: ordinary CSV (quote fields that hold commas)."""
-    return list(csv.DictReader(io.StringIO(text)))
+    """addresses.<agent>.csv: region,address,size,what,doc. A quoted line is read as CSV; otherwise `what` takes
+    every comma between the first three fields and the last one, as agents rarely quote it."""
+    keys = ["region", "address", "size", "what", "doc"]
+    rows = []
+    for line in [l for l in text.splitlines() if l.strip()][1:]:
+        if '"' in line:
+            rows.append(dict(zip(keys, next(csv.reader(io.StringIO(line))))))
+        else:
+            region, address, size, rest = line.split(",", 3)
+            what, _, doc = rest.rpartition(",")
+            rows.append(dict(zip(keys, [region, address, size, what, doc])))
+    for r in rows:
+        r["address"] = r["address"].strip().strip("`")  # some agents write the map's backticks
+    return rows
 
 
 def merge_symbols(base: list[dict], notes: dict[str, list[dict]]):
@@ -65,8 +77,8 @@ def merge_symbols(base: list[dict], notes: dict[str, list[dict]]):
 
 
 # Region -> the address map heading its table sits under.
-SECTIONS = {"rom": "## ROM", "level": "### Level descriptor", "ram": "## RAM", "world": "### World struct",
-            "entity": "### Entity", "driver": "### Driver", "profile": "### Profile"}
+SECTIONS = {"rom": "## ROM", "level": "### Level descriptor", "ram": "## RAM", "io": "### I/O registers",
+            "world": "### World struct", "entity": "### Entity", "driver": "### Driver", "profile": "### Profile"}
 KEY = re.compile(r"^\| `\+?(0x[0-9a-fA-F]+)")
 
 
@@ -81,9 +93,11 @@ def table_lines(lines: list[str], region: str) -> range:
 
 
 def in_table(text: str, r: dict) -> bool:
-    """Whether the region's table already has a row mentioning this address."""
+    """Whether the region's table already has a row for this address (in its first cell, where a row may list
+    several addresses)."""
     lines = text.split("\n")
-    return any(f"`{r['address'].lower()}" in lines[i].lower() for i in table_lines(lines, r["region"]))
+    want = f"`{r['address'].lower()}`"
+    return any(want in lines[i].lower().split("|")[1] for i in table_lines(lines, r["region"]) if "|" in lines[i][1:])
 
 
 def insert_addresses(text: str, rows: list[dict]) -> str:
@@ -103,7 +117,7 @@ def insert_addresses(text: str, rows: list[dict]) -> str:
         else:
             size = r["size"].strip()
             row = f"| {addr} | {r['what']}{f' ({size})' if size else ''} |"
-        key = int(r["address"].lstrip("+"), 16)
+        key = int(re.search(r"0x[0-9a-fA-F]+", r["address"])[0], 16)  # the first address of a multi-address cell
         body = table[2:]  # after the header and the |---| line
         before = [i for i in body if (m := KEY.match(lines[i])) and int(m[1], 16) <= key]
         lines.insert(before[-1] + 1 if before else body[0], row)
@@ -138,6 +152,9 @@ def main(argv):
     fresh = []
     for source, rows in addr_notes.items():
         for r in rows:
+            if r["region"].lower() not in SECTIONS:
+                print(f"UNKNOWN REGION {r['region']!r} in {source}: {r['address']} (regions: {', '.join(SECTIONS)})")
+                continue
             state = "EDIT (already in the map)" if in_table(map_text, r) else "new"  # the map's own spelling
             print(f"address {state:26} {source}: | `{r['address']}` | {r['size']} | {r['what']} | {r['doc']} |  "
                   f"({r['region']})")
