@@ -5,9 +5,7 @@ use nfsgba_sim::state::{MenuState, RaceResults};
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
 use super::text::{frames_to_centiseconds, number_text, thousands, time_text};
-use super::{
-    INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, MENU_BUTTON_PROMPTS, TEXT_BOX, TEXT_MENU, WORLD,
-};
+use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, TEXT_BOX, TEXT_MENU, WORLD};
 
 const RESULT_PAGES: u32 = 0x087E_510C;
 const CAREER_RACE_PAYOUT: u32 = 0x0812_EFE8; // (): `career::race_payout` models it; not wired to state here
@@ -159,12 +157,12 @@ fn alt(h: &mut impl Host, m: u32, x: u32, y: u32) {
     h.call(MENU_BLIT_MATERIAL_ALT, &[WORLD, m, x, y]);
 }
 
-fn prompts(h: &mut impl Host, page: u32) {
+fn prompts(h: &mut impl Host, st: &MenuState, page: u32) {
     let (l, r) = (
         rom_u16(h.rom(), page + 4) as i16 as i32 as u32,
         rom_u16(h.rom(), page + 6) as i16 as i32 as u32,
     );
-    h.call(MENU_BUTTON_PROMPTS, &[l, r, u32::MAX]);
+    h.button_prompts(st, &[l, r, u32::MAX]);
 }
 
 /// The text of a time in the standings.
@@ -189,7 +187,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 return 0;
             }
             unlock_messages(st, h);
-            prompts(h, page);
+            prompts(h, st, page);
             return 0;
         }
         let slot = rom_u32(h.rom(), ROUTE_SLOTS.wrapping_add(st.g.route.wrapping_mul(4)));
@@ -293,7 +291,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
         text(h, 0xE, arg, 0xA8, 0x74, 1, 8);
     }
     rank_results(st, 2, false);
-    prompts(h, page);
+    prompts(h, st, page);
     0
 }
 

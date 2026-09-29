@@ -5,7 +5,7 @@ reference states the Rust tests replay. Each set is a module here; see its docst
     .venv/Scripts/python.exe tools/oracle/cases.py SET [ARGS...]
 
 Sets (output folder under $NFSGBA_DATA/work/<sha8>/): unlock (menus), prove (harness/oracle), car, fuzz, calls, suspension
-(vehicle-physics), ai (ai-traffic), rules (race-rules), menus (menus, menus2), race-init, race-init-inputs, game-edges
+(vehicle-physics), ai (ai-traffic), rules (race-rules), menus (menus, menus3), draw (menus3), race-init, race-init-inputs, game-edges
 (race-init). Regenerating a set gives byte-identical files (seeded inputs, deterministic oracle).
 """
 import importlib
@@ -16,7 +16,8 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent)]  # the set modules import `oracle` and the tools' `common`/`mgba_ctl`
 
 SETS = {"prove": "prove", "car": "car", "fuzz": "fuzz", "calls": "calls", "suspension": "suspension", "ai": "ai",
-        "rules": "rules", "unlock": "unlock", "synth": "synth", "menus": "menus", "race-init": "race_init", "race-init-inputs": "race_init_inputs", "game-edges": "game_edges", "game-countdown": "game_countdown"}
+        "rules": "rules", "unlock": "unlock", "synth": "synth", "menus": "menus", "draw": "draw", "fill-rect-hw": "fill_rect_hw",
+        "race-init": "race_init", "race-init-inputs": "race_init_inputs", "game-edges": "game_edges", "game-countdown": "game_countdown"}
 
 
 def module(name: str):

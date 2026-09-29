@@ -215,6 +215,96 @@ pub fn blit(fb: &mut [u8], stride: usize, x: i32, y: i32, src: &[u8], w: usize, 
     }
 }
 
+/// Exact port of `blit_rows` (IWRAM overlay code, ROM `0x08169880`, reached by `menu_blit_material_alt` through
+/// `iwram_call_7`): copies `w × h` bytes from `src` to (`x`, `y`) of a `stride`-byte frame buffer by halfwords (an
+/// odd `w` drops each row's last byte and the source rows are `w & !1` apart), with no key colour. A halfword store
+/// to an odd address goes to the even one below it, as on the ARM7TDMI. Bytes outside `fb` are dropped (NOT 1:1
+/// (N1), as `blit`).
+pub fn blit_halves(fb: &mut [u8], stride: usize, x: i32, y: i32, src: &[u8], w: usize, h: usize) {
+    for row in 0..h {
+        let dst = (y as i64 + row as i64) * (stride & !1) as i64 + x as i64;
+        for k in 0..w / 2 {
+            let s = row * (w & !1) + 2 * k;
+            let d = (dst + 2 * k as i64) & !1;
+            for i in 0..2 {
+                if let (Some(&p), true) = (src.get(s + i), (0..fb.len() as i64).contains(&(d + i as i64))) {
+                    fb[(d + i as i64) as usize] = p;
+                }
+            }
+        }
+    }
+}
+
+/// Exact port of `fill_rect8` (`0x08164BEC`): fills the rectangle (`x0`, `y0`, `x1`, `y1`, right and bottom
+/// exclusive; nothing if an extent is negative) of a `pitch`-byte-wide page with `word`, the way the game does:
+/// byte stores for the ends and word stores for the middle. Three quirks are kept: a rectangle starting on an odd
+/// column stores its own first byte back (that pixel is not filled); a start with `x & 2` stores one byte and
+/// moves the pointer by one, so the word stores after it are misaligned; and an unaligned word store goes to the
+/// aligned word below it, filling up to three pixels left of the rectangle.
+///
+/// `bg_vram` is the hardware rule for byte stores into BG VRAM (the page is in VRAM): the byte goes to both halves
+/// of its halfword, so a one-byte store fills two pixels and the odd-column store copies the pixel to its left.
+/// Bytes outside `page` are dropped (NOT 1:1 (N1)).
+pub fn fill_rect8(page: &mut [u8], pitch: i32, rect: [i32; 4], word: u32, bg_vram: bool) {
+    let [x0, y0, x1, y1] = rect;
+    let (width, rows) = (x1.wrapping_sub(x0), y1.wrapping_sub(y0));
+    if width < 0 || rows < 0 {
+        return;
+    }
+    let colour = word as u8;
+    let put = |page: &mut [u8], a: i64, v: u8| {
+        if let Some(b) = usize::try_from(a).ok().and_then(|a| page.get_mut(a)) {
+            *b = v;
+        }
+    };
+    let store8 = |page: &mut [u8], a: i64, v: u8| {
+        if bg_vram {
+            put(page, a & !1, v);
+            put(page, a | 1, v);
+        } else {
+            put(page, a, v);
+        }
+    };
+    for r in 0..rows as i64 {
+        if width == 0 {
+            continue;
+        }
+        let (mut p, mut n, mut ux) = ((y0 as i64 + r) * pitch as i64 + x0 as i64, width, x0);
+        'row: {
+            if ux & 1 != 0 {
+                let old = usize::try_from(p).ok().and_then(|a| page.get(a)).copied().unwrap_or(0);
+                store8(page, p, old);
+                (p, n) = (p + 1, n - 1);
+                if n < 1 {
+                    break 'row;
+                }
+                ux += 1;
+            }
+            if (ux >> 1) & 1 != 0 {
+                store8(page, p, colour);
+                (p, n) = (p + 1, n - 2);
+                if n < 1 {
+                    break 'row;
+                }
+            }
+            for _ in 0..n >> 2 {
+                for (i, b) in word.to_le_bytes().into_iter().enumerate() {
+                    put(page, (p & !3) + i as i64, b);
+                }
+                p += 4;
+            }
+            n &= 3;
+            if n > 1 {
+                store8(page, p, colour);
+                (p, n) = (p + 1, n - 2);
+            }
+            if n > 0 {
+                store8(page, p, colour);
+            }
+        }
+    }
+}
+
 /// The raw bytes of text-table string `key` in `lang` (0 En, 1 Fr, 2 De, 3 It, 4 Es), for `decode_text`
 /// and `Font::draw` (`crate::text` decodes them with `decode_text`).
 pub fn text_bytes(rom: &[u8], key: usize, lang: usize) -> Vec<u8> {
@@ -707,6 +797,102 @@ impl Font {
                 }
             }
         }
+    }
+
+    /// Exact port of `FUN_08162b6c` (the message and text boxes): word-wrapped lines centred on `x`, from row `y`,
+    /// each line at most `max_width` pixels (a line breaks at the last space that fits, else before the character
+    /// that does not fit), `\n` starts a new line, at most `max_lines` lines. No range check on `y` (unlike
+    /// `draw_wrapped`). Returns the number of line breaks taken.
+    ///
+    /// NOT 1:1 (N1) only where a single character is wider than `max_width` (the game loops forever) and for
+    /// bytes outside `fb`.
+    #[allow(clippy::too_many_arguments)] // mirrors FUN_08162b6c
+    pub fn draw_centred(
+        &self,
+        rom: &[u8],
+        fb: &mut [u8],
+        stride: usize,
+        x: i32,
+        y: i32,
+        text: &[u8],
+        max_width: i32,
+        max_lines: i32,
+        colour: i16,
+    ) -> i32 {
+        let s = stride as i64;
+        let byte = |i: usize| text.get(i).copied().unwrap_or(0);
+        let glyph = |c: u8| rom[CHAR_MAP + c as usize];
+        let width = |c: u8| match glyph(c) {
+            0xFF => 0,
+            _ if c == 0x7E => self.widths[0] as i32,
+            g => self.widths[g as usize] as i32,
+        } + self.spacing as i32;
+        let (mut row, mut lines, mut i) = (y as i64 * s, 0, 0usize);
+        while byte(i) != 0 {
+            let start = i;
+            // How many characters (`n`) go on this line, and how wide they are (`used`).
+            let (mut used, mut n, mut space) = (0, 0usize, None::<(i32, usize)>);
+            if byte(i) != b'\n' {
+                let mut j = 0;
+                let mut w = 0;
+                let fit = loop {
+                    let c = byte(i + j);
+                    if c == b' ' {
+                        space = Some((w, j));
+                    }
+                    let advance = width(c);
+                    w += advance;
+                    if max_width <= w {
+                        break space.unwrap_or((w - advance, j));
+                    }
+                    j += 1;
+                    if matches!(byte(i + j), b'\n' | 0) {
+                        break (w, j);
+                    }
+                };
+                (used, n) = fit;
+            }
+            let mut at = row + x as i64 - (used >> 1) as i64;
+            for _ in 0..n {
+                let (c, g) = (byte(i), glyph(byte(i)));
+                let mut advance = 0;
+                if g != 0xFF {
+                    advance = self.widths[0] as i32;
+                    if c != 0x7E {
+                        advance = self.widths[g as usize] as i32;
+                        if g != 0 {
+                            self.blit(
+                                rom,
+                                fb,
+                                stride,
+                                g as usize,
+                                at + self.y_offsets[g as usize] as i64 * s,
+                                colour,
+                            );
+                        }
+                    }
+                }
+                at += (advance + self.spacing as i32) as i64;
+                i += 1;
+                if byte(i) == 0 {
+                    return lines;
+                }
+            }
+            if byte(i) == b'\n' {
+                i += 1;
+                lines += 1;
+                if max_lines <= lines {
+                    break;
+                }
+            } else if byte(i) == b' ' {
+                i += 1;
+            }
+            row += self.line_height as i64 * s;
+            if i == start {
+                break; // the game hangs on a character wider than `max_width`; stop instead
+            }
+        }
+        lines
     }
 
     /// `FUN_08162720`: one glyph, written through 16-bit read-modify-write as on VRAM.

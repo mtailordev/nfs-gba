@@ -7,8 +7,8 @@ use nfsgba_sim::state::MenuState;
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
 use super::{
-    CARBON_PLAY_MUSIC, CARBON_STOP_SOUND, FILL_RECT, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BUTTON_PROMPTS,
-    SAVE_WRITE_PROFILE, SND_STOP_MUSIC, TEXT_BOX, TEXT_MENU, VBLANK_INTR_WAIT, WORLD,
+    CARBON_PLAY_MUSIC, CARBON_STOP_SOUND, FILL_RECT, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SAVE_WRITE_PROFILE,
+    SND_STOP_MUSIC, TEXT_BOX, TEXT_MENU, VBLANK_INTR_WAIT, WORLD,
 };
 
 fn s16(h: &impl Host, a: u32) -> u32 {
@@ -391,6 +391,6 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
             h.call(TEXT_BOX, &[0xE, text as u32, 0x78, y, 0xF0, 0x10, 8]);
         }
     }
-    h.call(MENU_BUTTON_PROMPTS, &[0x8D, 0x92, u32::MAX]);
+    h.button_prompts(st, &[0x8D, 0x92, u32::MAX]);
     0
 }

@@ -8,9 +8,7 @@ use nfsgba_sim::state::MenuState;
 use super::event::{career_event_to_globals, hint_due};
 use super::flow::{self, CARBON_PLAY_SOUND, Host, message_box_open, peek_back_i, rom_u16, rom_u32};
 use super::text::{number_text, thousands};
-use super::{
-    INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BUTTON_PROMPTS, SAVE_WRITE_PROFILE, TEXT_BOX, TEXT_MENU, WORLD,
-};
+use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SAVE_WRITE_PROFILE, TEXT_BOX, TEXT_MENU, WORLD};
 
 const LIST_PAGES: u32 = 0x087E_544C;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
@@ -580,6 +578,6 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
     if state == Some(2) {
         left = 0x15A;
     }
-    h.call(MENU_BUTTON_PROMPTS, &[left, right, u32::MAX]);
+    h.button_prompts(st, &[left, right, u32::MAX]);
     0
 }

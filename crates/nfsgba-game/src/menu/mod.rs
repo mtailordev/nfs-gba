@@ -77,6 +77,8 @@ pub struct Gba {
     /// C strings the game builds on its stack (numbers, times) and passes to unported text primitives by pointer:
     /// the port passes `STACK_TEXT + index` instead, and the tests compare the contents.
     pub texts: Vec<Vec<u8>>,
+    /// The `texts` a drawing primitive read: they are not arguments of a logged call.
+    pub consumed: std::collections::HashSet<usize>,
 }
 
 /// Where [`Gba::text_arg`] strings "live": pointer arguments from here up index `Gba::texts`.
@@ -97,6 +99,7 @@ impl Gba {
             calls: Vec::new(),
             returns: Default::default(),
             texts: Vec::new(),
+            consumed: Default::default(),
         })
     }
 
@@ -189,6 +192,7 @@ fn vram_offset(addr: u32) -> usize {
 }
 
 mod adapt;
+pub mod draw;
 mod event;
 pub mod flow;
 mod hints;
@@ -384,7 +388,7 @@ pub const VBLANK_INTR_WAIT: u32 = 0x0815_1454;
 pub const MENU_BLIT_MATERIAL: u32 = 0x0813_6D74; // (world, material, x, y)
 pub const TEXT_MENU: u32 = 0x0814_1578; // (font, text key or pointer, x, y, colour/alignment, …)
 pub const TEXT_MENU_WRAPPED: u32 = 0x0814_1B40; // (font, key, x, y, width, lines, colour)
-pub const MENU_BUTTON_PROMPTS: u32 = 0x0812_BD60; // (left key, right key, -1)
+
 const FLASH_BLINK: u32 = 0x10; // bit 4 of the frame counter (`flash`) blinks the cursors and PRESS START
 
 // Helpers the career screens share.
@@ -409,7 +413,7 @@ mod tests {
 
     /// Oracle cases saved by `tools/ui_menu_oracle.py <name>`.
     fn cases(name: &str) -> Option<Vec<serde_json::Value>> {
-        let text = nfsgba_testkit::read_to_string(&format!("menus2/{name}.jsonl"))?;
+        let text = nfsgba_testkit::read_to_string(&format!("menus3/{name}.jsonl"))?;
         Some(text.lines().map(|l| serde_json::from_str(l).unwrap()).collect())
     }
 
@@ -550,6 +554,26 @@ mod tests {
                     goto_screen(&mut g, c["arg"].as_u64().unwrap() as i32);
                     None
                 }
+                "0x8164bec" | "0x8136d74" | "0x8136e60" | "0x8141578" | "0x81419c0" | "0x8141b40" | "0x8141c88" => {
+                    let a: Vec<u32> = c["args"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_u64().unwrap() as u32)
+                        .collect();
+                    let r = g.draw_call(u32::from_str_radix(&f[2..], 16).unwrap(), &a).unwrap();
+                    (f == "0x8141578").then_some(r) // the text width
+                }
+                "0x812bd60" => {
+                    let a = &c["args"];
+                    let k: [u32; 3] = std::array::from_fn(|i| a[i].as_u64().unwrap() as u32);
+                    adapt::typed(&mut g, |st, h| flow::Host::button_prompts(h, st, &k));
+                    None
+                }
+                "0x813550c" => {
+                    adapt::typed(&mut g, |st, h| flow::Host::message_box_draw(h, st));
+                    None
+                }
                 _ => {
                     // A kind's handler called directly: enter and update return 1 or 0; draw and exit nothing.
                     let a = u32::from_str_radix(&f[2..], 16).unwrap();
@@ -576,6 +600,7 @@ mod tests {
             // Stub arguments: words, or ["s", hex] for a string the game built on its stack, which the port passes
             // as `STACK_TEXT + i` (`Gba::texts[i]`); compared by content.
             let mut next_text = 0; // the port's strings, in the order the game passed them
+            let live: Vec<usize> = (0..g.texts.len()).filter(|i| !g.consumed.contains(i)).collect(); // not read by a drawing primitive
             let calls: Vec<(u32, Vec<u32>)> = c["calls"]
                 .as_array()
                 .unwrap()
@@ -586,8 +611,8 @@ mod tests {
                         None => {
                             let i = next_text;
                             next_text += 1;
-                            match g.texts.get(i) {
-                                Some(t) if *t == bytes(&v[1]) => STACK_TEXT + i as u32,
+                            match live.get(i).map(|&j| (j, &g.texts[j])) {
+                                Some((j, t)) if *t == bytes(&v[1]) => STACK_TEXT + j as u32,
                                 _ => u32::MAX,
                             }
                         }
@@ -609,6 +634,60 @@ mod tests {
             }
         }
         eprintln!("{name}: {} oracle cases match", cases.len());
+    }
+
+    /// The drawing primitives against the game's own code on a page in EWRAM (`tools/oracle/draw.py`): every changed
+    /// byte (the page, the number text's remainder), the `unpack_to_buffer` calls and `text_menu`'s width.
+    #[test]
+    fn drawing_matches_the_game() {
+        for kind in [
+            "fill", "blit", "alt", "text", "text7", "wrapped", "box", "prompts", "message",
+        ] {
+            replay(&format!("draw-{kind}"));
+        }
+    }
+
+    /// `fill_rect8` on a real mGBA frame (`tools/oracle/fill_rect_hw.py`: the game's own routine on 40 rectangles of
+    /// every start column and many widths, run headless on BG VRAM): the byte stores' halfword duplication and the
+    /// forced alignment of unaligned word stores that the function oracle does not model.
+    #[test]
+    fn fill_rect8_matches_mgba() {
+        let Some(text) = nfsgba_testkit::read_to_string("menus3/fill-rect-hw.json") else {
+            return;
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let (mut hw, mut plain) = (vec![0u8; 240 * 160], vec![0u8; 240 * 160]);
+        for r in v["rects"].as_array().unwrap() {
+            let n: Vec<i64> = r.as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect();
+            let rect = [n[0] as i32, n[1] as i32, n[2] as i32, n[3] as i32];
+            nfsgba_formats::ui::fill_rect8(&mut hw, 240, rect, n[4] as u32, true);
+            nfsgba_formats::ui::fill_rect8(&mut plain, 240, rect, n[4] as u32, false);
+        }
+        assert_eq!(hw, bytes(&v["page"]), "BG VRAM rules against the mGBA page");
+        assert_ne!(hw, plain, "the check must exercise the duplication");
+    }
+
+    /// A typed screen draws on the hidden page and shows it on the flip.
+    #[test]
+    fn screen_draws_and_flips() {
+        let Some(rom) = rom() else { return };
+        let mut s = draw::Screen::default();
+        let ctx = draw::Ctx {
+            rom: &rom,
+            language: 0,
+            pitch: 240,
+        };
+        s.fill_rect([8, 8, 16, 12], 3);
+        assert!(s.shown().iter().all(|&b| b == 0), "the shown page is untouched");
+        let w = s.draw(&ctx, |c, p| c.text_menu(p, 0xE, b"AB", 20, 40, 0, 0));
+        assert!(w > 0);
+        s.flip();
+        assert_eq!(s.shown()[8 * 240 + 8], 3);
+        assert!(
+            s.shown().iter().any(|&b| b != 0 && b != 3),
+            "the text is on the page just drawn"
+        );
+        assert!(s.page().iter().all(|&b| b == 0));
     }
 
     /// The four screen tables are the ROM's jump tables: each entry's stub calls (Thumb `bl`) its kind's handler

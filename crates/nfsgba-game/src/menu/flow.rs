@@ -13,7 +13,6 @@ use super::{
 pub const CARBON_PLAY_SOUND: u32 = 0x0813_5FDC;
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
 const APPLY_SECTOR_LIGHT: u32 = 0x0813_A514;
-const MESSAGE_BOX_DRAW: u32 = 0x0813_550C;
 
 /// What the typed flow needs from outside it: the ROM, calls to game functions not ported yet (logged, answered by
 /// the caller), the screens' handlers (still on the RAM image), and hardware (palette RAM).
@@ -49,6 +48,10 @@ pub trait Host {
     /// `main_frame`'s palette fade while `st.g.fade != 0`: the gradient buffer, BG and OBJ palette RAM one step
     /// towards their targets; moves `fade` by 2.
     fn fade_step(&mut self, st: &mut MenuState);
+    /// `menu_button_prompts` (`args`: the two text keys and the bottom-left one, −1 for none).
+    fn button_prompts(&mut self, st: &MenuState, args: &[u32; 3]);
+    /// `message_box_draw`: the open message box.
+    fn message_box_draw(&mut self, st: &mut MenuState);
 }
 
 /// `list_slot` (`0x0812FD04`): the List screen's cursor slot, −1 for other screens.
@@ -127,7 +130,7 @@ pub fn draw_screen(st: &mut MenuState, h: &mut impl Host, full: u32) {
         h.handler(st, k, 2, &[full]);
     }
     if st.g.message_box >= 0 {
-        h.call(MESSAGE_BOX_DRAW, &[full]);
+        h.message_box_draw(st);
     }
 }
 

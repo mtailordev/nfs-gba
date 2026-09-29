@@ -6,8 +6,8 @@ use nfsgba_sim::state::MenuState;
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
 use super::{
-    FLASH_BLINK, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BUTTON_PROMPTS, SAVE_WRITE_PROFILE, TEXT_MENU,
-    TEXT_MENU_WRAPPED, VBLANK_INTR_WAIT, WORLD,
+    FLASH_BLINK, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, SAVE_WRITE_PROFILE, TEXT_MENU, TEXT_MENU_WRAPPED,
+    VBLANK_INTR_WAIT, WORLD,
 };
 
 /// The name buffer's address (the game passes it to the text primitive as a pointer).
@@ -188,7 +188,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
         _ => {}
     }
     let (left, right) = (s16(h, page + 2), s16(h, page + 4));
-    h.call(MENU_BUTTON_PROMPTS, &[left, right, neg1]);
+    h.button_prompts(st, &[left, right, neg1]);
     0
 }
 

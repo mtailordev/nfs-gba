@@ -13,7 +13,7 @@ from oracle import REGS, Gba, _r, _w
 
 from common import data_dir
 
-OUT = data_dir() / "work" / "e5298b24" / "menus2"  # menus-2 cases (menus/ keeps the first menu port's)
+OUT = data_dir() / "work" / "e5298b24" / "menus3"  # menus-3 cases: the drawing primitives run for real (menus2/ stubbed them)
 BUF, TARGET = 0x0201_0000, 0x0201_0400  # scratch EWRAM for palette buffers (restored after every call)
 FADE_IN, FADE_OUT = 0x0815_E530, 0x0815_E4D4  # buffer variants: (buf, target, first, n, step) / (buf, first, n, step)
 FADE_IN_BG, FADE_OUT_BG = 0x0815_E2F0, 0x0815_E290  # palette RAM 0x05000000: (target, first, n, step) / (first, n, step)
@@ -88,33 +88,79 @@ PORTED_KINDS = ["intro", "kind7", "event", "career", "setup", "kind38", "list"]
 PORTED = {k[3] for k in KIND_HANDLERS} | {a for n in PORTED_KINDS for a in KIND_HANDLERS[KIND_SCREENS[n][0]]}
 STUBS = {a: (1 if i == 2 else 0) for k in KIND_HANDLERS for i, a in enumerate(k) if a not in PORTED}
 STUBS.update({
-    0x08135FDC: 2, 0x0813550C: 1,  # sound, message box draw
+    0x08135FDC: 2,  # sound
     0x08160E74: 0, 0x0815E9E8: 2, 0x08139E34: 1, 0x0813A514: 1, 0x0813A954: 1,  # game state step
     0x08135F38: 0, 0x0812EAAC: 1, 0x081396C4: 1, 0x08136054: 1,
     0x08162228: 1, 0x0816223C: 1, 0x081621F0: 4, 0x0812B084: 0, 0x08161F38: 1, 0x0816102C: 0,  # main_frame
     0x0815DFD8: 1, 0x0812B040: 0, 0x08142090: 0,
     0x08151454: 0, 0x081372E4: 1, 0x08143010: 1, 0x08139E10: 1,  # vblank wait; goto_screen(0x82)
-    0x081419C0: 7, 0x08149FD8: 1, 0x08149D84: 1,  # intro: title text, save write, save load
+    0x08149FD8: 1, 0x08149D84: 1,  # intro: save write, save load
     0x0813644C: 2, 0x081356DC: 0,  # intro enter: health image, profile_reset
     0x08139C8C: 2, 0x08163D30: 2, 0x08161EEC: 2, 0x08161C24: 2,  # menu scene: descriptor, unpack, sprite screen
-    0x081364C4: 1, 0x08141578: 6, 0x08136E60: 4, 0x08136D74: 4, 0x08141B40: 7, 0x0812BD60: 3,  # drawing primitives
+    0x081364C4: 1,  # intro page setup (clears the page)
     0x081372D8: 1,  # scene teardown (every exit handler)
     0x08143284: 0, 0x081435C4: 0,  # map screens: zone colours, map draw
-    0x08141C88: 7,  # text box (font, key or pointer, x, y, width, lines, colour)
     0x0812EFE8: 0,  # career_race_payout
-    0x08136028: 1, 0x0815240C: 0, 0x08164BEC: 4,  # stop sound, stop music, fill rectangle (rect on the stack)
+    0x08136028: 1, 0x0815240C: 0,  # stop sound, stop music
     0x0812BEEC: 0, 0x0812BF48: 0, 0x0812BFA4: 3, 0x0812FFB0: 0,  # garage car atlas, palette, draw; quick race
     0x0812C81C: 1, 0x0812C8A8: 1, 0x081302C4: 1, 0x0812C5C4: 1,  # unlock state, buy, upgrades changed, owned
     0x081300E0: 2, 0x08133D30: 4, 0x0812D960: 1,  # list item new mark, car stats, unlock price
 })
 STACK_TEXT = (0x0300_7000, 0x0300_7C00)  # stub pointer arguments in here are the game's stack strings
-STRUCT_ARGS = {0x08164BEC: (0, 16)}  # stub: (argument, bytes) passed by pointer to a stack struct
+STRUCT_ARGS = {}  # stub: (argument, bytes) passed by pointer to a stack struct
+UNPACK_TO_BUFFER = 0x08163D30  # stays a logged stub, but leaves the material's pixels where the blit reads them
 MENU_FRAME, GAME_STATE_STEP, MAIN_FRAME, GOTO_SCREEN = 0x0812B5F0, 0x0812ACEC, 0x0812AE64, 0x0812BB5C
 DRAW_SCREEN = 0x0812D334
 PROFILE_AT = 0x0200_0808
 
 
-def run(gba, fn, mem, ret, regs=None):
+class Skip(Exception):
+    pass
+
+
+def game_unpack(read, src):
+    """The game's ring LZ77 decoder (`ui.rs` `unpack`/`ring_decode`, ported as is): the bytes it writes."""
+    data = read(src, 0x10000)
+    size = int.from_bytes(data[:4], "little") >> 8
+    at = 4
+    ring, pos, out, stored, left = bytearray([0xFF]) * 0x1000, 0xFEE, bytearray(), 0, size
+    flags = bit = 7
+
+    def nxt():
+        nonlocal at
+        at += 1
+        return data[at - 1]
+
+    while True:
+        flags = flags << 1 & 0xFFFF_FFFF
+        bit += 1
+        if bit == 8:
+            bit, flags = 0, nxt()
+        if not flags & 0x80:
+            b = nxt()
+            if stored < size:
+                left -= 1
+                out.append(b)
+                if left <= 0:
+                    return bytes(out)
+            ring[pos] = b
+            stored += 1
+            pos = pos + 1 & 0xFFF
+            continue
+        hi, lo = nxt(), nxt()
+        for _ in range((hi >> 4) + 3):
+            b = ring[pos - ((hi & 0xF) << 8 | lo) - 1 & 0xFFF]
+            if stored < size:
+                left -= 1
+                out.append(b)
+                if left <= 0:
+                    break
+            ring[pos] = b
+            stored += 1
+            pos = pos + 1 & 0xFFF
+
+
+def run(gba, fn, mem, ret, regs=None, stack=()):
     """One oracle call with the stubs; returns the result, the writes and the stub calls."""
     calls = []
 
@@ -132,11 +178,14 @@ def run(gba, fn, mem, ret, regs=None):
                 k, size = STRUCT_ARGS[addr]
                 args[k] = ["s", bytes(uc.mem_read(_r(uc, k), size)).hex()]
             calls.append([addr, args])
+            if addr == UNPACK_TO_BUFFER:  # into the snapshot itself: the buffer is scratch, not a result
+                gba.poke(_r(uc, 1), game_unpack(gba.read_base, _r(uc, 0)))
             _w(uc, 0, ret.get(addr, 0))
         return f
 
-    r = gba.call(fn, mem=mem, regs=regs or {}, stubs={a: stub(a, n) for a, n in STUBS.items()})
-    assert r.stop == "return", (hex(fn), r.stop)
+    r = gba.call(fn, mem=mem, regs=regs or {}, stack=stack, stubs={a: stub(a, n) for a, n in STUBS.items()})
+    if r.stop != "return":  # the game draws off the mapped memory, or the oracle meets an unaligned store: no case
+        raise Skip(hex(fn), r.stop)
     return r.regs["r0"], r.writes, calls
 
 
@@ -187,7 +236,10 @@ def toplevel(_gba, rng, n=2400):
         ret = {h[1]: pick([0, 1, 1, 2]) for h in upd}
         ret.update({0x0813A954: pick([0, 1]), 0x08160E74: rng.randrange(1 << 32),
                     0x0816223C: pick([0, 1, 9, 0x100, 0x200, 0x639C, 0x1000, 3000, rng.randrange(0x10000)])})
-        r0, writes, calls = run(gbas[snap], fn, mem, ret)
+        try:
+            r0, writes, calls = run(gbas[snap], fn, mem, ret)
+        except Skip:
+            continue
         cases.append(dict(snap=snap, fn=hex(fn), mem=[[a, b.hex()] for a, b in mem],
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
                           writes=[[a, b.hex()] for a, b in writes], calls=calls))
@@ -253,7 +305,10 @@ def intro(_gba, rng, n=2400):
         mem.append((0x03005698, word(pick([0, 1]))))
         mem.append((PROFILE_AT, name[::-1]))
         mem.append((PROFILE_AT + 0x478, bytes(rng.randrange(256) for _ in range(0x18))))  # cleared by the name screen
-        r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
+        try:
+            r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
+        except Skip:
+            continue
         cases.append(dict(snap=snap, fn=hex(fn), arg=arg, mem=[[a, b.hex()] for a, b in mem],
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
                           writes=[[a, b.hex()] for a, b in writes], calls=calls))
@@ -428,8 +483,11 @@ def kind_cases(rng, kind, n):
             pick = rng.choice
             ret.update({0x0812C81C: pick([0, 1, 2, 3, 5]), 0x0812C5C4: pick([0, 1]), 0x081300E0: pick([0, 1]),
                         0x081302C4: pick([0, 1]), 0x0812D960: pick([0, 500, 12000, 150000]),
-                        0x08141578: pick([0, 0x20, 0x44])})
-        r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
+                        })
+        try:
+            r0, writes, calls = run(gbas[snap], fn, mem, ret, regs={"r0": arg})
+        except Skip:
+            continue
         cases.append(dict(snap=snap, fn=hex(fn), arg=arg, mem=[[a, b.hex()] for a, b in mem],
                           ret={hex(a): v for a, v in ret.items()}, r0=r0,
                           writes=[[a, b.hex()] for a, b in writes], calls=calls))

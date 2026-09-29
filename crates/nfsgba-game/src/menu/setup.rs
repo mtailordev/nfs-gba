@@ -8,8 +8,7 @@ use nfsgba_sim::state::{MenuGlobals, MenuState};
 use super::event::hint_due;
 use super::flow::{self, CARBON_PLAY_SOUND, Host, message_box_open, rom_u16, rom_u32};
 use super::{
-    INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, MENU_BUTTON_PROMPTS, SAVE_WRITE_PROFILE, TEXT_BOX,
-    TEXT_MENU, WORLD,
+    INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, SAVE_WRITE_PROFILE, TEXT_BOX, TEXT_MENU, WORLD,
 };
 
 const SETUP_SCREENS: u32 = 0x087E_6260;
@@ -380,7 +379,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
     }
     let (l, r) = (s16(h, page + 2), s16(h, page + 4));
     let third = if st.g.screen == 0xF { 0xB5 } else { u32::MAX };
-    h.call(MENU_BUTTON_PROMPTS, &[l, r, third]);
+    h.button_prompts(st, &[l, r, third]);
     0
 }
 

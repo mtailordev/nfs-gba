@@ -50,7 +50,27 @@ impl flow::Host for GbaHost<'_> {
         self.0.text_arg(s)
     }
     fn call(&mut self, function: u32, args: &[u32]) -> u32 {
-        self.0.unported(function, args)
+        match self.0.draw_call(function, args) {
+            Some(r) => r,
+            None => self.0.unported(function, args),
+        }
+    }
+    fn button_prompts(&mut self, st: &MenuState, a: &[u32; 3]) {
+        let page = self.0.draw_page();
+        let unpacked = self
+            .0
+            .on_page(page, |c, p, _| c.button_prompts(p, st, a[0], a[1], a[2]));
+        self.0.log_unpacks(unpacked);
+    }
+    fn message_box_draw(&mut self, st: &mut MenuState) {
+        let page = self.0.draw_page();
+        let text = if st.g.message_text > 0xFFFF {
+            self.0.cstring(st.g.message_text)
+        } else {
+            Vec::new()
+        };
+        let unpacked = self.0.on_page(page, |c, p, _| c.message_box(p, st, |_| text));
+        self.0.log_unpacks(unpacked);
     }
     fn handler(&mut self, st: &mut MenuState, kind: Kind, phase: usize, args: &[u32]) -> u32 {
         if flow::is_typed(kind, phase) {
@@ -205,4 +225,168 @@ fn fill32(g: &mut Gba, dst: u32, value: u32, n: u32) {
 /// The screen size (`0x03006410`: width, height) for the frame-buffer fills.
 fn screen_bytes(g: &Gba) -> u32 {
     (g.u16(0x0300_6410) as i16 as i32 * g.u16(0x0300_6412) as i16 as i32) as u32
+}
+
+// The drawing primitives (`draw.rs`) on the RAM image: the page is wherever the game's pointer says (VRAM or EWRAM).
+
+const UNPACK_TO_BUFFER: u32 = 0x0816_3D30; // (source, destination): stays a logged call until the scene port
+const MENU_TEXELS: u32 = 0x0816_C244;
+const TEXT_MENU_7: u32 = 0x0814_19C0;
+
+impl Gba {
+    /// The C string a text primitive's pointer argument names: a stack string the port made ([`Gba::text_arg`]) or
+    /// bytes in the game's memory. Stack strings are marked as used, so the stub-call comparison skips them.
+    fn cstring(&mut self, addr: u32) -> Vec<u8> {
+        let i = addr.wrapping_sub(STACK_TEXT) as usize;
+        if i < self.texts.len() {
+            self.consumed.insert(i);
+            return self.texts[i].clone();
+        }
+        (addr..).map(|a| self.u8(a)).take_while(|&b| b != 0).collect()
+    }
+
+    fn draw_ctx(&self) -> draw::Ctx<'_> {
+        draw::Ctx {
+            rom: &self.rom,
+            language: self.u32(LANGUAGE),
+            pitch: self.u16(0x0300_6410) as i16 as i32,
+        }
+    }
+
+    /// Runs `f` on the primitives' context and the page at `addr`; `f` also learns whether it is BG VRAM.
+    fn on_page<R>(&mut self, addr: u32, f: impl FnOnce(&draw::Ctx, &mut [u8], bool) -> R) -> R {
+        let (language, pitch) = (self.u32(LANGUAGE), self.u16(0x0300_6410) as i16 as i32);
+        let rom = std::mem::take(&mut self.rom);
+        let Some((buf, at)) = self.at_mut(addr) else {
+            panic!("a page at {addr:#010x}")
+        };
+        let r = f(
+            &draw::Ctx {
+                rom: &rom,
+                language,
+                pitch,
+            },
+            &mut buf[at..],
+            addr >> 24 == 6,
+        );
+        self.rom = rom;
+        r
+    }
+
+    /// The page the menus draw on: `**(world + 0x50)`.
+    fn draw_page(&self) -> u32 {
+        self.u32(self.u32(WORLD + 0x50))
+    }
+
+    /// The game's `unpack_to_buffer` calls for the blits that unpacked a material.
+    fn log_unpacks(&mut self, offsets: impl IntoIterator<Item = usize>) {
+        for o in offsets {
+            let buffer = self.u32(0x0300_57F0) + 0x9608;
+            self.unported(UNPACK_TO_BUFFER, &[MENU_TEXELS + o as u32, buffer]);
+        }
+    }
+
+    /// The drawing primitives that take only their arguments; `None` for any other function.
+    pub(super) fn draw_call(&mut self, function: u32, a: &[u32]) -> Option<u32> {
+        let text = |g: &mut Gba, arg: u32| {
+            if arg > 0xFFFF {
+                g.cstring(arg)
+            } else {
+                g.draw_ctx().table_text(arg)
+            }
+        };
+        let drawn = [
+            FILL_RECT,
+            MENU_BLIT_MATERIAL,
+            MENU_BLIT_MATERIAL_ALT,
+            TEXT_MENU,
+            TEXT_MENU_WRAPPED,
+            TEXT_BOX,
+            TEXT_MENU_7,
+        ];
+        if !drawn.contains(&function) {
+            return None;
+        }
+        let page = if function == FILL_RECT { 0 } else { self.draw_page() };
+        Some(match function {
+            FILL_RECT => {
+                let i = a[0].wrapping_sub(STACK_TEXT) as usize;
+                let rect = if i < self.texts.len() {
+                    self.consumed.insert(i);
+                    self.texts[i].clone()
+                } else {
+                    (0..16).map(|k| self.u8(a[0] + k)).collect()
+                };
+                let r = |i: usize| i32::from_le_bytes(rect[4 * i..][..4].try_into().unwrap());
+                self.on_page(a[1], |_, p, bg| {
+                    nfsgba_formats::ui::fill_rect8(p, a[2] as i32, [r(0), r(1), r(2), r(3)], a[3], bg)
+                });
+                0
+            }
+            MENU_BLIT_MATERIAL | MENU_BLIT_MATERIAL_ALT => {
+                let alt = function == MENU_BLIT_MATERIAL_ALT;
+                let unpacked = self.on_page(page, |c, p, _| c.blit_material(p, a[1], a[2] as i32, a[3] as i32, alt));
+                self.log_unpacks(unpacked);
+                0
+            }
+            TEXT_MENU => {
+                let t = text(self, a[1]);
+                self.on_page(page, |c, p, _| {
+                    c.text_menu(p, a[0], &t, a[2] as i32, a[3], a[4] as i32, a[5] as i16)
+                })
+            }
+            TEXT_MENU_WRAPPED => {
+                let t = text(self, a[1]);
+                self.on_page(page, |c, p, _| {
+                    c.text_wrapped(
+                        p,
+                        a[0],
+                        &t,
+                        a[2] as i32,
+                        a[3] as i32,
+                        a[4] as i32,
+                        a[5] as i32,
+                        a[6] as i16,
+                    )
+                });
+                0
+            }
+            TEXT_BOX => {
+                let t = text(self, a[1]);
+                self.on_page(page, |c, p, _| {
+                    c.text_box(
+                        p,
+                        a[0],
+                        &t,
+                        a[2] as i32,
+                        a[3] as i32,
+                        a[4] as i32,
+                        a[5] as i32,
+                        a[6] as i16,
+                    )
+                });
+                0
+            }
+            TEXT_MENU_7 => {
+                let t = text(self, a[1]);
+                for buffer in [0x0300_641C, 0x0300_6420] {
+                    let page = self.u32(buffer);
+                    self.on_page(page, |c, p, _| {
+                        c.text_box(
+                            p,
+                            a[0],
+                            &t,
+                            a[2] as i32,
+                            a[3] as i32,
+                            a[4] as i32,
+                            a[5] as i32,
+                            a[6] as i16,
+                        )
+                    });
+                }
+                0
+            }
+            _ => return None,
+        })
+    }
 }

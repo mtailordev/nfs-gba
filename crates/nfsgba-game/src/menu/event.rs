@@ -5,7 +5,7 @@ use nfsgba_sim::state::{MenuProfile, MenuState};
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16};
 use super::text::{frames_to_centiseconds, number_text, thousands, time_text};
-use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BUTTON_PROMPTS, TEXT_BOX, TEXT_MENU, WORLD};
+use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_BOX, TEXT_MENU, WORLD};
 
 const EVENT_PAGE: u32 = 0x087E_5090;
 /// Per zone: two boss-event numbers (u16 pairs) the hints and locks test.
@@ -335,6 +335,6 @@ pub fn draw<H: Host>(st: &mut MenuState, h: &mut H) -> u32 {
         r16(h, page + 2) as i16 as i32 as u32,
         r16(h, page + 4) as i16 as i32 as u32,
     );
-    h.call(MENU_BUTTON_PROMPTS, &[l, r, 0x1F5]);
+    h.button_prompts(st, &[l, r, 0x1F5]);
     0
 }

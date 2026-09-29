@@ -4,7 +4,7 @@
 use nfsgba_sim::state::MenuState;
 
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16};
-use super::{MENU_BLIT_MATERIAL, MENU_BUTTON_PROMPTS, TEXT_MENU, WORLD};
+use super::{MENU_BLIT_MATERIAL, TEXT_MENU, WORLD};
 
 const MAP_PALETTES: u32 = 0x0814_3284; // (): the map's zone colours into the second base palette
 const MAP_DRAW: u32 = 0x0814_35C4; // (): scrolls the view towards the cursor and draws the map and its markers
@@ -157,10 +157,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
         h.call(MENU_BLIT_MATERIAL, &[WORLD, m, 1, 0x48]);
         let m = if st.profile.repeats[1] >= 1 { 0xAA } else { 0xA9 };
         h.call(MENU_BLIT_MATERIAL, &[WORLD, m, 0xDF, 0x48]);
-        h.call(
-            MENU_BUTTON_PROMPTS,
-            &[left, rom_u16(h.rom(), page + 4) as i16 as i32 as u32, neg1],
-        );
+        h.button_prompts(st, &[left, rom_u16(h.rom(), page + 4) as i16 as i32 as u32, neg1]);
     }
     0
 }
