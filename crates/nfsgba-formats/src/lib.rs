@@ -5,6 +5,7 @@ use std::{env, fs, io, path::PathBuf};
 
 pub mod career;
 pub mod paint;
+pub mod render;
 pub mod sky;
 
 pub const ROM_BASE: u32 = 0x0800_0000;
