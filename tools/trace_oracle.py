@@ -1,15 +1,15 @@
 """Replay traced car steps on the game's own code in unicorn, and record what each step does to memory.
 
-    python tools/trace_oracle.py accel drive ...   # needs <session>/<name>.csv and its memory dump (trace_race.py)
+    python tools/trace_oracle.py accel drive ...   # needs the trace_race.py outputs of each scenario
 
-For every step of a trace (docs/engine/physics.md) this loads the traced entry state (player entity, physics
-struct, logged globals) into unicorn, runs the car handler FUN_0814bd4c from the ROM and
+For every step of a trace (docs/engine/physics.md) this loads the full RAM the reference build had at the step's
+entry (<name>.ramdelta) into unicorn, runs the car handler FUN_0814bd4c from the ROM and
   1. checks the result against the next traced state (the oracle's own check: must be exact), and
   2. writes <session>/<name>.oracle.txt: per step, every RAM byte the step changed and the sound calls it made.
 The Rust test (crates/nfsgba-sim/tests/trace.rs) compares its own writes and sound commands with this file.
 
-Stubbed (recorded, not run): the sound entry points, which drive the audio engine, and the wheel-sprite blit
-FUN_0813bd90 (rendering). The IWRAM stack (0x03007A00-0x03007E80) is ignored. Unicorn runs as an ARMv5 core
+Stubbed (recorded, not run): the sound entry points, which drive the audio engine, and the decal blit onto the car
+atlas FUN_0813bd90 (rendering). The IWRAM stack (0x03007A00-0x03007E80) is ignored. Unicorn runs as an ARMv5 core
 (unaligned loads rotate like the ARM7TDMI); SWI 6 (Div) is emulated.
 """
 import csv
@@ -31,14 +31,13 @@ HANDLER = 0x0814BD4C
 RET = 0x08000000
 SP = 0x03007E80
 STACK = range(0x03007A00, SP)
-# Globals logged per step by mgba_remote.lua's trace: column, address, size
-GLOBALS = (("dt", 0x03005640, 4), ("phase", 0x03000048, 4), ("input", 0x030057D8, 2), ("flag610c", 0x0300610C, 4),
-           ("sector", 0x03005614, 4))
-# Entity bytes other game code maintains between car steps (sector-list link, view depth, byte +0x88)
-EXTERNAL = {0x02, 0x03, 0x28, 0x29, 0x2A, 0x2B, 0x88}
+# Bytes other game code maintains between car steps: entity sector-list link, draw-list link, view depth, byte
+# +0x88; physics race position (the ranking)
+EXTERNAL = {0x02, 0x03, 0x04, 0x05, 0x28, 0x29, 0x2A, 0x2B, 0x88}
+PHYSICS_EXTERNAL = {0xA8, 0xA9, 0xAA, 0xAB}
 # Stubbed calls: address -> (name, argument count)
 STUBS = {0x08135FDC: ("play", 2), 0x08136028: ("stop", 1), 0x081360B4: ("pitch", 2), 0x08152E40: ("start", 4),
-         0x0813BD90: ("wheel_sprite", 3)}
+         0x0813BD90: ("decal", 3)}
 REGIONS = ((0x02000000, 0x40000, "wram"), (0x03000000, 0x8000, "iwram"))
 
 
@@ -67,7 +66,7 @@ def run_step(u: Uc, entity: int) -> list[str]:
             name, n = STUBS[addr]
             regs = [uc.reg_read(r) for r in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)]
             args = [struct.unpack("<i", struct.pack("<I", v))[0] for v in regs[:n]]
-            if name != "wheel_sprite":  # rendering: not part of the simulation
+            if name != "decal":  # rendering: not part of the simulation
                 calls.append(f"{name}({','.join(map(str, args))})")
             uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
 
@@ -109,26 +108,44 @@ def changes(before: list[np.ndarray], after: list[np.ndarray]) -> list[tuple[int
     return out
 
 
+def ram_states(work: Path, name: str):
+    """The full EWRAM + IWRAM at each traced step, from <name>.ramdelta (tools/trace_race.py)."""
+    first = np.concatenate([np.fromfile(work / f"{name}.wram.bin", dtype=np.uint8),
+                            np.fromfile(work / f"{name}.iwram.bin", dtype=np.uint8)])
+    data = (work / f"{name}.ramdelta").read_bytes()
+    assert data[:4] == b"RAMD"
+    steps, at = struct.unpack_from("<I", data, 4)[0], 8
+    for _ in range(steps):
+        state = first.copy()
+        runs, at = struct.unpack_from("<I", data, at)[0], at + 4
+        for _ in range(runs):
+            off, n = struct.unpack_from("<II", data, at)
+            state[off:off + n] = np.frombuffer(data, dtype=np.uint8, count=n, offset=at + 8)
+            at += 8 + n
+        yield state
+
+
 def replay(name: str) -> int:
     work = session()
     rom = canonical()[0].read_bytes()
     u = machine(work, name, rom)
-    rows = list(csv.DictReader((work / f"{name}.csv").open()))
+    with (work / f"{name}.csv").open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
     entity = struct.unpack("<I", u.mem_read(WORLD + 0x3C, 4))[0]
-    physics = struct.unpack("<I", u.mem_read(entity + 0x8C, 4))[0]
     lines, bad = [], 0
-    for i in range(len(rows) - 1):
-        row, nxt = rows[i], rows[i + 1]
-        u.mem_write(entity, bytes.fromhex(row["entity"]))
-        u.mem_write(physics, bytes.fromhex(row["physics"]))
-        for key, addr, size in GLOBALS:
-            u.mem_write(addr, (int(row[key]) & 0xFFFFFFFF).to_bytes(4, "little")[:size])
+    for i, state in zip(range(len(rows) - 1), ram_states(work, name)):
+        nxt = rows[i + 1]
+        # The whole game state at the step's entry, as the reference build had it.
+        u.mem_write(0x02000000, state[:0x40000].tobytes())
+        u.mem_write(0x03000000, state[0x40000:].tobytes())
         before = snapshot(u)
         calls = run_step(u, entity)
         writes = changes(before, snapshot(u))
+        physics = struct.unpack("<I", u.mem_read(entity + 0x8C, 4))[0]
         got_e, got_p = bytes(u.mem_read(entity, 0xA4)), bytes(u.mem_read(physics, 0x4FC))
         want_e, want_p = bytes.fromhex(nxt["entity"]), bytes.fromhex(nxt["physics"])
-        if any(got_e[k] != want_e[k] for k in range(0xA4) if k not in EXTERNAL) or got_p != want_p:
+        if any(got_e[k] != want_e[k] for k in range(0xA4) if k not in EXTERNAL) or \
+                any(got_p[k] != want_p[k] for k in range(0x4FC) if k not in PHYSICS_EXTERNAL):
             bad += 1
             print(f"{name} step {i}: the oracle does not reproduce the trace")
         lines.append(f"{i};{' '.join(f'{a:08x}={v:02x}' for a, v in writes)};{' '.join(calls)}")

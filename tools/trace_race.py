@@ -4,15 +4,22 @@
     python tools/trace_race.py accel brake     # record some
     python tools/trace_race.py --summary NAME  # print a recorded trace's key fields
 
-Each scenario loads race.ss from the session directory (copy it from data/work/<sha8>/mgba/), traces the car
-handler with mgba_remote.lua's `trace` and writes <session>/<name>.csv plus the memory dump of its first step.
-Rerunning gives identical files: the emulator is deterministic from the savestate.
+Scenarios run in the session directory: copy race.ss and mainmenu.ss there from data/work/<sha8>/mgba/. A scenario
+without its own `trace` command loads race.ss and traces all of its commands; one with `trace` (the race start)
+runs as written. Each writes <session>/<name>.csv, the memory dump of its first traced step and <name>.ramdelta
+(the full RAM at every step, as differences from that dump). Rerunning gives identical files: the emulator is
+deterministic from the savestate.
 """
 import csv
 import os
+import struct
 import subprocess
 import sys
 from pathlib import Path
+
+# The Quick Play menu route from mainmenu.ss (docs/TOOLS.md): Quick Play, Random, confirm, then the race info
+# screen's A starts the race (a 3-lap circuit, Mazda RX-7, heavy traffic).
+MENU_TO_RACE = ["load mainmenu", "wait 30", "hold A 10", "wait 60", "hold A 10", "wait 60", "hold A 10", "wait 60"]
 
 SCENARIOS = {
     "accel": ["hold A 240"],
@@ -25,16 +32,64 @@ SCENARIOS = {
     "handbrake": ["hold A 150", "hold A,R,LEFT 50", "hold A,RIGHT 40", "hold A,R,RIGHT 40", "hold A 60"],
     "long": ["hold A 180", "hold A,LEFT 30", "hold A 90", "hold A,RIGHT 45", "hold A 120", "hold A,LEFT 60",
              "hold A 150", "hold A,RIGHT 30", "hold A 200", "hold A,LEFT 40", "hold A 150"],
+    # From the race info screen through the intro and the launch among the opponents; the car's init step
+    # (FUN_0814b98c, not ported) is left out: "trace 1" skips one car step.
+    "start": [*MENU_TO_RACE, "trace 1", "hold A 10", "wait 100", "hold A 700"],
 }
 
 # Entity 0 fields for --summary: name, offset, size (see docs/engine/physics.md)
-FIELDS = [("x", 0x0C, 4), ("y", 0x10, 4), ("z", 0x14, 4), ("heading", 0x2C, 4), ("sector", 0x78, 2)]
+FIELDS = [("x", 0x0C, 4), ("y", 0x10, 4), ("z", 0x14, 4), ("heading", 0x2C, 4), ("state", 0x4A, 2),
+          ("sector", 0x78, 2)]
+
+
+def commands(name: str) -> list[str]:
+    """The scenario's mgba_remote commands; `trace [SKIP]` becomes `trace NAME [SKIP]`."""
+    steps = SCENARIOS[name]
+    if not any(c.split()[0] == "trace" for c in steps):
+        steps = ["load race", "wait 2", "trace", *steps]
+    return [" ".join(["trace", name, *c.split()[1:]]) if c.split()[0] == "trace" else c for c in steps] + ["untrace"]
+
+
+RAM = 0x48000  # EWRAM (0x40000) then IWRAM (0x8000), as mgba_remote.lua appends them per step
+MAGIC = b"RAMD"
+
+
+def ram_deltas(work: Path, name: str) -> None:
+    """<name>.ram.bin (full RAM per step) -> <name>.ramdelta: per step, the byte runs that differ from the first
+    step's dump. Format: "RAMD", u32 steps; per step u32 runs, then per run u32 offset, u32 length, bytes
+    (offsets into EWRAM followed by IWRAM)."""
+    import numpy as np
+
+    raw = work / f"{name}.ram.bin"
+    data = np.fromfile(raw, dtype=np.uint8).reshape(-1, RAM)
+    first = np.concatenate([np.fromfile(work / f"{name}.wram.bin", dtype=np.uint8),
+                            np.fromfile(work / f"{name}.iwram.bin", dtype=np.uint8)])
+    assert (data[0] == first).all(), "the first step's RAM should equal the dump"
+    out = [MAGIC, struct.pack("<I", len(data))]
+    for step in data:
+        idx = np.nonzero(step != first)[0]
+        runs = []
+        if len(idx):
+            # Merge differences closer than 8 bytes into one run.
+            breaks = np.nonzero(np.diff(idx) > 8)[0]
+            starts = np.concatenate([[idx[0]], idx[breaks + 1]])
+            ends = np.concatenate([idx[breaks], [idx[-1]]]) + 1
+            runs = list(zip(starts.tolist(), ends.tolist()))
+        out.append(struct.pack("<I", len(runs)))
+        for s, e in runs:
+            out.append(struct.pack("<II", s, e - s) + step[s:e].tobytes())
+    (work / f"{name}.ramdelta").write_bytes(b"".join(out))
+    raw.unlink()
 
 
 def run(names: list[str]) -> None:
+    from mgba_ctl import canonical, data_dir
+
+    work = data_dir() / "work" / canonical()[1] / (os.environ.get("NFSGBA_MGBA_SESSION") or "mgba")
     ctl = [sys.executable, str(Path(__file__).with_name("mgba_ctl.py"))]
     for name in names:
-        subprocess.run([*ctl, "load race", "wait 2", f"trace {name}", *SCENARIOS[name], "untrace"], check=True)
+        subprocess.run([*ctl, *commands(name)], check=True)
+        ram_deltas(work, name)
         print("recorded", name)
 
 
@@ -43,7 +98,7 @@ def summary(path: Path) -> None:
         for row in csv.DictReader(f):
             e = bytes.fromhex(row["entity"])
             vals = [f"{n}={int.from_bytes(e[o:o + s], 'little', signed=True)}" for n, o, s in FIELDS]
-            print(row["frame"], f"input={int(row['input']):#06x}", f"dt={row['dt']}", *vals)
+            print(row["frame"], f"phase={row['phase']}", f"input={int(row['input']):#06x}", f"dt={row['dt']}", *vals)
 
 
 if __name__ == "__main__":
