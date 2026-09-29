@@ -111,7 +111,12 @@ fn load(dir: &Path, name: &str) -> Option<Trace> {
         })
         .collect();
     let rom = nfsgba_formats::canonical_rom().expect("canonical ROM");
-    Some(Trace { rom, first, deltas, cars })
+    Some(Trace {
+        rom,
+        first,
+        deltas,
+        cars,
+    })
 }
 
 fn diff(label: &str, got: &[u8], want: &[u8], external: &[(usize, u8)]) -> Vec<String> {
@@ -195,7 +200,7 @@ fn each_step_matches_the_trace() {
         };
         let expected = oracle(&dir, name);
         let mut failures = Vec::new();
-        for i in 0..trace.cars.len() - 1 {
+        for (i, (want_writes, want_sounds)) in expected.iter().enumerate().take(trace.cars.len() - 1) {
             let mut sim = Sim::new(trace.state(i));
             let e = sim.mem.u32(W_ENTITIES);
             let before = sim.mem.clone();
@@ -205,13 +210,12 @@ fn each_step_matches_the_trace() {
             }
             let mut bad = check(&sim, e, &trace.cars[i + 1]);
             let (writes, sounds) = effects(&before, &sim);
-            let (want_writes, want_sounds) = &expected[i];
             let extra: Vec<_> = writes.iter().filter(|w| !want_writes.contains(w)).take(8).collect();
             let missing: Vec<_> = want_writes.iter().filter(|w| !writes.contains(w)).take(8).collect();
             if !extra.is_empty() || !missing.is_empty() {
                 bad.push(format!("RAM writes differ: extra {extra:x?}, missing {missing:x?}"));
             }
-            if &sounds != want_sounds {
+            if sounds != *want_sounds {
                 bad.push(format!("sounds {sounds:?} want {want_sounds:?}"));
             }
             if !bad.is_empty() {

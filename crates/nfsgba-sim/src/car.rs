@@ -2,7 +2,8 @@
 //! car dynamics (`FUN_0813d1f0`) with the engine, gearbox, steering, brakes and the order of the sub-steps.
 //!
 //! Entity (0xA4 bytes) fields used: `+0x00` index, `+0x02` sector-list link, `+0x08/+0x0A` flags, `+0x0C/+0x10/
-//! +0x14` position (8.8 city units, `-y` up), `+0x2C` heading << 8, `+0x4A` state (0 init, 2 and 0x100 racing),
+//! +0x14` position (8.8 city units, `-y` up), `+0x2C` heading << 8, `+0x4A` state (0 init, 0x100 racing, 2
+//! finished: set by `lap_crossing`),
 //! `+0x72` route segment, `+0x78` sector, `+0x89` handling record, `+0x8C` physics struct, `+0x90` waypoint.
 //! The physics struct (0x4FC bytes) is described in `docs/engine/physics.md`.
 
@@ -13,9 +14,7 @@ use crate::mem::Mem;
 use crate::route;
 use crate::sound::Command;
 use crate::walls;
-use crate::world::{
-    self, AUTOMATIC, DT, INPUT, NONE, PLAYER, RACE_PHASE, RACE_STATE, W_SEGMENTS, WORLD, control, entity,
-};
+use crate::world::{self, AUTOMATIC, DT, INPUT, NONE, PLAYER, PROFILE, RACE_PHASE, W_SEGMENTS, WORLD, control, entity};
 use crate::{Result, Sim, Unported};
 
 /// Handling records (0x158 bytes), one per car: `+0x54` top gear, `+0x68` idle rpm, `+0x11C` drag,
@@ -27,7 +26,7 @@ const ACCELERATE: u32 = 0;
 const BRAKE: u32 = 1;
 const HANDBRAKE: u32 = 6;
 const NITRO: u32 = 7;
-const POWER: u32 = 8;
+const WINGMAN: u32 = 8;
 
 /// `FUN_0814bd4c`: the car handler (entity handler table 0x087F38B8, entries 0..3).
 pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
@@ -35,6 +34,8 @@ pub fn handler(sim: &mut Sim, e: u32) -> Result<()> {
     world::unlink_entity(&mut sim.mem, index);
     match sim.mem.u16(e + 0x4A) {
         2 => {
+            // Finished: keep driving; the first finisher sets the race-over flag and starts the palette fade,
+            // and once the fade is done the race ends (phase 3) with this car's index.
             racing_step(sim, e)?;
             let m = &mut sim.mem;
             if m.i32(0x0300_5780) == 0 {
@@ -65,8 +66,8 @@ fn racing_step(sim: &mut Sim, e: u32) -> Result<()> {
     }
     let index = m.u16(e) as u32;
     if phase != 1 && phase != 4 {
-        // The player's wheel sprite (`FUN_0813bd90`, drawn when the car is seen from the side) is rendering,
-        // not simulation; it belongs to the renderer.
+        // NOT 1:1 (rendering): for the player, seen from the side, the game redraws the decal onto the car's
+        // texture atlas here (`draw_decal_on_atlas`, `FUN_0813bd90`). That belongs to the renderer.
         nitro(&mut sim.mem, e);
         let input = sim.mem.u16(INPUT + index * 2) as u32;
         dynamics(sim, e, input, dt)?;
@@ -151,10 +152,10 @@ fn player_physics(m: &Mem) -> u32 {
     m.u32(entity(m, m.u32(PLAYER)) + 0x8C)
 }
 
-/// Flag a gear change for the HUD (race state `+0x2E0`) when it is the player's car.
+/// Flag a gear change for the HUD (profile `+0x2E0`) when it is the player's car.
 fn gear_changed(m: &mut Mem, p: u32) {
     if p == player_physics(m) {
-        let s = m.u32(RACE_STATE);
+        let s = m.u32(PROFILE);
         m.set_i32(s + 0x2E0, 1);
     }
 }
@@ -226,8 +227,8 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let pressed = input & !(m.u16(p + 0x4AE) as u32) & 0xFFFF;
     m.set_u16(p + 0x4AE, input as u16);
     let held = input & 0xFFFF;
-    if control(m, held, pressed, POWER) {
-        route::action_power(m)?;
+    if control(m, held, pressed, WINGMAN) {
+        route::wingman_command(m)?;
     }
     if m.i16(p + 0x4E4) > 100 && m.i16(p + 0x4E6) == 0 && m.i32(p + 0x44) <= 0x7FFF {
         return Err(Unported("FUN_0814efa8 (put the car back on the road)"));
@@ -280,13 +281,14 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         forward * 0x20
     };
     m.set_i32(p + 0x44, speed);
-    let stats = m.u32(RACE_STATE);
+    let stats = m.u32(PROFILE);
     m.set_i32(stats + 0x2D0, m.i32(stats + 0x2D0) + (speed >> 12));
     if m.i32(stats + 0x2DC) < m.i32(p + 0x44) {
         m.set_i32(stats + 0x2DC, m.i32(p + 0x44));
     }
 
-    // Throttle (+0x24), brake (+0x28) and the reverse gear.
+    // Throttle (+0x24), brake (+0x28) and the reverse gear; the pedals are frozen once the race is over
+    // (0x03005780).
     if m.i32(0x0300_5780) == 0 {
         let throttle = if m.i32(AUTOMATIC) == 0 {
             m.set_i32(p + 0x28, control(m, held, pressed, BRAKE) as i32);
@@ -599,7 +601,7 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
             rpm
         };
         let pitch = div(r * 700, top);
-        let effect = m.i8(m.u32(RACE_STATE) + 0x2EF) as i32 as u32;
+        let effect = m.i8(m.u32(PROFILE) + 0x2EF) as i32 as u32;
         sim.sounds.push(Command::Pitch(effect, pitch + 400));
     }
     let m = &mut sim.mem;
@@ -607,7 +609,7 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         .map(|k| m.i32(p + contact::WHEELS + contact::WHEEL_SIZE * k + 0x7C))
         .fold(0i32, i32::wrapping_add)
         >> 2;
-    let stats = m.u32(RACE_STATE);
+    let stats = m.u32(PROFILE);
     if slip_sum > 0x3_D090 {
         m.set_i32(stats + 0x2D8, m.i32(stats + 0x2D8) + 1);
         let flag = stats + 0x318 + index * 4;
@@ -649,7 +651,7 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
     let lane = nearest_lane_of(m, e);
     m.set_u16(p + 0xC0, lane as u16);
     if m.i32(0x0300_56E0) == 2 {
-        return Err(Unported("FUN_08140f78 (game mode 2 damage)"));
+        return Err(Unported("FUN_08140f78 (hunter_life_tick, hunter races)"));
     }
     Ok(())
 }

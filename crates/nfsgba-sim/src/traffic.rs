@@ -148,7 +148,12 @@ pub fn spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
     let racers = m.u32(RACERS);
     if racers != 0 {
         let entities = m.u32(W_ENTITIES);
-        let d = |m: &Mem, o: u32| dist2((m.i32(o + 0xC) - m.i32(t + 0xC)) >> 8, (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 8);
+        let d = |m: &Mem, o: u32| {
+            dist2(
+                (m.i32(o + 0xC) - m.i32(t + 0xC)) >> 8,
+                (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 8,
+            )
+        };
         let mut k = 0;
         let mut o = entities;
         let mut clear = CLEARANCE2 < d(m, o);
@@ -169,7 +174,10 @@ pub fn spawn(m: &mut Mem, near: u32, kind: u32) -> Result<u32> {
     for k in 0..8 {
         let o = m.u32(SLOTS + 4 * k);
         if o != 0
-            && dist2((m.i32(o + 0xC) - m.i32(t + 0xC)) >> 8, (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 8) <= CLEARANCE2
+            && dist2(
+                (m.i32(o + 0xC) - m.i32(t + 0xC)) >> 8,
+                (m.i32(o + 0x14) - m.i32(t + 0x14)) >> 8,
+            ) <= CLEARANCE2
         {
             blocked += 1;
             break;

@@ -385,13 +385,13 @@ pub fn traffic_countdown(mem: &mut Mem) -> Result<()> {
     Ok(())
 }
 
-/// `FUN_0814078c` (control action 8): mode-specific power; only active in game modes 1..=12 (0x03006104).
-pub fn action_power(mem: &mut Mem) -> Result<()> {
+/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (0x03006104 = 1..=12).
+pub fn wingman_command(mem: &mut Mem) -> Result<()> {
     if mem.i32(0x0300_6104).wrapping_sub(1) as u32 >= 0xC {
         return Ok(());
     }
     if mem.i32(0x0300_61DC) != 0 && mem.i32(0x0300_61E8) == 0 && mem.i32(0x0300_61D8) == 0 {
-        return Err(Unported("FUN_0814078c (mode power)"));
+        return Err(Unported("FUN_0814078c (wingman command)"));
     }
     Ok(())
 }

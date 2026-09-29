@@ -17,13 +17,18 @@ class TraceTools(unittest.TestCase):
     def test_scenarios_only_use_remote_commands_and_keys(self):
         keys = set(re.search(r"local KEYS = \{(.*?)\}", LUA).group(1).replace(" ", "").split(","))
         keys = {k.split("=")[0] for k in keys}
-        for name, commands in trace_race.SCENARIOS.items():
+        ops = set(re.findall(r'op == "(\w+)"', LUA))
+        for name in trace_race.SCENARIOS:
+            commands = trace_race.commands(name)
+            self.assertEqual(sum(c.split()[0] == "trace" for c in commands), 1, name)
+            self.assertTrue(commands[-1] == "untrace" and any(c == f"trace {name}" for c in commands), name)
             for c in commands:
                 op, *args = c.split()
-                self.assertIn(op, ("hold", "wait"), name)
+                self.assertIn(op, ops, c)
                 if op == "hold":
                     self.assertTrue(set(args[0].split(",")) <= keys, c)
-                self.assertTrue(args[-1].isdigit(), c)
+                if op in ("hold", "wait"):
+                    self.assertTrue(args[-1].isdigit(), c)
 
     def test_summary_decodes_entity_fields(self):
         entity = bytearray(0xA4)

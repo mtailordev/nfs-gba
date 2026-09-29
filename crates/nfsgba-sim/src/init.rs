@@ -8,11 +8,11 @@ use crate::heap;
 use crate::math::{atan2, cos, div, isqrt, mat_mul, mul12, quat_matrix, recip, recip_entry, sin, sub};
 use crate::mem::Mem;
 use crate::route::{self, CIRCUIT, OPPONENTS};
-use crate::world::{self, NONE, PLAYER, RACE_STATE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
+use crate::world::{self, NONE, PLAYER, PROFILE, W_ENTITIES, W_SEGMENTS, W_WAYPOINTS, WORLD};
 use crate::{Result, Sim};
 
-/// The race's game mode (0 normal, 1 and 2 other modes; `docs/engine/physics.md`).
-const MODE: u32 = 0x0300_00A0;
+/// Career flag (0 quick race; 1 and 2 career variants).
+const CAREER: u32 = 0x0300_00A0;
 /// Upgrade weights: 10 categories × 5 attributes (acceleration?, torque, final drive, grip, brakes).
 const UPGRADE_WEIGHTS: u32 = 0x087F_5988;
 /// Per car in the save data (`*0x0300539C`, 0x11 bytes): +2 decal, +7 10 upgrade bytes (4 × 2 bits).
@@ -68,7 +68,7 @@ pub fn car_init(sim: &mut Sim, e: u32) -> Result<()> {
     m.set_u32(p + 0x430, 1u32.checked_shl(m.i16(p + 0xC0) as u8 as u32).unwrap_or(0));
     upgrades(m, e);
     nitro_setup(m, e, p);
-    let stats = m.u32(RACE_STATE);
+    let stats = m.u32(PROFILE);
     for k in 0..4 {
         m.set_u32(stats + 0x318 + 4 * k, 0);
     }
@@ -104,7 +104,7 @@ fn upgrades(m: &mut Mem, e: u32) {
         }
         m.set_u32(p + 0x3E0 + 4 * i, level);
     }
-    if m.i32(MODE) == 2 {
+    if m.i32(CAREER) == 2 {
         m.set_u32(p + 0x404, 1);
     }
 }
@@ -160,8 +160,15 @@ fn setup_handling(m: &mut Mem, e: u32, h: u32) {
     if e == world::entity(m, m.u32(PLAYER)) {
         m.set_i32(0x0300_60A4, final_drive);
     }
-    m.set_i32(p + 0x4BC, hw(m, 0x16) + div(up[1].wrapping_mul(hw(m, 0x54) - hw(m, 0x16)), max[1]));
-    let pos = [m.i32(e + 0xC), m.i32(e + 0x10) - hw(m, 0x3D) + hw(m, 0x3F), m.i32(e + 0x14)];
+    m.set_i32(
+        p + 0x4BC,
+        hw(m, 0x16) + div(up[1].wrapping_mul(hw(m, 0x54) - hw(m, 0x16)), max[1]),
+    );
+    let pos = [
+        m.i32(e + 0xC),
+        m.i32(e + 0x10) - hw(m, 0x3D) + hw(m, 0x3F),
+        m.i32(e + 0x14),
+    ];
     for k in 0..18 {
         m.set_i32(p + 0x464 + 4 * k, hw(m, 0x1B + k));
     }
@@ -191,12 +198,12 @@ fn setup_handling(m: &mut Mem, e: u32, h: u32) {
     let opponents = m.i32(OPPONENTS);
     let grid = if index as u32 > opponents as u32 {
         let mut u = (m.i32(0x0300_6104) - 1) as u32;
-        if m.i32(MODE) != 0 {
+        if m.i32(CAREER) != 0 {
             u = (u & 1) + 6;
         }
         m.i32(0x087F_42E4 + u * 4)
     } else {
-        match m.i32(MODE) {
+        match m.i32(CAREER) {
             0 => (m.i32(0x0300_5608) - 1) * 0x30 + (opponents - (index - 1)) * 10,
             1 => (m.i32(0x0300_00BC) - 0x28) * 3 + (opponents - (index - 1)) * 10,
             _ => (opponents - (index - 1)) * 10 - 0x30,
@@ -300,11 +307,29 @@ fn matrix_quat(m: &Mem, r: &[i32; 9]) -> [i32; 4] {
     }
     // The largest diagonal element picks the component computed from the square root.
     let (big, d, (o1, v1), (o2, v2), w) = if r[4] < r[0] && r[8] < r[0] {
-        (0, r[0] - (r[4] - 0x1000) - r[8], (1, r[3] + r[1]), (2, r[2] + r[6]), r[7] - r[5])
+        (
+            0,
+            r[0] - (r[4] - 0x1000) - r[8],
+            (1, r[3] + r[1]),
+            (2, r[2] + r[6]),
+            r[7] - r[5],
+        )
     } else if r[8] < r[4] {
-        (1, r[4] - (r[0] - 0x1000) - r[8], (0, r[3] + r[1]), (2, r[7] + r[5]), r[2] - r[6])
+        (
+            1,
+            r[4] - (r[0] - 0x1000) - r[8],
+            (0, r[3] + r[1]),
+            (2, r[7] + r[5]),
+            r[2] - r[6],
+        )
     } else {
-        (2, r[8] - (r[0] - 0x1000) - r[4], (0, r[2] + r[6]), (1, r[7] + r[5]), r[3] - r[1])
+        (
+            2,
+            r[8] - (r[0] - 0x1000) - r[4],
+            (0, r[2] + r[6]),
+            (1, r[7] + r[5]),
+            r[3] - r[1],
+        )
     };
     let v = isqrt(d as u32) * 0x40;
     let k = if v != 0 { half_recip(v) } else { 0 };
@@ -330,7 +355,7 @@ fn race_start_setup(sim: &mut Sim, e: u32) -> Result<()> {
     }
     m.set_u32(CIRCUIT, (m.i32(0x0300_56E0) != 3) as u32);
     // `FUN_081400bc`: the time limit.
-    m.set_i32(0x0300_6154, if m.i32(MODE) != 0 { 0x2328 } else { 0x4650 });
+    m.set_i32(0x0300_6154, if m.i32(CAREER) != 0 { 0x2328 } else { 0x4650 });
     m.set_u32(0x0300_6088, 0);
     let v = m.i8(0x087F_3050 + m.u32(0x0300_5388).wrapping_mul(4)) as i32;
     m.set_i32(0x0300_6084, v);
@@ -344,7 +369,7 @@ fn race_start_setup(sim: &mut Sim, e: u32) -> Result<()> {
     m.set_i32(0x0300_6028, m.i32(0x087F_40D0u32.wrapping_add((k * 4) as u32)));
     m.set_u32(0x0300_60AC, 0);
     m.set_u32(0x0300_6090, m.u32(0x0300_5604));
-    if m.i32(MODE) == 0 {
+    if m.i32(CAREER) == 0 {
         let v = m.i32(0x0300_5608);
         m.set_i32(0x0300_6158, v);
         m.set_i32(0x0300_6190, m.i32(0x0300_6170) + v * m.i32(0x0300_6194));
@@ -390,7 +415,8 @@ fn route_distances(m: &mut Mem) {
     let count = m.u16(segs) as i32;
     m.set_u32(0x0300_6120, 0x100);
     let wp = |m: &Mem, seg: u32, k: i32| -> u32 {
-        m.u32(W_WAYPOINTS).wrapping_add((m.i32(segs + seg * 8 + 4) + k) as u32 * 0x18)
+        m.u32(W_WAYPOINTS)
+            .wrapping_add((m.i32(segs + seg * 8 + 4) + k) as u32 * 0x18)
     };
     let dist = |m: &Mem, a: u32, bx: i32, bz: i32| {
         let (dx, dz) = (m.i32(a) - bx, m.i32(a + 4) - bz);
@@ -428,14 +454,18 @@ fn route_distances(m: &mut Mem) {
         let len = m.i32(last + 0x10) >> 8;
         for k in 0..n {
             let wk = wp(m, seg, k);
-            m.set_i32(wk + 0x10, div(span.wrapping_mul(m.i32(wk + 0x10)), len) + m.i32(w + 0x10));
+            m.set_i32(
+                wk + 0x10,
+                div(span.wrapping_mul(m.i32(wk + 0x10)), len) + m.i32(w + 0x10),
+            );
         }
         m.set_i32(0x0300_6120 + seg * 4, div(span << 8, len));
     }
 }
 
-/// `unpack_decal` (`FUN_0813bf58`) without its last call: the player's decal pixels onto the heap. The blit
-/// onto the car's texture atlas (`FUN_0813bd90`) is rendering and belongs to the renderer.
+/// `unpack_decal` (`FUN_0813bf58`) without its last call: the player's decal pixels onto the heap.
+/// NOT 1:1 (rendering): the blit onto the car's texture atlas (`draw_decal_on_atlas`, `FUN_0813bd90`) belongs
+/// to the renderer.
 fn unpack_decal(m: &mut Mem, e: u32) {
     let car = m.u8(e + 0x89) as u32;
     let save = m.u32(CAR_SAVE) + car * 0x11;

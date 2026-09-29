@@ -10,7 +10,7 @@ use crate::math::{cross, div, udiv};
 use crate::mem::Mem;
 use crate::route::{is_player, lateral, nearest_lane};
 use crate::sound::Command;
-use crate::world::{NONE, RACE_STATE, W_WALL_STATES, sector_addr, wall_addr, wall_flags};
+use crate::world::{NONE, PROFILE, W_WALL_STATES, sector_addr, wall_addr, wall_flags};
 use crate::{Result, Sim, Unported};
 
 /// Walls in the neighbouring sector are only tested this far (city units squared) past a wall's ends.
@@ -33,7 +33,7 @@ pub fn collide(sim: &mut Sim, e: u32) -> Result<()> {
     let hit = walls(sim, e, x, z, y, sector, true)?;
     let m = &mut sim.mem;
     let player = is_player(m, m.u16(e) as u32);
-    let contact = m.u32(RACE_STATE) + 0x2EC;
+    let contact = m.u32(PROFILE) + 0x2EC;
     if hit == 0 {
         if player {
             m.set_u8(contact, 0);
@@ -160,7 +160,7 @@ fn respond(sim: &mut Sim, e: u32, point: [i32; 3], n: [i32; 3], w: u32) -> Resul
     }
     m.set_u32(p + 0x448, m.u32(p + 0x448) | 0x10);
     if m.i32(0x0300_56E0) == 2 && !broke {
-        // `FUN_0814136c`: wall damage in game mode 2.
+        // `FUN_0814136c` (`hunter_hit`): hunter races lose hunter life on wall hits.
         if m.u16(e + 0x4A) != 2 {
             let v = m.i32(p + 0x4E8) - (m.i32(0x0300_6184).wrapping_mul(j) >> 8);
             m.set_i32(p + 0x4E8, v.max(0));

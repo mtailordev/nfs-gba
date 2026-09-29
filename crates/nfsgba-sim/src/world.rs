@@ -24,7 +24,8 @@ pub const W_QUERY_SECTOR: u32 = WORLD + 0xEA;
 pub const NONE: u32 = 0xFFFF;
 
 // Globals (IWRAM words unless noted); `docs/engine/physics.md` lists what is known about each.
-/// Frame time: 25,500 / timer-3 ticks of the last frame, clamped to 10..100 (`FUN_0812ae64`); 15 when 0x03005624 is 2.
+/// Frame time: 25,500 / timer-3 ticks of the last frame, clamped to 10..100 (`main_frame` `FUN_0812ae64`); 15
+/// when 0x03005624 is 2.
 pub const DT: u32 = 0x0300_5640;
 pub const RACE_PHASE: u32 = 0x0300_0048;
 /// Entity index of the local player (sound, HUD and camera side effects happen only for it).
@@ -35,8 +36,9 @@ pub const INPUT: u32 = 0x0300_57D8;
 pub const BINDING_SET: u32 = 0x0300_629C;
 /// Automatic gearbox when non-zero (read by the dynamics).
 pub const AUTOMATIC: u32 = 0x0300_5798;
-/// The race-state struct pointer (EWRAM): `+0x2D0` distance, `+0x2D8` skid counter, `+0x2DC` top speed, ...
-pub const RACE_STATE: u32 = 0x0300_56EC;
+/// The profile pointer (EWRAM, saved to EEPROM). The car step updates `+0x2D0` distance, `+0x2D8` skid count,
+/// `+0x2DC` top speed and the HUD flags `+0x2E0/+0x2E8/+0x2EC`, `+0x318` skid sounds.
+pub const PROFILE: u32 = 0x0300_56EC;
 
 /// The control binding table: per binding set 9 actions of (held mask, held value, pressed mask, pressed value).
 const BINDINGS: u32 = 0x087F_5494;
