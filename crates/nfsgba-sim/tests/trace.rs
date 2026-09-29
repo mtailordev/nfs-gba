@@ -3,7 +3,7 @@
 //! A trace has, for every call of the car handler on the player's entity, the full RAM at its entry
 //! (`<name>.ramdelta` over the first step's dump) and the player's entity and physics struct (`<name>.csv`).
 //! `tools/trace_oracle.py` adds each step's RAM writes and sound calls as the game's own code makes them
-//! (`<name>.oracle.txt`). Skipped when the traces are absent.
+//! (`<name>.oracle.txt`). Missing traces follow `nfsgba_testkit`'s rule (`NFSGBA_REQUIRE_DATA`).
 
 use nfsgba_sim::sound::Command;
 use nfsgba_sim::world::W_ENTITIES;
@@ -12,23 +12,24 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 16] = [
-    "accel",
-    "brake",
-    "steer",
-    "wall",
-    "drive",
-    "reverse",
-    "handbrake",
-    "long",
-    "start",
-    "hunter",
-    "tipped",
-    "stuck",
-    "sprint",
-    "circuit",
-    "wingman",
-    "shortcut",
+/// (scenario, recorded car steps): every step of every scenario must replay.
+const SCENARIOS: [(&str, usize); 16] = [
+    ("accel", 60),
+    ("brake", 84),
+    ("steer", 64),
+    ("wall", 76),
+    ("drive", 207),
+    ("reverse", 104),
+    ("handbrake", 86),
+    ("long", 284),
+    ("start", 184),
+    ("hunter", 697),
+    ("tipped", 709),
+    ("stuck", 707),
+    ("sprint", 371),
+    ("circuit", 724),
+    ("wingman", 767),
+    ("shortcut", 1786),
 ];
 const EWRAM: usize = 0x4_0000;
 /// Bits other game code maintains between car steps, as (offset, mask): the entity's sector-list link
@@ -71,11 +72,7 @@ impl Trace {
 }
 
 fn trace_dir() -> Option<PathBuf> {
-    let data = nfsgba_formats::data_dir();
-    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(data.join("vault/manifest.json")).ok()?).ok()?;
-    let sha8 = &manifest["canonical_target"].as_str()?[..8];
-    let dir = data.join("work").join(sha8).join("vehicle-physics");
-    dir.join("accel.ramdelta").exists().then_some(dir)
+    nfsgba_testkit::fixture("vehicle-physics")
 }
 
 fn hex(s: &str) -> Vec<u8> {
@@ -90,7 +87,8 @@ fn u32_at(b: &[u8], at: usize) -> usize {
 }
 
 fn load(dir: &Path, name: &str) -> Option<Trace> {
-    let csv = fs::read_to_string(dir.join(format!("{name}.csv"))).ok()?;
+    let rom = nfsgba_testkit::rom()?;
+    let csv = nfsgba_testkit::read_to_string(&format!("vehicle-physics/{name}.csv"))?;
     let mut lines = csv.lines();
     let header: Vec<&str> = lines.next().unwrap().split(',').collect();
     let cars = lines
@@ -117,7 +115,6 @@ fn load(dir: &Path, name: &str) -> Option<Trace> {
                 .collect()
         })
         .collect();
-    let rom = nfsgba_formats::canonical_rom().expect("canonical ROM");
     Some(Trace {
         rom,
         first,
@@ -206,18 +203,14 @@ fn oracle(dir: &Path, name: &str) -> Vec<Expected> {
 /// the same RAM writes and sound commands as the game's own code (`tools/trace_oracle.py`).
 #[test]
 fn each_step_matches_the_trace() {
-    let Some(dir) = trace_dir() else {
-        eprintln!("traces not found; skipped");
-        return;
-    };
-    for name in SCENARIOS {
-        let Some(trace) = load(&dir, name) else {
-            eprintln!("{name}: not recorded; skipped");
-            continue;
-        };
+    let Some(dir) = trace_dir() else { return };
+    for (name, want_steps) in SCENARIOS {
+        let Some(trace) = load(&dir, name) else { continue };
         let expected = oracle(&dir, name);
         let mut failures = Vec::new();
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} steps"), want_steps);
         for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+            checked.tick();
             let (want_writes, want_sounds) = &want.effects;
             let mut sim = Sim::new(trace.state(i));
             let e = sim.mem.u32(W_ENTITIES);
@@ -245,6 +238,7 @@ fn each_step_matches_the_trace() {
             }
         }
         let steps = trace.cars.len() - 1;
+        assert_eq!(steps, want_steps, "{name}: recorded steps");
         assert!(
             failures.is_empty(),
             "{} of {steps} steps differ:\n{}",
@@ -260,20 +254,18 @@ fn each_step_matches_the_trace() {
 /// from the reference). Every traced car state is reproduced.
 #[test]
 fn replay_matches_the_trace() {
-    let Some(dir) = trace_dir() else {
-        eprintln!("traces not found; skipped");
-        return;
-    };
-    for name in SCENARIOS {
-        let Some(trace) = load(&dir, name) else {
-            continue;
-        };
+    let Some(dir) = trace_dir() else { return };
+    for (name, want_steps) in SCENARIOS {
+        let Some(trace) = load(&dir, name) else { continue };
+        assert_eq!(trace.cars.len() - 1, want_steps, "{name}: recorded steps");
         let expected = oracle(&dir, name);
         let mut own: Option<(Vec<u8>, Vec<u8>)> = None;
         let mut sim = Sim::new(trace.state(0));
         let e = sim.mem.u32(W_ENTITIES);
         let start = sim.mem.vec3(e + 0xC);
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} replay steps"), want_steps);
         for (i, want) in expected.iter().enumerate().take(trace.cars.len() - 1) {
+            checked.tick();
             let mut mem = trace.state(i);
             if let Some((entity, physics)) = &own {
                 let merged: Vec<u8> = (0..0xA4)
@@ -314,15 +306,12 @@ fn replay_matches_the_trace() {
 /// port must write the same RAM bytes and make the same sound calls.
 #[test]
 fn perturbed_steps_match_the_oracle() {
-    let Some(dir) = trace_dir() else {
-        eprintln!("traces not found; skipped");
-        return;
-    };
-    let Ok(text) = fs::read_to_string(dir.join("fuzz.jsonl")) else {
-        eprintln!("fuzz cases not found (tools/trace_fuzz.py); skipped");
+    let Some(dir) = trace_dir() else { return };
+    let Some(text) = nfsgba_testkit::read_to_string("vehicle-physics/fuzz.jsonl") else {
         return;
     };
     let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(cases.len(), 4500, "fuzz cases (tools/trace_fuzz.py)");
     let mut traces: HashMap<String, Trace> = HashMap::new();
     let (mut failures, mut paths) = (Vec::new(), HashMap::<String, usize>::new());
     for (n, c) in cases.iter().enumerate() {
@@ -401,15 +390,12 @@ fn perturbed_steps_match_the_oracle() {
 /// for the spawn).
 #[test]
 fn calls_match_the_oracle() {
-    let Some(dir) = trace_dir() else {
-        eprintln!("traces not found; skipped");
-        return;
-    };
-    let Ok(text) = fs::read_to_string(dir.join("calls.jsonl")) else {
-        eprintln!("call cases not found (tools/trace_calls.py); skipped");
+    let Some(dir) = trace_dir() else { return };
+    let Some(text) = nfsgba_testkit::read_to_string("vehicle-physics/calls.jsonl") else {
         return;
     };
     let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(cases.len(), 4500, "direct-call cases (tools/trace_calls.py)");
     let mut traces: HashMap<String, Trace> = HashMap::new();
     let mut failures = Vec::new();
     for (n, c) in cases.iter().enumerate() {

@@ -1236,11 +1236,7 @@ mod tests {
     /// wall it drops (that `draw_sector_walls` would pass to the rasteriser) writes none.
     #[test]
     fn walls_drawn_matches_the_rasteriser() {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        let Ok(data) = rom::canonical_rom() else {
-            eprintln!("skipping: no ROM vault");
-            return;
-        };
+        let Some(data) = nfsgba_testkit::rom() else { return };
         let (sectors, routes, textures) = (rom::city(&data), rom::routes(&data), rom::city_textures(&data));
         let rt = game::race_runtime(&sectors);
         let (mut kept, mut dropped) = (0, 0);

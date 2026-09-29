@@ -733,21 +733,11 @@ pub fn decode_text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{canonical_rom, data_dir};
+    use nfsgba_testkit::rom;
 
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
-
-    /// A reference dump (`tools/mgba_ctl.py dump`) under `$NFSGBA_DATA/work/e5298b24/`.
+    /// A reference dump (`tools/mgba_ctl.py dump`).
     fn dump(name: &str, domain: &str) -> Option<Vec<u8>> {
-        let path = data_dir().join(format!("work/e5298b24/{name}.{domain}.bin"));
-        std::fs::read(&path)
-            .map_err(|e| eprintln!("skipping: no dump {} ({e})", path.display()))
-            .ok()
+        nfsgba_testkit::read(&format!("{name}.{domain}.bin"))
     }
 
     fn u16s(b: &[u8]) -> Vec<u16> {

@@ -558,15 +558,9 @@ pub fn message_hide(rom: &[u8], g: &Globals, objects: &mut [Object], messages: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LEVEL_TABLE;
     use crate::ui::{Oam, sprite_bank, update_sprites};
-    use crate::{LEVEL_TABLE, canonical_rom, data_dir};
-
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
+    use nfsgba_testkit::rom;
 
     fn le16(b: &[u8], o: usize) -> u16 {
         u16::from_le_bytes([b[o], b[o + 1]])
@@ -764,10 +758,7 @@ mod tests {
     /// after `hud_update` + `sprite_screen_update`: objects, globals, message slots, shadow OAM, OBJ palette
     /// and OBJ VRAM (tiles 0x200..0x3FF: the minimap and every uploaded HUD frame). Returns frames checked.
     fn replay(rom: &[u8], name: &str) -> Option<usize> {
-        let path = data_dir().join(format!("work/e5298b24/hud-logic/{name}.trace"));
-        let trace = std::fs::read(&path)
-            .map_err(|e| eprintln!("skipping: no trace {} ({e})", path.display()))
-            .ok()?;
+        let trace = nfsgba_testkit::read(&format!("hud-logic/{name}.trace"))?;
         let bank = sprite_bank(rom, LEVEL_TABLE);
         let (mut frames, mut calls, mut features) = (0, 0, std::collections::BTreeSet::new());
         // Calls nest (the HUD toggle calls hud_reset): entries are a stack.

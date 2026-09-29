@@ -10,3 +10,6 @@ publish = false
 bevy = { version = "=0.19.1", features = ["free_camera"] }
 nfsgba-formats = { path = "../nfsgba-formats" }
 nfsgba-game = { path = "../nfsgba-game" }
+
+[dev-dependencies]
+nfsgba-testkit = { path = "../nfsgba-testkit" }

@@ -4,8 +4,8 @@
 //! loop. `tools/trace_ai_oracle.py` runs that loop on each frame's RAM in unicorn and records, per handler call,
 //! every RAM byte it wrote and its stubbed calls (`<name>.ai-oracle.txt`, session `ai-traffic`). Here each frame
 //! replays the loop: the other handlers' calls apply the game's writes, and every opponent (0x29) and traffic
-//! (0x36) call runs the port, which must write exactly the same bytes and make the same calls. Skipped when the
-//! traces are absent.
+//! (0x36) call runs the port, which must write exactly the same bytes and make the same calls. Missing traces
+//! follow `nfsgba_testkit`'s rule (`NFSGBA_REQUIRE_DATA`).
 
 use nfsgba_sim::sound::Command;
 use nfsgba_sim::{Mem, Sim, ai, traffic_ai};
@@ -13,19 +13,21 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 12] = [
-    "start",
-    "accel",
-    "brake",
-    "steer",
-    "wall",
-    "drive",
-    "reverse",
-    "handbrake",
-    "long",
-    "sprint",
-    "circuit",
-    "wingman",
+/// (scenario, opponent and traffic calls, car states compared in the replay, lane timers the replay takes from
+/// the trace, D17): exact counts, so a stop or a shortened trace fails.
+const SCENARIOS: [(&str, usize, usize, usize); 12] = [
+    ("start", 640, 640, 3),
+    ("accel", 180, 180, 1),
+    ("brake", 252, 252, 1),
+    ("steer", 192, 192, 0),
+    ("wall", 228, 228, 0),
+    ("drive", 621, 621, 2),
+    ("reverse", 312, 312, 1),
+    ("handbrake", 258, 258, 3),
+    ("long", 852, 852, 2),
+    ("sprint", 1510, 1509, 2),
+    ("circuit", 3879, 3878, 25),
+    ("wingman", 3548, 3546, 3),
 ];
 const EWRAM: usize = 0x4_0000;
 /// The IWRAM stack, which the oracle ignores.
@@ -57,10 +59,14 @@ struct Call {
 }
 
 fn work(session: &str) -> Option<PathBuf> {
-    let data = nfsgba_formats::data_dir();
-    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(data.join("vault/manifest.json")).ok()?).ok()?;
-    let sha8 = &manifest["canonical_target"].as_str()?[..8];
-    Some(data.join("work").join(sha8).join(session))
+    nfsgba_testkit::fixture(session)
+}
+
+/// A scenario's trace: the player-car session's, else the AI session's (sprint, circuit and wingman).
+fn load_any(traces: &Path, oracles: &Path, name: &str) -> Option<Trace> {
+    load(traces, name)
+        .or_else(|| load(oracles, name))
+        .or_else(|| nfsgba_testkit::missing(&format!("trace {name} (vehicle-physics/ or ai-traffic/)")))
 }
 
 fn u32_at(b: &[u8], at: usize) -> usize {
@@ -89,8 +95,8 @@ fn load(dir: &Path, name: &str) -> Option<Trace> {
     Some(Trace { first, deltas })
 }
 
-fn oracle(dir: &Path, name: &str) -> Option<Vec<Call>> {
-    let text = fs::read_to_string(dir.join(format!("{name}.ai-oracle.txt"))).ok()?;
+fn oracle(name: &str) -> Option<Vec<Call>> {
+    let text = nfsgba_testkit::read_to_string(&format!("ai-traffic/{name}.ai-oracle.txt"))?;
     Some(
         text.lines()
             .map(|l| {
@@ -167,24 +173,17 @@ fn run(sim: &mut Sim, handler: u32, e: u32) -> Option<Result<Vec<String>, String
 /// Every opponent and traffic call of every traced frame writes exactly what the game's code writes.
 #[test]
 fn each_call_matches_the_game() {
-    let (Some(traces), Some(oracles)) = (work("vehicle-physics"), work("ai-traffic")) else {
-        eprintln!("traces not found; skipped");
-        return;
-    };
-    let Ok(rom) = nfsgba_formats::canonical_rom() else {
-        eprintln!("no ROM; skipped");
+    let (Some(traces), Some(oracles), Some(rom)) = (work("vehicle-physics"), work("ai-traffic"), nfsgba_testkit::rom())
+    else {
         return;
     };
     let (mut total, mut total_stopped) = (0, 0);
-    for name in SCENARIOS {
-        let (Some(trace), Some(calls)) = (
-            load(&traces, name).or_else(|| load(&oracles, name)),
-            oracle(&oracles, name),
-        ) else {
-            eprintln!("{name}: not recorded; skipped");
+    for (name, want_calls, _, _) in SCENARIOS {
+        let (Some(trace), Some(calls)) = (load_any(&traces, &oracles, name), oracle(name)) else {
             continue;
         };
         let (mut checked, mut stopped, mut failures) = (0, Vec::new(), Vec::new());
+        let mut counted = nfsgba_testkit::Expect::new(format!("{name} calls"), want_calls);
         let mut step = usize::MAX;
         let mut mem = trace.state(&rom, 0);
         for c in &calls {
@@ -196,6 +195,7 @@ fn each_call_matches_the_game() {
             let mut sim = Sim::new(mem.clone());
             if let Some(result) = run(&mut sim, c.handler, e) {
                 checked += 1;
+                counted.tick();
                 match result {
                     // Paths the port does not have yet stop instead of guessing (the 1:1 rule); only the ones
                     // listed in docs/engine/ai.md may stop.
@@ -228,6 +228,11 @@ fn each_call_matches_the_game() {
             "{} of {checked} calls differ:\n{}",
             failures.len(),
             failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
+        );
+        assert_eq!(
+            (checked, stopped.len()),
+            (want_calls, 0),
+            "{name}: calls checked, stopped: {stopped:?}"
         );
         eprintln!(
             "{name}: {} opponent and traffic calls exact, {} stopped",
@@ -303,23 +308,17 @@ fn differences(m: &Mem, reference: &Mem, e: u32) -> Vec<String> {
 /// timer, `docs/engine/ai.md`); where only that differs by such a count, the reference value is taken and counted.
 #[test]
 fn replay_matches_the_trace() {
-    let (Some(traces), Some(oracles)) = (work("vehicle-physics"), work("ai-traffic")) else {
-        eprintln!("traces not found; skipped");
+    let (Some(traces), Some(oracles), Some(rom)) = (work("vehicle-physics"), work("ai-traffic"), nfsgba_testkit::rom())
+    else {
         return;
     };
-    let Ok(rom) = nfsgba_formats::canonical_rom() else {
-        eprintln!("no ROM; skipped");
-        return;
-    };
-    for name in SCENARIOS {
-        let (Some(trace), Some(calls)) = (
-            load(&traces, name).or_else(|| load(&oracles, name)),
-            oracle(&oracles, name),
-        ) else {
+    for (name, _, want_compared, want_timing) in SCENARIOS {
+        let (Some(trace), Some(calls)) = (load_any(&traces, &oracles, name), oracle(name)) else {
             continue;
         };
         let steps = trace.deltas.len();
         let mut own: std::collections::BTreeMap<u32, Own> = Default::default();
+        let mut counted = nfsgba_testkit::Expect::new(format!("{name} car states"), want_compared);
         let (mut compared, mut timing, mut stops) = (0, 0, 0);
         for i in 0..steps - 1 {
             // Cars that reached unported code this frame: they take the game's result and re-sync from the trace.
@@ -391,6 +390,7 @@ fn replay_matches_the_trace() {
                 }
                 assert!(bad.is_empty(), "{name} step {i} entity {}: {}", c.entity, bad.join(" "));
                 compared += 1;
+                counted.tick();
                 let block = if p >= 0x0200_0000 {
                     mem.bytes(p, block_size(&mem, e)).to_vec()
                 } else {
@@ -402,6 +402,11 @@ fn replay_matches_the_trace() {
                 );
             }
         }
+        assert_eq!(
+            (compared, timing, stops),
+            (want_compared, want_timing, 0),
+            "{name}: car states, lane timers taken, re-synced calls"
+        );
         eprintln!(
             "{name}: {compared} car states reproduced ({timing} lane timers taken from the trace, {stops} calls \
              re-synced after unported code)"

@@ -10,4 +10,5 @@ publish = false
 nfsgba-formats = { path = "../nfsgba-formats" }
 
 [dev-dependencies]
+nfsgba-testkit = { path = "../nfsgba-testkit" }
 serde_json = "1.0.151"

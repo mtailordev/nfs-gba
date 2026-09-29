@@ -1188,14 +1188,7 @@ pub fn camera_sector(rom: &[u8], rt: &Runtime, sector: u16, x: i32, z: i32) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canonical_rom;
-
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
+    use nfsgba_testkit::rom;
 
     /// The reference race frame (`data/work/e5298b24/mgba/race.ss`, RAM dumped mid-frame): view `0x03000080`,
     /// camera matrix `0x030057A0`, screen rectangle, camera sector 760 (world `+0xEA`).
@@ -1393,8 +1386,7 @@ mod tests {
     #[test]
     fn world_pixels_match_the_race_frame() {
         let Some(rom) = rom() else { return };
-        let Ok(vram) = std::fs::read(crate::data_dir().join("work/e5298b24/mgba/race.vram.bin")) else {
-            eprintln!("skipping: no race.vram.bin");
+        let Some(vram) = nfsgba_testkit::read("mgba/race.vram.bin") else {
             return;
         };
         let page = &vram[0xA000..0xA000 + SCREEN_WIDTH * 160];

@@ -1353,20 +1353,12 @@ impl Save {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{canonical_rom, data_dir, text};
+    use crate::text;
+    use nfsgba_testkit::{fixture, rom};
 
-    fn rom() -> Option<Vec<u8>> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()
-    }
-
-    /// Files from the reference run (`data/work/e5298b24/mgba/`); tests skip without them.
+    /// Files from the reference run (`mgba/`).
     fn reference(name: &str) -> Option<Vec<u8>> {
-        std::fs::read(data_dir().join("work/e5298b24/mgba").join(name))
-            .map_err(|e| eprintln!("skipping: no reference {name} ({e})"))
-            .ok()
+        nfsgba_testkit::read(&format!("mgba/{name}"))
     }
 
     #[test]
@@ -1752,11 +1744,10 @@ mod tests {
     /// Every line of `data/work/e5298b24/race-rules/*.log` (mGBA traces) and `oracle-*.jsonl` (oracle cases from
     /// `tools/oracle_race_rules.py`, the same keys; the line number stands for the frame), file by file.
     fn traces() -> Vec<Trace> {
-        let dir = data_dir().join("work/e5298b24/race-rules");
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            eprintln!("skipping: no race-rule traces in {}", dir.display());
+        let Some(dir) = fixture("race-rules") else {
             return Vec::new();
         };
+        let entries = std::fs::read_dir(&dir).unwrap();
         let mut files: Vec<_> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "log" || x == "jsonl"))
@@ -2083,7 +2074,7 @@ mod tests {
                     let sav = t
                         .file
                         .strip_suffix(".log")
-                        .map(|f| data_dir().join("work/e5298b24/race-rules").join(f));
+                        .and_then(|f| Some(fixture("race-rules")?.join(f)));
                     if let Some(Ok(sav)) = sav.map(|f| std::fs::read(f.with_extension("sav"))) {
                         last_sav.insert(t.file.clone(), (eeprom_to_buffer(&sav) == out[..], at()));
                     }

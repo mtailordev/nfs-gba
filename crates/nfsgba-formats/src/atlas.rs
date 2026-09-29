@@ -218,9 +218,9 @@ pub fn look(rom: &[u8], cars: [i8; 4], i: usize, flag_5624: bool, flag_a0: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_dir;
-    use crate::paint::tests::{Dump, rom};
+    use crate::paint::tests::Dump;
     use crate::vehicle_textures;
+    use nfsgba_testkit::{fixture, read_to_string, rom};
     use std::fs;
 
     /// Race starts: the reference race, a Quick Play race from `mainmenu.ss` (`start1`), and two with RAM-poked car
@@ -247,10 +247,7 @@ mod tests {
         let Some(rom) = rom() else { return };
         let textures = vehicle_textures(&rom);
         for (dir, name, _) in STARTS {
-            let Some(d) = Dump::load(dir, name) else {
-                eprintln!("skipping {dir}/{name}: no dump");
-                continue;
-            };
+            let Some(d) = Dump::load(dir, name) else { continue };
             let player = entity(&d, d.word(0x0300_0060));
             let car = d.bytes4(0x0300_611C)[0] as usize;
             let record = &d.at(d.word(0x0300_539C) + 0x11 * car as u32)[..0x11];
@@ -275,12 +272,11 @@ mod tests {
     #[test]
     fn rim_redraws_match_the_drive() {
         let Some(rom) = rom() else { return };
-        let dir = data_dir().join("work/e5298b24/car-atlas");
-        let (Ok(log), Some(d)) = (
-            fs::read_to_string(dir.join("drive.log")),
+        let (Some(dir), Some(log), Some(d)) = (
+            fixture("car-atlas"),
+            read_to_string("car-atlas/drive.log"),
             Dump::load("car-atlas", "drive-end"),
         ) else {
-            eprintln!("skipping: no car-atlas drive trace");
             return;
         };
         let textures = vehicle_textures(&rom);

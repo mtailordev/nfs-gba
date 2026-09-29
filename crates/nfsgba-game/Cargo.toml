@@ -10,3 +10,6 @@ publish = false
 nfsgba-formats = { path = "../nfsgba-formats" }
 nfsgba-sim = { path = "../nfsgba-sim" }
 nfsgba-audio = { path = "../nfsgba-audio" }
+
+[dev-dependencies]
+nfsgba-testkit = { path = "../nfsgba-testkit" }

@@ -134,20 +134,11 @@ pub fn draw_skyline(rom: &[u8], sky: &SkyDesc, cam: &SkyCamera, clip_y: [i32; 2]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{canonical_rom, data_dir};
     use std::{collections::HashMap, fs, path::PathBuf};
 
-    /// ROM plus the sky reference captures (`docs/engine/sky.md`, "Verification"); skipped when missing.
+    /// ROM plus the sky reference captures (`docs/engine/sky.md`, "Verification").
     fn setup() -> Option<(Vec<u8>, PathBuf)> {
-        std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-        let rom = canonical_rom()
-            .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
-            .ok()?;
-        let dir = data_dir().join("work/e5298b24/sky");
-        dir.is_dir().then_some((rom, dir)).or_else(|| {
-            eprintln!("skipping: no sky captures");
-            None
-        })
+        Some((nfsgba_testkit::rom()?, nfsgba_testkit::fixture("sky")?))
     }
 
     fn fields(text: &str) -> HashMap<String, i64> {
@@ -220,8 +211,8 @@ mod tests {
     /// Every (start, horizon) pair the VBlank handler produced in both views.
     #[test]
     fn gradient_start_matches_the_vblank_handler() {
-        let Some((rom, dir)) = setup() else { return };
-        let Ok(log) = fs::read_to_string(dir.join("vblank.txt")) else {
+        let Some((rom, _)) = setup() else { return };
+        let Some(log) = nfsgba_testkit::read_to_string("sky/vblank.txt") else {
             return;
         };
         let mut checked = 0;

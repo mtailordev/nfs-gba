@@ -8,3 +8,6 @@ publish = false
 
 [dependencies]
 nfsgba-formats = { path = "../nfsgba-formats" }
+
+[dev-dependencies]
+nfsgba-testkit = { path = "../nfsgba-testkit" }

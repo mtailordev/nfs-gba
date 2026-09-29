@@ -3529,12 +3529,14 @@ name = "nfsgba-audio"
 version = "0.1.0"
 dependencies = [
  "nfsgba-formats",
+ "nfsgba-testkit",
 ]
 
 [[package]]
 name = "nfsgba-formats"
 version = "0.1.0"
 dependencies = [
+ "nfsgba-testkit",
  "serde_json",
 ]
 
@@ -3545,10 +3547,20 @@ dependencies = [
  "nfsgba-audio",
  "nfsgba-formats",
  "nfsgba-sim",
+ "nfsgba-testkit",
 ]
 
 [[package]]
 name = "nfsgba-sim"
+version = "0.1.0"
+dependencies = [
+ "nfsgba-formats",
+ "nfsgba-testkit",
+ "serde_json",
+]
+
+[[package]]
+name = "nfsgba-testkit"
 version = "0.1.0"
 dependencies = [
  "nfsgba-formats",
@@ -3562,6 +3574,7 @@ dependencies = [
  "bevy",
  "nfsgba-formats",
  "nfsgba-game",
+ "nfsgba-testkit",
 ]
 
 [[package]]

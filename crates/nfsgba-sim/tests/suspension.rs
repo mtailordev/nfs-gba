@@ -6,7 +6,6 @@
 use nfsgba_sim::{Mem, contact};
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::fs;
 
 /// The points' scratch address in the oracle (they are a slice here).
 const PTS: u64 = 0x0203_F000;
@@ -31,17 +30,15 @@ fn changed(before: &Mem, after: &Mem) -> BTreeSet<(u32, u8)> {
 
 #[test]
 fn suspension_matches_the_oracle() {
-    let data = nfsgba_formats::data_dir();
-    let dir = data.join("work/e5298b24");
-    let Ok(cases) = fs::read_to_string(dir.join("vehicle-physics/suspension.jsonl")) else {
-        eprintln!("suspension cases not found; skipped");
+    use nfsgba_testkit::read;
+    let (Some(cases), Some(rom), Some(wram), Some(iwram)) = (
+        nfsgba_testkit::read_to_string("vehicle-physics/suspension.jsonl"),
+        nfsgba_testkit::rom(),
+        read("mgba/race.wram.bin"),
+        read("mgba/race.iwram.bin"),
+    ) else {
         return;
     };
-    let rom = nfsgba_formats::canonical_rom().expect("canonical ROM");
-    let (wram, iwram) = (
-        fs::read(dir.join("mgba/race.wram.bin")).unwrap(),
-        fs::read(dir.join("mgba/race.iwram.bin")).unwrap(),
-    );
     let (mut total, mut bad) = (0, Vec::new());
     for line in cases.lines() {
         let c: Value = serde_json::from_str(line).unwrap();

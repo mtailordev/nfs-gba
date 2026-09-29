@@ -1,10 +1,10 @@
 //! Game frames against the reference build, with nothing stood in: from the traced machine state at the entry of
 //! frame k, one `Game::frame` with that frame's keys and timing must give the traced state at the entry of frame
-//! k + 1 (`tools/game_trace.py`, `docs/engine/game-loop.md`). Skipped when the traces are absent.
+//! k + 1 (`tools/game_trace.py`, `docs/engine/game-loop.md`). Missing traces follow `nfsgba_testkit`'s rule
+//! (`NFSGBA_REQUIRE_DATA`). Every trace must run to its last frame: no stop is accepted.
 
 use std::ops::Range;
 
-use nfsgba_formats as rom;
 use nfsgba_game::{Game, trace::Trace, view::WORLD};
 use nfsgba_sim::Mem;
 
@@ -63,41 +63,24 @@ fn scratch(m: &Mem) -> Vec<(Range<u32>, &'static str)> {
 /// reference race: the bumper view, looking back in both views, the switch back behind the car, L and R held) and
 /// `nitro` (300 frames from the reference race with nitro poked into the tank before recording: the camera's speed
 /// effect and the nitro flames).
-const TRACES: [(&str, &str); 5] = [
-    ("game-loop", "drive"),
-    ("live-race", "live"),
-    ("live-race", "trail"),
-    ("live-race", "views"),
-    ("live-race", "nitro"),
+/// (session, trace, game frames): every frame of every trace must replay.
+const TRACES: [(&str, &str, usize); 5] = [
+    ("game-loop", "drive", 149),
+    ("live-race", "live", 699),
+    ("live-race", "trail", 699),
+    ("live-race", "views", 599),
+    ("live-race", "nitro", 299),
 ];
 
-/// Car code paths the physics-paths work owns (FIDELITY D9–D11): a frame that reaches one stops with `Unported`,
-/// which the replays accept and report; every frame before it must be exact.
-const EXPECTED_STOPS: [&str; 6] = [
-    "FUN_08144fa4",
-    "FUN_081484f0",
-    "FUN_0814efa8",
-    "FUN_0814de40",
-    "FUN_0814dbbc",
-    "0x0813DF98",
-];
-
-fn expected(e: &nfsgba_sim::Unported) -> bool {
-    EXPECTED_STOPS.iter().any(|s| e.0.contains(s))
-}
-
-fn traces() -> Vec<(&'static str, Trace)> {
+fn traces() -> Vec<(&'static str, usize, Trace)> {
     TRACES
         .iter()
-        .filter_map(|&(session, name)| {
-            let dir = rom::data_dir().join("work/e5298b24").join(session);
-            match Trace::load(&dir, name) {
-                Ok(t) => Some((name, t)),
-                Err(_) => {
-                    eprintln!("skipping {name}: no trace in {}", dir.display());
-                    None
-                }
-            }
+        .filter_map(|&(session, name, frames)| {
+            nfsgba_testkit::fixture(&format!("{session}/{name}.base.bin"))?;
+            let dir = nfsgba_testkit::fixture(session)?;
+            let trace = Trace::load(&dir, name).unwrap_or_else(|e| panic!("{session}/{name}: {e}"));
+            assert_eq!(trace.timing.len(), frames, "{name}: recorded game frames");
+            Some((name, frames, trace))
         })
         .collect()
 }
@@ -142,23 +125,16 @@ fn report(name: &str, k: usize, g: &Game, want: &[u8], runs: &[(u32, u32)]) {
 
 #[test]
 fn frames_match_the_trace() {
-    std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-    let Ok(rom) = rom::canonical_rom() else {
-        eprintln!("skipping: no ROM vault");
-        return;
-    };
-    for (name, trace) in traces() {
-        let (mut failed, mut stopped) = (0, Vec::new());
-        for k in 0..trace.timing.len() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    for (name, frames, trace) in traces() {
+        let mut failed = 0;
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} frames"), frames);
+        for k in 0..frames {
+            checked.tick();
             let want = &trace.states[k + 1];
             let mut g = Game::new(trace.machine(&rom, k));
-            match g.frame(trace.keys(k), &trace.timing[k]) {
-                Err(e) if expected(&e) => {
-                    stopped.push(k);
-                    continue;
-                }
-                Err(e) => panic!("{name} frame {k}: {e}"),
-                Ok(()) => {}
+            if let Err(e) = g.frame(trace.keys(k), &trace.timing[k]) {
+                panic!("{name} frame {k}: {e}");
             }
             let runs = differences(&g, want);
             if !runs.is_empty() {
@@ -168,13 +144,8 @@ fn frames_match_the_trace() {
                 }
             }
         }
-        eprintln!(
-            "{name}: {} of {} frames exact; {} stopped in D9–D11 code: {stopped:?}",
-            trace.timing.len() - failed - stopped.len(),
-            trace.timing.len(),
-            stopped.len()
-        );
-        assert_eq!(failed, 0, "{name}: {failed} of {} frames differ", trace.timing.len());
+        eprintln!("{name}: {} of {frames} frames exact", frames - failed);
+        assert_eq!(failed, 0, "{name}: {failed} of {frames} frames differ");
     }
 }
 
@@ -183,23 +154,16 @@ fn frames_match_the_trace() {
 /// (T1) come from the trace. Every frame must match.
 #[test]
 fn free_run_matches_the_trace() {
-    std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-    let Ok(rom) = rom::canonical_rom() else {
-        eprintln!("skipping: no ROM vault");
-        return;
-    };
-    for (name, trace) in traces() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    for (name, frames, trace) in traces() {
         let mut g = Game::new(trace.machine(&rom, 0));
         let mut exact = 0;
-        for k in 0..trace.timing.len() {
+        let mut checked = nfsgba_testkit::Expect::new(format!("{name} free run"), frames);
+        for k in 0..frames {
+            checked.tick();
             let want = &trace.states[k + 1];
-            match g.frame(trace.keys(k), &trace.timing[k]) {
-                Err(e) if expected(&e) => {
-                    eprintln!("{name}: the free run stops in frame {k}: {e}");
-                    break;
-                }
-                Err(e) => panic!("{name} frame {k}: {e}"),
-                Ok(()) => {}
+            if let Err(e) = g.frame(trace.keys(k), &trace.timing[k]) {
+                panic!("{name}: the free run stops in frame {k}: {e}");
             }
             let runs = differences(&g, want);
             if !runs.is_empty() {
@@ -208,10 +172,8 @@ fn free_run_matches_the_trace() {
             }
             exact += 1;
         }
-        eprintln!(
-            "{name}: {exact} of {} frames free-running, all exact",
-            trace.timing.len()
-        );
+        assert_eq!(exact, frames, "{name}: free-running frames");
+        eprintln!("{name}: {exact} of {frames} frames free-running, all exact");
     }
 }
 
@@ -220,11 +182,10 @@ fn free_run_matches_the_trace() {
 #[test]
 #[ignore]
 fn one_frame() {
-    std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
-    let rom = rom::canonical_rom().unwrap();
+    let rom = nfsgba_testkit::rom().unwrap();
     let name = std::env::var("NFSGBA_TRACE").unwrap();
     let k: usize = std::env::var("NFSGBA_FRAME").unwrap().parse().unwrap();
-    let (_, trace) = traces().into_iter().find(|(n, _)| *n == name).unwrap();
+    let (_, _, trace) = traces().into_iter().find(|(n, _, _)| *n == name).unwrap();
     let mut g = Game::new(trace.machine(&rom, k));
     eprintln!("timing {:?}", trace.timing[k]);
     g.frame(trace.keys(k), &trace.timing[k]).unwrap();
