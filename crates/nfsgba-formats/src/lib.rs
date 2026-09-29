@@ -178,13 +178,20 @@ pub fn paint_palettes(rom: &[u8]) -> Vec<Vec<[u8; 4]>> {
 }
 
 /// A race route from the route table at `0x7F2798` (0x14-byte records, read by `FUN_08139454`):
-/// `+0x00` four template entities (0xA4 bytes each; `+0x0C/+0x10/+0x14` = 8.8 position), `+0x04` the racing-line
+/// `+0x00` four template entities (0xA4 bytes each: `+0x0C/+0x10/+0x14` 8.8 position, `+0x2C` 8.8 heading, `+0x78`
+/// start sector; `race_spawn_template_entities` copies them into the entity array), `+0x04` the racing-line
 /// sections ([`career::route_sections`]) and `+0x08` the racing line: 24-byte waypoints
 /// `(x, z, ?, u16 link section, u16 link index, cumulative distance, sector)`.
 #[derive(Debug, Clone)]
 pub struct Route {
     /// Start grid, city units: the player first, then three opponents.
     pub grid: Vec<[i32; 3]>,
+    /// The same positions in the entities' 8.8 fixed point, as spawned.
+    pub positions: Vec<[i32; 3]>,
+    /// Start headings, template entity `+0x2C >> 8` (0x4000 per turn; 0 faces +z, 0x1000 faces +x).
+    pub headings: Vec<i32>,
+    /// Start sectors, template entity `+0x78`.
+    pub sectors: Vec<u16>,
     /// Section 0, the lap: its last waypoint repeats the first, and its distance is the lap length.
     pub waypoints: Vec<Waypoint>,
     /// Sections 1.., shortcut branches; their end waypoints link back to the lap.
@@ -245,8 +252,9 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
         .map(|(i, r)| {
             let named = names.iter().find(|n| n.0 == i);
             let entities = ptr(rom, r);
-            let grid = (0..4)
-                .map(|e| [0, 4, 8].map(|k| u32_at(rom, entities + 0xA4 * e + 0x0C + k) as i32 >> 8))
+            let entity = |e: usize| entities + 0xA4 * e;
+            let positions: Vec<[i32; 3]> = (0..4)
+                .map(|e| [0, 4, 8].map(|k| u32_at(rom, entity(e) + 0x0C + k) as i32))
                 .collect();
             let mut lines = sections[i].iter().map(|s| {
                 let line = ptr(rom, r + 8) + 24 * s.first as usize;
@@ -263,7 +271,10 @@ pub fn routes(rom: &[u8]) -> Vec<Route> {
                     .collect::<Vec<_>>()
             });
             Route {
-                grid,
+                grid: positions.iter().map(|p| p.map(|c| c >> 8)).collect(),
+                positions,
+                headings: (0..4).map(|e| u32_at(rom, entity(e) + 0x2C) as i32 >> 8).collect(),
+                sectors: (0..4).map(|e| u16_at(rom, entity(e) + 0x78)).collect(),
                 waypoints: lines.next().unwrap_or_default(),
                 branches: lines.collect(),
                 name: named.map(|n| text(rom, n.1, Some(0))),
@@ -325,6 +336,8 @@ pub struct Wall {
     pub ceiling_y: i16,
     /// Light at this corner, red/green/blue (`+0x3C..+0x3E`, BGR555 channel scale); see `light_factor`.
     pub light: [u8; 3],
+    /// `+0x2A`: the moving piece (world `+0x18` record) whose offsets and flags apply to this wall; `0xFFFF` none.
+    pub piece: u16,
 }
 
 impl Wall {
@@ -592,6 +605,7 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                         ceiling_y: i16_at(rom, w + 0x3A),
                         flags: u16_at(rom, w + 0x2E),
                         light: [rom[w + 0x3C], rom[w + 0x3D], rom[w + 0x3E]],
+                        piece: u16_at(rom, w + 0x2A),
                     }
                 })
                 .collect();
@@ -783,6 +797,11 @@ mod tests {
         // Quick Play race in the reference run: route 23, player start (118400, 0, -64320) city units.
         let r = &routes[23];
         assert_eq!(r.grid[0], [118_400, 0, -64_320]);
+        // The reference race's player spawned from this entity: heading 0x1000, start sector 760 (entity +0x78).
+        assert_eq!(
+            (r.headings[0], r.sectors[0], r.positions[0][0]),
+            (0x1000, 760, 118_400 << 8)
+        );
         assert_eq!(r.name.as_deref(), Some("STORAGE RUN")); // Quick Play picked Storage Run, forward
         assert_eq!(r.kind, Some(RouteKind::Circuit { reverse: false }));
         assert_eq!(routes.iter().filter(|r| r.kind == Some(RouteKind::Sprint)).count(), 18);
