@@ -40,14 +40,20 @@ struct Tris {
 }
 
 impl Tris {
-    /// Fan-triangulate a convex polygon (sector floors, wall quads, model faces).
+    /// Fan-triangulate a convex polygon (sector floors, wall quads, model faces) in one colour.
     fn fan(&mut self, pts: &[(Vec3, Vec2)], color: Color) {
         let c = color.to_linear();
+        let lit: Vec<_> = pts.iter().map(|&(p, uv)| (p, uv, [c.red, c.green, c.blue])).collect();
+        self.fan_lit(&lit);
+    }
+
+    /// Fan-triangulate with a linear RGB colour per corner.
+    fn fan_lit(&mut self, pts: &[(Vec3, Vec2, [f32; 3])]) {
         for k in 1..pts.len().saturating_sub(1) {
-            for (p, uv) in [pts[0], pts[k], pts[k + 1]] {
+            for (p, uv, [r, g, b]) in [pts[0], pts[k], pts[k + 1]] {
                 self.pos.push(p.into());
                 self.uv.push(uv.into());
-                self.col.push([c.red, c.green, c.blue, 1.0]);
+                self.col.push([r, g, b, 1.0]);
             }
         }
     }
@@ -86,13 +92,17 @@ fn model_tris(m: &rom::Model, atlas: Option<&rom::Texture>, color: Color) -> Tri
 }
 
 /// 8bpp texture through the palette to RGBA, repeating and unfiltered like the original.
+fn rgba(t: &rom::Texture, palette: &[[u8; 4]]) -> Vec<u8> {
+    t.pixels.iter().flat_map(|&i| palette[i as usize]).collect()
+}
+
 fn image(t: &rom::Texture, palette: &[[u8; 4]]) -> Image {
     let size = Extent3d {
         width: t.width as u32,
         height: t.height as u32,
         depth_or_array_layers: 1,
     };
-    let rgba = t.pixels.iter().flat_map(|&i| palette[i as usize]).collect();
+    let rgba = rgba(t, palette);
     let mut img = Image::new(
         size,
         TextureDimension::D2,
@@ -135,27 +145,35 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
 ) {
     let data = rom::canonical_rom().expect("no ROM vault found: run `python tools/vault.py` first (see README)");
-    let palette = rom::city_palette(&data);
     let textures = rom::city_textures(&data);
+    let envs = rom::environments(&data);
+    // Environment 1 is the reference race's (palette 3); NFSGBA_ENV picks another. K cycles them.
+    let env = std::env::var("NFSGBA_ENV")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+        % envs.len();
+    let palettes: Vec<_> = envs.iter().map(|e| rom::city_palette(&data, e.palette)).collect();
 
     // City geometry grouped by material, one mesh and one textured material each. Material 0 is "not drawn"
     // (the scene code skips floor/ceiling passes for it; assumed the same for the 91 walls that use it).
+    // NOT 1:1 (interim): every corner carries its wall's light as a vertex colour. The game instead tints the
+    // whole palette by the light interpolated at the player's position (FUN_0813a514); see docs/FIDELITY.md.
     let mut by_material: BTreeMap<u16, Tris> = BTreeMap::new();
     let floor_uv = |w: &rom::Wall| Vec2::new(w.floor_uv[0] as f32, w.floor_uv[1] as f32) / 16384.0;
+    let lit = |w: &rom::Wall| rom::light_factor(w.light).map(|f| f.powf(2.2)); // palette scale -> linear
     for sector in rom::city(&data) {
         let w = &sector.walls;
         for (material, height) in [(sector.floor, 1), (sector.ceiling, 0)] {
             if material != 0 {
-                let pts: Vec<(Vec3, Vec2)> = w
+                let pts: Vec<_> = w
                     .iter()
                     .map(|w| {
-                        (
-                            world(w.x as f32, if height == 1 { w.bottom[0] } else { w.top[0] }, w.z as f32),
-                            floor_uv(w),
-                        )
+                        let y = if height == 1 { w.bottom[0] } else { w.top[0] };
+                        (world(w.x as f32, y, w.z as f32), floor_uv(w), lit(w))
                     })
                     .collect();
-                by_material.entry(material).or_default().fan(&pts, Color::WHITE);
+                by_material.entry(material).or_default().fan_lit(&pts);
             }
         }
         for (k, a) in w.iter().enumerate().filter(|(_, a)| a.link < 0 && a.material != 0) {
@@ -163,12 +181,12 @@ fn setup(
             let (ax, az, bx, bz) = (a.x as f32, a.z as f32, b.x as f32, b.z as f32);
             let uv = a.uv(textures[a.material as usize].width).map(Vec2::from);
             let quad = [
-                (world(ax, a.top[0], az), uv[0]),
-                (world(bx, a.top[1], bz), uv[1]),
-                (world(bx, a.bottom[1], bz), uv[2]),
-                (world(ax, a.bottom[0], az), uv[3]),
+                (world(ax, a.top[0], az), uv[0], lit(a)),
+                (world(bx, a.top[1], bz), uv[1], lit(b)),
+                (world(bx, a.bottom[1], bz), uv[2], lit(b)),
+                (world(ax, a.bottom[0], az), uv[3], lit(a)),
             ];
-            by_material.entry(a.material).or_default().fan(&quad, Color::WHITE);
+            by_material.entry(a.material).or_default().fan_lit(&quad);
         }
     }
     let (min, max) = by_material
@@ -178,9 +196,12 @@ fn setup(
             (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p)))
         });
     let center = (min + max) / 2.0;
+    let mut city_images = Vec::new();
     for (m, tris) in by_material {
+        let texture = images.add(image(&textures[m as usize], &palettes[env]));
+        city_images.push((texture.clone(), m as usize));
         let material = materials.add(StandardMaterial {
-            base_color_texture: Some(images.add(image(&textures[m as usize], &palette))),
+            base_color_texture: Some(texture),
             alpha_mode: AlphaMode::Mask(0.5),
             unlit: true, // the GBA renderer has no lighting
             double_sided: true,
@@ -286,9 +307,14 @@ fn setup(
     commands.insert_resource(race);
 
     // Sky: the gradient on a far ring and the skyline panorama on a band at the horizon, both centred on the
-    // camera every frame. K cycles through the 12 ROM skies (which sky belongs to which district is not decoded).
-    let mut skies = Skies::default();
-    for sky in rom::skies(&data) {
+    // camera every frame. Each environment has its own sky and palette; K cycles them.
+    let mut skies = Environments {
+        current: env,
+        textures,
+        city: city_images,
+        ..default()
+    };
+    for (sky, palette) in envs.iter().map(|e| &e.sky).zip(&palettes) {
         let gradient = rom::Texture {
             width: 1,
             height: 64,
@@ -307,23 +333,24 @@ fn setup(
             .push(materials.add(unlit(image(&gradient, &sky.gradient), AlphaMode::Opaque)));
         skies
             .skyline
-            .push(materials.add(unlit(image(&sky.skyline, &palette), AlphaMode::Mask(0.5))));
+            .push(materials.add(unlit(image(&sky.skyline, palette), AlphaMode::Mask(0.5))));
         let [r, g, b, _] = sky.gradient[0];
         skies.top.push(Color::srgb_u8(r, g, b));
     }
+    skies.palettes = palettes;
     // ponytail: the skyline repeats 4 times around the horizon and spans ~10° of height; take the real scroll
     // factor from the sky renderer.
     commands.spawn((
         Mesh3d(meshes.add(ring(16000.0, 0.0, 10000.0, 1.0).mesh())),
-        MeshMaterial3d(skies.gradient[0].clone()),
+        MeshMaterial3d(skies.gradient[env].clone()),
         SkyRing::Gradient,
     ));
     commands.spawn((
         Mesh3d(meshes.add(ring(14000.0, 0.0, 2480.0, 4.0).mesh())),
-        MeshMaterial3d(skies.skyline[0].clone()),
+        MeshMaterial3d(skies.skyline[env].clone()),
         SkyRing::Skyline,
     ));
-    commands.insert_resource(ClearColor(skies.top[0]));
+    commands.insert_resource(ClearColor(skies.top[env]));
     commands.insert_resource(skies);
 
     commands.spawn((
@@ -435,11 +462,16 @@ fn race(
     gizmos.linestrip(line, Color::srgb(1.0, 0.2, 0.1));
 }
 
+/// The 12 environments (palette and sky); switching re-tints every city texture in place.
 #[derive(Resource, Default)]
-struct Skies {
+struct Environments {
     gradient: Vec<Handle<StandardMaterial>>,
     skyline: Vec<Handle<StandardMaterial>>,
     top: Vec<Color>,
+    palettes: Vec<Vec<[u8; 4]>>,
+    textures: Vec<rom::Texture>,
+    /// City texture images and the material each shows.
+    city: Vec<(Handle<Image>, usize)>,
     current: usize,
 }
 
@@ -473,11 +505,12 @@ fn ring(radius: f32, y0: f32, y1: f32, repeats: f32) -> Tris {
     t
 }
 
-/// Keep the sky centred on the camera; K switches to the next sky.
+/// Keep the sky centred on the camera; K switches to the next environment (sky, palette, city re-tinted).
 fn sky(
     keys: Res<ButtonInput<KeyCode>>,
-    mut skies: ResMut<Skies>,
+    mut skies: ResMut<Environments>,
     mut clear: ResMut<ClearColor>,
+    mut images: ResMut<Assets<Image>>,
     camera: Single<&Transform, (With<Camera3d>, Without<SkyRing>)>,
     mut rings: Query<(&mut Transform, &mut MeshMaterial3d<StandardMaterial>, &SkyRing)>,
 ) {
@@ -485,7 +518,13 @@ fn sky(
     if switch {
         skies.current = (skies.current + 1) % skies.top.len();
         clear.0 = skies.top[skies.current];
-        info!("sky {}", skies.current);
+        let palette = &skies.palettes[skies.current];
+        for (handle, m) in &skies.city {
+            if let Some(mut image) = images.get_mut(handle) {
+                image.data = Some(rgba(&skies.textures[*m], palette));
+            }
+        }
+        info!("environment {}", skies.current);
     }
     for (mut transform, mut material, ring) in &mut rings {
         transform.translation = camera.translation;

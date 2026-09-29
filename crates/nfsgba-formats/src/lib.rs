@@ -267,6 +267,8 @@ pub struct Wall {
     pub tex_span: u16,
     pub tex_v: [i32; 4],
     pub flags: u16,
+    /// Light at this corner, red/green/blue (`+0x3C..+0x3E`, BGR555 channel scale); see `light_factor`.
+    pub light: [u8; 3],
 }
 
 impl Wall {
@@ -296,29 +298,51 @@ pub struct Sector {
     pub walls: Vec<Wall>,
 }
 
+/// A level environment: one of the level descriptors at `0x7F2B08` (0x68 bytes each; all share the city and
+/// the vehicle bank). The race init `FUN_08138a9c` loads palette `+0x00 + (+0x5A) * 2` and the descriptor names
+/// the sky: gradient material `+0x5E`, skyline material `+0x60`.
+#[derive(Debug, Clone)]
+pub struct Environment {
+    /// Index into the 14 city palettes (`city_palette`).
+    pub palette: usize,
+    pub sky: Sky,
+}
+
 /// A sky: 64 BGR555 gradient colours (top to bottom, drawn per scanline) and a 240×64 skyline panorama
-/// (8bpp through the city palette, colour 0 = sky). Stored as consecutive city materials: a 240-wide
-/// row-major one followed by a 1×128 one holding the gradient.
+/// (8bpp through the city palette, colour 0 = sky).
 #[derive(Debug, Clone)]
 pub struct Sky {
     pub gradient: Vec<[u8; 4]>,
     pub skyline: Texture,
 }
 
-pub fn skies(rom: &[u8]) -> Vec<Sky> {
+/// The 12 environments; the descriptors end where `+0x00` stops pointing at the shared palette block
+/// (a variant with another palette block follows at `0x7F2FE8`).
+pub fn environments(rom: &[u8]) -> Vec<Environment> {
     let (materials, texels) = (ptr(rom, LEVEL_TABLE + 0x1C), ptr(rom, LEVEL_TABLE + 0x08));
     let textures = city_textures(rom);
-    (0..textures.len().saturating_sub(1))
-        .filter(|&i| textures[i].width == 240 && (textures[i + 1].width, textures[i + 1].height) == (1, 128))
-        .map(|i| {
-            let at = texels + u32_at(rom, materials + 0x24 * (i + 1) + 8) as usize;
-            let gradient = (0..64).map(|k| bgr555(u16_at(rom, at + 2 * k))).collect();
-            Sky {
-                gradient,
-                skyline: textures[i].clone(),
+    let first = u32_at(rom, LEVEL_TABLE);
+    (0..)
+        .map(|i| LEVEL_TABLE + 0x68 * i)
+        .take_while(|&r| u32_at(rom, r) == first)
+        .map(|r| {
+            let (gradient, skyline) = (u16_at(rom, r + 0x5E) as usize, u16_at(rom, r + 0x60) as usize);
+            let at = texels + u32_at(rom, materials + 0x24 * gradient + 8) as usize;
+            Environment {
+                palette: u16_at(rom, r + 0x5A) as usize * 2 / 0x200,
+                sky: Sky {
+                    gradient: (0..64).map(|k| bgr555(u16_at(rom, at + 2 * k))).collect(),
+                    skyline: textures[skyline].clone(),
+                },
             }
         })
         .collect()
+}
+
+/// Per-channel palette multiplier for a wall light (`Wall::light`), as `FUN_0813a514` applies it to the whole
+/// palette at the player's position: `light * 256 * 2/3 + 0x400` in 4.12 fixed point, capped at 0xFFF.
+pub fn light_factor(light: [u8; 3]) -> [f32; 3] {
+    light.map(|b| ((b as f32 * 512.0 / 3.0 + 1024.0) / 4096.0).min(4095.0 / 4096.0))
 }
 
 fn bgr555(c: u16) -> [u8; 4] {
@@ -334,9 +358,10 @@ pub struct Texture {
     pub pixels: Vec<u8>,
 }
 
-/// City palette (level record `+0x00`) as RGBA8; index 0 (magenta `0x7C1F`) is transparent.
-pub fn city_palette(rom: &[u8]) -> Vec<[u8; 4]> {
-    let at = ptr(rom, LEVEL_TABLE);
+/// City palette `index` of the 14 at level record `+0x00` (0x200 bytes apart) as RGBA8; index 0 (magenta
+/// `0x7C1F`) is transparent. Environments pick one (`Environment::palette`).
+pub fn city_palette(rom: &[u8], index: usize) -> Vec<[u8; 4]> {
+    let at = ptr(rom, LEVEL_TABLE) + 0x200 * index;
     (0..256)
         .map(|i| {
             let [r, g, b, _] = bgr555(u16_at(rom, at + 2 * i));
@@ -392,6 +417,7 @@ pub fn city(rom: &[u8]) -> Vec<Sector> {
                         tex_span: u16_at(rom, w + 0x40),
                         tex_v: [0x10, 0x14, 0x18, 0x1C].map(|k| u32_at(rom, w + k) as i32),
                         flags: u16_at(rom, w + 0x2E),
+                        light: [rom[w + 0x3C], rom[w + 0x3D], rom[w + 0x3E]],
                     }
                 })
                 .collect();
@@ -533,14 +559,13 @@ mod tests {
             assert!((s.floor as usize) < textures.len());
             assert!(s.walls.iter().all(|w| (w.material as usize) < textures.len()));
         }
-        assert_eq!(city_palette(&rom)[0][3], 0);
-        let skies = skies(&rom);
-        assert_eq!(skies.len(), 12);
-        assert!(
-            skies
-                .iter()
-                .all(|s| s.gradient.len() == 64 && (s.skyline.width, s.skyline.height) == (240, 64))
-        );
+        assert_eq!(city_palette(&rom, 0)[0][3], 0);
+        let environments = environments(&rom);
+        assert_eq!(environments.len(), 12);
+        assert_eq!(environments[1].palette, 3); // the reference race's base palette (checked against its RAM)
+        assert!(environments.iter().all(|e| e.palette < 14
+            && e.sky.gradient.len() == 64
+            && (e.sky.skyline.width, e.sky.skyline.height) == (240, 64)));
     }
 
     #[test]

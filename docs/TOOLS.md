@@ -48,6 +48,12 @@ $g = "$env:USERPROFILE\scoop\apps\ghidra\current"
 # GUI: ghidraRun
 ```
 
+**Apply our names** (after adding to `docs/engine/symbols.csv`), then re-export the decompile:
+
+```powershell
+& "$g\support\analyzeHeadless.bat" data\work\e5298b24\ghidra carbon -process BN7E_v0_e5298b24.gba -noanalysis -scriptPath tools\ghidra -postScript ApplySymbols.java docs\engine\symbols.csv -postScript ExportDecomp.java data\work\e5298b24\ghidra\carbon_decomp.c
+```
+
 Rebuild the loader after a Ghidra upgrade, then re-extract `dist\*.zip` into `%APPDATA%\ghidra\ghidra_<ver>_PUBLIC\Extensions\`:
 
 ```powershell

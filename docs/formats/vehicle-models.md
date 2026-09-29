@@ -7,7 +7,7 @@
 
 ## How the game finds it
 
-- **Level descriptors:** `0x7F2B08` holds 0x68-byte records, one per event/track; 13 records plus a variant at `0x7F2FE8`.
+- **Level descriptors:** `0x7F2B08` holds 0x68-byte records. There are 12 environments (palette and sky, see city-sectors.md) plus a variant with its own palette block at `0x7F2FE8`.
 - **Loading:** `FUN_081397d8` (race init) passes `table + index * 0x68` to `FUN_08139454`. That function copies record words `+0x34…+0x54` into the world struct at IWRAM `0x030000C0` (fields `+0x7C…+0x9C`).
 - **Shared bank:** every descriptor points at the same bank.
 

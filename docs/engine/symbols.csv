@@ -1,0 +1,31 @@
+address,name,kind,comment
+0x0815cf24,bios_lz77_uncomp_wram,function,Thumb stub: swi 0x11
+0x0815cf28,bios_lz77_uncomp_vram,function,Thumb stub: swi 0x12
+0x0812b21c,set_base_palette,function,copies a 0x200-byte palette into both base palette buffers (0x030055F0 / 0x03005630 targets)
+0x08137424,race_spawn_template_entities,function,copies the route's template entities into the entity array and clears extra slots
+0x081372e4,race_menu_palette_setup,function,sets world palettes from level record +0x00 + (+0x5A)*2 (menu/event screen)
+0x081370d4,menu_scene_setup_a,function,menu palette setup (0x33EF14 palettes)
+0x081371a4,menu_scene_setup_b,function,menu palette setup (0x33EF14 palettes)
+0x08138a9c,race_load_palettes,function,loads city palette rec+0x00 + (rec+0x5A)*2 and second palette rec+0x04 + (rec+0x58)*2
+0x08139454,race_load_level,function,copies level descriptor pointers into the world struct and allocates buffers
+0x081397d8,race_init,function,race start: load level/route, spawn entities, palettes
+0x08139e34,race_start_from_table_a,function,calls race_init path with record index*0x68 + 0x7F2B08
+0x0813af7c,race_start_from_table_b,function,calls level setup with record index*0x68 + 0x7F2B08
+0x0813a514,apply_sector_light_to_palette,function,interpolates wall light (+0x3C..+0x3E) at the player position and tints palette 1-143 and 149-255
+0x081387e4,shade_car_paint,function,car paint colour from paint table * heading-dependent shade into palette slot 192+
+0x0813b190,draw_model_param_block,function,packs model bank pointers into a draw parameter block
+0x03000304,raster_wall_columns,function,wall rasteriser: column-mapped textures via map[u] << log2h
+0x03000978,transform_walls,function,rotates wall points by the camera matrix and fills the wall draw buffer
+0x03000b44,draw_sector_pass_b,function,sector draw pass (road surface?)
+0x030013ac,setup_wall_spans,function,projects wall ends and heights; wall u0/u1 and v setup
+0x03001ae4,sort_sector_entities,function,depth-sorts a sector's entity list
+0x03001cf0,draw_sector_entities,function,draws entities (vehicles) of a sector: LOD and material selection
+0x03002084,draw_sector_overlay,function,second pass per sector
+0x0300224c,draw_sector,function,scene: draws a sector (walls, floor, ceiling, entities) and recurses containers
+0x03002da0,draw_flat_textured,function,floor/ceiling textured pass
+0x03003180,draw_flat_fill,function,floor/ceiling solid-colour pass
+0x03003808,raster_polygon,function,textured polygon rasteriser for models
+0x03004018,transform_model_vertices,function,rotates/translates model vertices and projects them (reciprocal table)
+0x03004190,draw_model_polygons,function,per polygon: size byte, indices, backface cull, raster_polygon
+0x03004e24,collect_sector_entities,function,gathers entities of a sector for drawing
+0x08166c04,draw_sector_entities_rom,function,ROM copy of draw_sector_entities (IWRAM 0x03001cf0)

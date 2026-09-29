@@ -27,7 +27,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 ## Gameplay (from the brief, unverified)
 
-15. **Does the GBA Carbon have free roam, or can its city data support it?** The city is one connected sector world shared by all 13 events, which is promising.
+15. **Does the GBA Carbon have free roam, or can its city data support it?** The city is one connected sector world shared by all 12 environments, which is promising.
 
 ## Answered
 

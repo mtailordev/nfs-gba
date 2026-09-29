@@ -35,5 +35,5 @@ Route 23 has 19 waypoints, a 58,231-unit line plus a closing straight: a circuit
 
 ## Open
 
-- The name and mode of each route, and how the level descriptors (`0x7F2B08`, 13 events) select routes.
+- The name and mode of each route, and how events select routes (the 12 level descriptors at `0x7F2B08` are environments: palette and sky).
 - The 0x50-byte `+0x04` block (checkpoints?), the waypoint `?` field, and the template entity fields besides position (start sector at `+0x74`).

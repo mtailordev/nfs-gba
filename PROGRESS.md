@@ -23,12 +23,20 @@ Done and committed:
 - **Tests:** the Python tools have 12 tests.
 - **Previews** (not in git): `data/out/previews/`. `viewer-race-camera.png` renders from the game's own chase camera and matches the in-game screenshot `data/work/e5298b24/mgba/s15.png`.
 
+## Working rules (from the user)
+
+- **Absolute 1:1 rewrite, no compromise.** Every approximation is marked `NOT 1:1` in code and listed in `docs/FIDELITY.md`, with the game function that holds the exact behaviour. Close entries only after checking them against the reference build.
+- **Never find anything twice.** Every ROM offset, RAM address or function goes into `docs/engine/address-map.md` and `docs/engine/symbols.csv` (applied to Ghidra by `tools/ghidra/ApplySymbols.java`).
+
 ## Next steps (roadmap)
 
-1. **Race data:** decode the route table at `0x7F2798` (44 × 0x14) and the level-descriptor event fields, to get start positions, checkpoints and AI lines. Put a car on the start line in the viewer.
-2. **Runtime palette:** find the time-of-day/fog palette transform and which sky each event uses, to match in-game colours.
-3. **Portal step walls:** the upper and lower wall parts between sectors of different heights.
-4. **Gameplay parity (roadmap step 4):** handling, AI and cops, checked against traces from the reference build (mGBA plus Ghidra).
+Done since the last update: race routes (grid plus racing line, `docs/formats/race-routes.md`); environments (the 12 level descriptors pick palette and sky; K cycles them in the viewer); the in-race light tint mechanism (`FUN_0813a514`).
+
+Next, driven by `docs/FIDELITY.md`:
+1. **R1 + R2:** indexed-colour rendering (index textures plus a palette texture) with the exact per-channel light tint at the camera/player position.
+2. **R3/R4:** exact car paint (`shade_car_paint`, the paint table) and how slots 160–223 are filled.
+3. **R5/R6/R8/R10:** sky renderer, portal step walls, portal traversal and draw limits.
+4. **Gameplay parity (roadmap step 4):** handling, AI and cops, traced against the reference build.
 
 ## Environment notes
 
