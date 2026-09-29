@@ -55,6 +55,13 @@ SCENARIOS = {
     # From the race-info screen of JUNKPOINT (sprintinfo.ss): A starts the race; recorded from the main_frame entry
     # of game state 4 (the race start) through the intro, the countdown and GO, with no keys held after the start.
     "start": ("sprintinfo", "start", 90, ["hold A 10", "wait 500"]),
+    # From the reference race with the player's entity marked finished (`+0x4A` = 2, what the lap logic does at the
+    # last lap): the car handler starts the race end, the palette fades out over 8 frames, phase 3, the state-5 exit
+    # (`fill_results`, `race_cleanup`) and its screen change; recorded past it (menu frames, not replayed).
+    "over": ("race", "", 16, ["wait 2", "hold A 400"],
+             [f"lua {Path(__file__).with_name('finish.lua')}"]),
+    # From the reference race: START (the pause block up to `goto_screen(5)`), then the menus.
+    "pause": ("race", "", 14, ["wait 2", "hold A 40", "hold START 6", "hold A 200"]),
     # From the reference race with `main_frame`'s palette fade poked (FADE 0x03005630): out (-30: 15 frames, the
     # palettes and the sky gradient lose 4 per channel each), and in (+20: 10 frames, fadein.lua) from black.
     "fadeout": ("race", "", 20, ["hold A 400"], ["luax emu:write32(0x03005630,-30)"]),

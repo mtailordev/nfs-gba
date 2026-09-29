@@ -14,6 +14,7 @@ use nfsgba_game::{
     trace::Trace,
     world::World,
 };
+use nfsgba_sim::layout::Field;
 
 /// The recorded runs (`tools/game_trace.py`): `drive` (150 frames from the reference race), `live` (700 frames from
 /// the start of a hard circuit with heavy traffic: opponents alongside, braking, a car-to-car contact at frame 387),
@@ -185,4 +186,89 @@ fn one_frame() {
     eprintln!("timing {:?}", trace.timing[k]);
     g.frame(trace.keys(k), &trace.timing[k]).unwrap();
     report(&name, k, &differences(&g, &trace.machine(&rom, k + 1)));
+}
+
+/// Traces that end in a hand-over to the menus (`over`: the race end and the state-5 exit, `pause`: START): the
+/// frames before it replay like the others, and at the hand-over frame the game must stop where the game called
+/// `goto_screen` (`NAME.handover.bin`, recorded there): the same globals, sound engine, shadow OAM, palette and
+/// pages, with the hand-over the menus need. (session, trace, recorded frames, the hand-over frame.)
+const HANDOVERS: [(&str, &str, usize, usize); 2] = [("game-loop", "over", 15, 5), ("game-loop", "pause", 13, 11)];
+
+/// The state the game leaves at the hand-over: what the race frees (the exit) is not loadable, so the parts a
+/// race-end or a pause changes are compared one by one.
+fn handover_differences(g: &Game, want: &Machine, exit: bool) -> Vec<String> {
+    use nfsgba_game::world::{LoopGlobals, load_audio};
+    use nfsgba_sim::state::{CarGlobals, RaceResults, ShadowOam};
+    let m = &want.mem;
+    let mut out = Vec::new();
+    // The wingman's pointers name the entities the exit frees: stale in the game, nothing after the race reads them.
+    let mut want_g = CarGlobals::load(m, 0);
+    (want_g.wingman_car, want_g.wingman_target) = (g.world.g.wingman_car, g.world.g.wingman_target);
+    let checks = [
+        ("globals", g.world.g == want_g),
+        ("loop globals", g.world.lp == LoopGlobals::load(m, 0)),
+        ("sound engine", g.world.audio == load_audio(m)),
+        ("shadow OAM", g.world.hud.oam == ShadowOam::load(m, 0).entries),
+        ("results", g.results() == RaceResults::load(m, 0x0300_5650)),
+    ];
+    out.extend(checks.iter().filter(|c| !c.1).map(|c| c.0.to_string()));
+    if !exit {
+        out.extend(differences(g, want));
+    } else {
+        for (name, got, want) in [
+            ("palette", &g.palette[2..], &want.palette[2..]),
+            ("vram", &g.vram[..], &want.vram[..]),
+            ("oam", &g.oam[..], &want.oam[..]),
+        ] {
+            if got != want {
+                out.push(format!("{name} differs"));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn handovers_match_the_game() {
+    use nfsgba_game::{Flow, Handover, Next};
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    for &(session, name, frames, k) in &HANDOVERS {
+        let Some(dir) = nfsgba_testkit::fixture(session) else {
+            return;
+        };
+        let Some(snapshot) = nfsgba_testkit::fixture(&format!("{session}/{name}.handover.bin")) else {
+            return;
+        };
+        let trace = Trace::load(&dir, name).unwrap();
+        assert_eq!(trace.timing.len(), frames, "{name}: recorded game frames");
+        let want = Machine::from_state(rom.clone(), &std::fs::read(snapshot).unwrap());
+        let mut g = game_at(&rom, &trace, 0);
+        for j in 0..=k {
+            let flow = g
+                .frame(trace.keys(j), &trace.timing[j])
+                .unwrap_or_else(|e| panic!("{name} frame {j}: {e}"));
+            if j < k {
+                assert_eq!(flow, Flow::Racing, "{name} frame {j}");
+                let diffs = differences(&g, &trace.machine(&rom, j + 1));
+                assert!(diffs.is_empty(), "{name} frame {j}: {diffs:#?}");
+                continue;
+            }
+            let Flow::Handover(h) = flow else {
+                panic!("{name} frame {j}: the game does not hand over")
+            };
+            let exit = matches!(h, Handover::Results(_));
+            assert_eq!(exit, name == "over", "{name}: which hand-over");
+            let diffs = handover_differences(&g, &want, exit);
+            assert!(diffs.is_empty(), "{name} hand-over: {diffs:#?}");
+            if let Handover::Results(r) = &h {
+                let ranked = nfsgba_sim::state::RaceResults::load(&want.mem, 0x0300_5730);
+                assert_eq!((r.ranked.clone(), r.last_player), (ranked, 0), "{name}: ranked results");
+                assert_eq!(r.next, Next::Goto(0xB), "{name}: the screen after the race");
+                assert!(
+                    r.results.finish[0] > 0 && r.results.best_lap[0] > 0,
+                    "{name}: the finish time was estimated"
+                );
+            }
+        }
+    }
 }

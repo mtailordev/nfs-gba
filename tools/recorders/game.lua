@@ -25,10 +25,11 @@ local function log(msg)
   f:close()
 end
 
-local function state()
+local function state(out)
   for _, d in ipairs({"wram", "iwram", "palette", "vram", "oam"}) do
     local m = emu.memory[d]
-    bin:write(m:readRange(0, m:size()))
+    local o = out or bin
+    o:write(m:readRange(0, m:size()))
   end
 end
 
@@ -61,7 +62,7 @@ emu:setBreakpoint(function()
     return
   end
   left = left - 1
-  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", "", "", "", ""}
+  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 end, 0x0812AE64)
 
 emu:setBreakpoint(function()
@@ -132,6 +133,26 @@ emu:setBreakpoint(mark(13), 0x0815FD1C)
 emu:setBreakpoint(mark(14), 0x08151758)
 emu:setBreakpoint(mark(15), 0x0813AF7C)
 
+-- The hand-overs to the menus (columns 16..18, the VBlank counter): the pause block's entry (music_stop called from
+-- race_frame_update, 0x0813A954..), the state-5 exit's entry (snd_stop_all called from game_state_step,
+-- 0x0812ACEC..0x0812AE64), and the screen change either makes (goto_screen 0x0812BB5C / menu_back 0x0812D49C called
+-- from one of them), where the machine state is also written whole to NAME.handover.bin.
+local function from(lo, hi) local lr = emu:readRegister("lr") return lr >= lo and lr < hi end
+local function inRace() return from(0x0813A954, 0x0813AE00) end
+local function inState() return from(0x0812ACEC, 0x0812AE64) end
+emu:setBreakpoint(function() if row and inRace() then row[16] = vb() end end, 0x0813609C)
+emu:setBreakpoint(function() if row and inState() then row[17] = vb() end end, 0x08135F38)
+local function handover()
+  if row and (inRace() or inState()) then
+    row[18] = vb()
+    local f = assert(io.open(dir .. "/" .. name .. ".handover.bin", "wb"))
+    state(f)
+    f:close()
+  end
+end
+emu:setBreakpoint(handover, 0x0812BB5C)
+emu:setBreakpoint(handover, 0x0812D49C)
+
 callbacks:add("frame", function()
   local f = io.open(dir .. "/gtrace.txt", "r")
   if not f then return end
@@ -142,7 +163,7 @@ callbacks:add("frame", function()
   local n, count, cond = line:match("^(%S+)%s+(%d+)%s*(%S*)")
   name, left, waitRacing, waitStart = n, tonumber(count), cond == "racing", cond == "start"
   csv = assert(io.open(dir .. "/" .. name .. ".csv", "w"))
-  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads,seed,music,start\n")
+  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads,seed,music,start,pause,exit,handover\n")
   bin = assert(io.open(dir .. "/" .. name .. ".frames.bin", "wb"))
   log("armed " .. line)
 end)

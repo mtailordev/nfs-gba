@@ -168,7 +168,7 @@ fn in_ewram(addr: u32, size: u32) -> bool {
 }
 
 /// The sound engine of a machine state.
-pub(crate) fn load_audio(m: &Mem) -> Engine {
+pub fn load_audio(m: &Mem) -> Engine {
     let buffer = |k: u32| m.bytes(0x0300_5DEC + 0xB0 * k, 0xB0);
     nfsgba_audio::ram::load(
         m.bytes(m.u32(AUDIO_GLOBALS), WORK_AREA),

@@ -126,7 +126,7 @@ impl Play {
         match play.game.frame(0, &Timing::steady()) {
             Err(e) if e.to_string().contains("countdown") => Ok(play),
             Err(e) => Err(io::Error::other(e.to_string())),
-            Ok(()) => Ok(play),
+            Ok(_) => Ok(play),
         }
     }
 
@@ -199,10 +199,21 @@ pub fn play(time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut play: ResMut<
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
             None => keyboard(&input),
         };
-        if let Err(e) = play.game.frame(keys, &Timing::steady()) {
-            warn!("play stopped at game frame {}: {e}", play.frames);
-            play.stopped = Some(e.to_string());
-            break;
+        match play.game.frame(keys, &Timing::steady()) {
+            Err(e) => {
+                warn!("play stopped at game frame {}: {e}", play.frames);
+                play.stopped = Some(e.to_string());
+                break;
+            }
+            Ok(nfsgba_game::Flow::Handover(h)) => {
+                warn!(
+                    "play stopped at game frame {}: the race hands over to the menus ({h:?})",
+                    play.frames
+                );
+                play.stopped = Some("hand-over to the menus".into());
+                break;
+            }
+            Ok(_) => {}
         }
         if let Ok(mut q) = play.sound.lock() {
             q.extend(play.game.sound.iter().map(|&s| s as i8 as Sample / 128.0));

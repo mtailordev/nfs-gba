@@ -59,8 +59,8 @@ impl Trace {
                 let (r, start) = (&w[0], num(w[0][2]).unwrap());
                 let at = |f: &str| num(f).map(|v| v - start);
                 Timing {
-                    timer3: num(r[5]).unwrap() as u16,
-                    entities: at(r[3]).unwrap(),
+                    timer3: num(r[5]).unwrap_or(0) as u16, // (menu frames after a hand-over record no marks)
+                    entities: at(r[3]).unwrap_or(0),
                     // `entry-return` pairs (older traces: the entry only).
                     sounds: r[6]
                         .split(';')
@@ -71,12 +71,15 @@ impl Trace {
                         .collect(),
                     gap: at(r[7]),
                     gap_reads: r.get(11).unwrap_or(&"").split(';').filter_map(at).collect(),
-                    hud: at(r[4]).unwrap(),
+                    hud: at(r[4]).unwrap_or(0),
                     timer: at(r[8]),
                     end: num(w[1][2]).unwrap() - start,
                     start: r.get(14).and_then(|f| at(f)),
                     seed: r.get(12).and_then(|f| at(f)),
                     music: r.get(13).and_then(|f| at(f)),
+                    pause: r.get(15).and_then(|f| at(f)),
+                    exit: r.get(16).and_then(|f| at(f)),
+                    handover: r.get(17).and_then(|f| at(f)),
                     lanes: r
                         .get(10)
                         .unwrap_or(&"")

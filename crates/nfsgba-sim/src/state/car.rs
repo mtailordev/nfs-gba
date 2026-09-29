@@ -200,6 +200,8 @@ layout! {
         0x2E8 accelerating: i32,
         /// The wall contact sound is playing.
         0x2EC scrape: u8,
+        /// Set in phase 6: the race end resets the camera setting (`0x030053E4` = 1) and clears it.
+        0x2F4 camera_reset: u8,
         0x2EF engine_sound: i8,
         /// Per entity: the skid sound is on.
         0x318 skid_sound: [u32; 8],

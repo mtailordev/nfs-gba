@@ -12,6 +12,7 @@
 
 pub mod camera;
 mod countdown;
+mod end;
 pub mod menu;
 pub mod oam;
 pub mod race_init;
@@ -20,6 +21,8 @@ pub mod slots;
 pub mod trace;
 pub mod view;
 pub mod world;
+
+pub use end::{Flow, Handover, Next, Results};
 
 use std::{io, path::Path, sync::Arc};
 
@@ -65,6 +68,11 @@ pub struct Timing {
     /// `race_init::start`'s `seed_vblanks`) and at the race music's request.
     pub seed: Option<u32>,
     pub music: Option<u32>,
+    /// At the pause block's entry (`music_stop`), at the state-5 exit's entry (`snd_stop_all`) and at the hand-over
+    /// to the menus (`goto_screen`/`menu_back`).
+    pub pause: Option<u32>,
+    pub exit: Option<u32>,
+    pub handover: Option<u32>,
 }
 
 impl Timing {
@@ -84,6 +92,9 @@ impl Timing {
             start: None,
             seed: None,
             music: None,
+            pause: None,
+            exit: None,
+            handover: None,
         }
     }
 }
@@ -163,6 +174,10 @@ pub struct Game {
     /// DISPCNT: `obj_upload_tiles` does nothing without the 1-D mapping (bit 6). Not part of a traced state; the
     /// race start sets it (`race_init::start` takes it from the display it built).
     pub dispcnt: u16,
+    /// The ranked results block (`0x03005730`) the menus keep, which `results_tiebreak` changes at the race end.
+    pub ranked: nfsgba_sim::state::RaceResults,
+    /// DISPSTAT's VCount IRQ, which sets the backdrop colour per line pair from the sky gradient (off in the pause).
+    pub vcount_irq: bool,
     /// VBlank IRQs run so far in the current frame.
     irqs: u32,
 }
@@ -198,12 +213,14 @@ impl Game {
             display_page: 0,
             sound: Vec::new(),
             dispcnt: 0x1040,
+            ranked: Default::default(),
+            vcount_irq: true,
             irqs: 0,
         }
     }
 
     /// One game frame with the keys held when it ends (`KEYINPUT` as `main_frame` samples it; bit set = held).
-    pub fn frame(&mut self, keys: u16, t: &Timing) -> nfsgba_sim::Result<()> {
+    pub fn frame(&mut self, keys: u16, t: &Timing) -> nfsgba_sim::Result<Flow> {
         self.frame_with(keys, t, &mut |_, _| false)
     }
 
@@ -213,7 +230,7 @@ impl Game {
         keys: u16,
         t: &Timing,
         assist: &mut dyn FnMut(Checkpoint, &mut Game) -> bool,
-    ) -> nfsgba_sim::Result<()> {
+    ) -> nfsgba_sim::Result<Flow> {
         self.sound.clear();
         // Timer 3 (FUN_08162228 stops it, FUN_0816223c reads it): the frame time for the physics.
         let g = &mut self.world.g;
@@ -243,7 +260,16 @@ impl Game {
             self.world.lp.game_state != 5,
             "game states other than the race (state machine FUN_0812acec)",
         )?;
-        self.race_frame(t, assist)?;
+        if let Some(h) = self.race_frame(t, assist)? {
+            return Ok(Flow::Handover(h));
+        }
+        self.frame_tail(keys, t)?;
+        Ok(Flow::Racing)
+    }
+
+    /// `main_frame` after `game_state_step`: the effect sprites, the OAM copy, the frame counter, the light tint,
+    /// the fade and the keys.
+    pub(crate) fn frame_tail(&mut self, keys: u16, t: &Timing) -> nfsgba_sim::Result<()> {
         view::hud::draw_effect_sprites(&self.rom, &mut self.world);
         // FUN_0816102c: the shadow OAM to OAM.
         self.oam.copy_from_slice(&view::hud::shadow_oam_bytes(&self.world));
@@ -444,7 +470,7 @@ impl Game {
         &mut self,
         t: &Timing,
         assist: &mut dyn FnMut(Checkpoint, &mut Game) -> bool,
-    ) -> nfsgba_sim::Result<()> {
+    ) -> nfsgba_sim::Result<Option<Handover>> {
         let w = &mut self.world;
         w.g.steps = w.g.steps.wrapping_add(1);
         // FUN_081360dc(1) / FUN_08139e10: restart the engine loop when its slot fell silent.
@@ -489,15 +515,11 @@ impl Game {
             );
         }
         self.draw_world(&mut vis, page);
-        let w = &self.world;
-        let (phase, fade) = (w.g.phase as u32, w.g.fade);
         self.irqs_to(t.start.unwrap_or(0));
         self.race_start_from_table_b()?;
         self.irqs_to(t.timer.unwrap_or(t.hud));
         self.hud();
-        let over = self.world.g.race_over;
-        is(phase.wrapping_sub(6) < 3 && over == 0, "the race-end countdown")?;
-        is(phase == 3 && over == 0, "the race end")?;
+        self.race_end_phases();
         self.positions();
         // A contact this frame (profile +0x2E0, +0x2E4 set by the car steps).
         let w = &self.world;
@@ -507,8 +529,19 @@ impl Game {
             self.world.audio.carbon_play_sound(rom, 0x20, option);
             self.world.audio.carbon_set_sound_rate(rom, 0x20, 0x4B0);
         }
-        is(over != 0 && fade == 0, "the race end")?;
-        if phase != 1 {
+        let g = &self.world.g;
+        let (phase, link, over, fade) = (g.phase, g.link, g.race_over, g.fade);
+        if over != 0 && fade == 0 {
+            // The race is over: game_state_step's exit.
+            is(link != 0 && over != 2, "link play (FUN_081474b8)")?;
+            let w = &mut self.world;
+            if phase == 6 && w.profile.camera_reset != 0 {
+                w.profile.camera_reset = 0;
+                w.camera.setting = 1;
+            }
+            return self.exit_race(t).map(Some);
+        }
+        if self.world.g.phase != 1 {
             let mut h = self.world.hud_frame();
             if self.world.g.wrong_way == 0 {
                 hud::message_cancel(&self.rom, &h.g, &mut h.objects, &mut h.messages, 2);
@@ -518,10 +551,10 @@ impl Game {
             self.world.set_hud_frame(h);
         }
         let w = &self.world;
-        is(
-            over == 0 && w.input.pressed & 8 != 0 && fade == 0 && w.lp.paused == 0,
-            "the pause menu (START)",
-        )
+        if w.g.race_over == 0 && w.input.pressed & 8 != 0 && w.g.fade == 0 && w.lp.paused == 0 {
+            return self.pause(t).map(Some);
+        }
+        Ok(None)
     }
 
     /// `update_entities` (`0x0813765c`): the handler of every entity with state bits 0 and 1 set, from the entity
@@ -694,18 +727,7 @@ impl Game {
             let at = 0x1_0000 + 32 * e.tile.wrapping_add(tile_base) as usize;
             self.vram[at..at + tiles.len()].copy_from_slice(&tiles);
         }
-        for u in ui::update_sprites(
-            &self.rom,
-            &self.bank,
-            screen,
-            &mut h.objects,
-            &mut h.oam,
-            false,
-            tile_base,
-        ) {
-            let at = 0x1_0000 + 32 * u.tile;
-            self.vram[at..at + u.len].copy_from_slice(&self.rom[u.src..u.src + u.len]);
-        }
+        self.sprite_update(&mut h);
         for (i, c) in obj_palette.into_iter().enumerate() {
             self.palette[0x200 + 2 * i..0x202 + 2 * i].copy_from_slice(&c.to_le_bytes());
         }
@@ -722,6 +744,23 @@ impl Game {
             self.world.g.div_rem = nfsgba_fixed::iwram_divmod(rest, 10).1;
         }
         self.world.set_hud_frame(h);
+    }
+
+    /// `sprite_screen_update(world + 0xA4, 0)`: the HUD's objects into the shadow OAM and the tile uploads.
+    pub(crate) fn sprite_update(&mut self, h: &mut view::hud::HudFrame) {
+        let (screen, tile_base) = (self.world.hud.screen as usize, self.world.hud.tile_base);
+        for u in ui::update_sprites(
+            &self.rom,
+            &self.bank,
+            screen,
+            &mut h.objects,
+            &mut h.oam,
+            false,
+            tile_base,
+        ) {
+            let at = 0x1_0000 + 32 * u.tile;
+            self.vram[at..at + u.len].copy_from_slice(&self.rom[u.src..u.src + u.len]);
+        }
     }
 
     /// `FUN_0813ea04`: race positions, 1-based, from the race progress.
@@ -773,6 +812,9 @@ impl Game {
     /// the sky gradient, starting at the entry the last VBlank chose).
     pub fn backdrop(&self) -> [u16; 160] {
         let w = &self.world;
+        if !self.vcount_irq {
+            return [u16::from_le_bytes([self.palette[0], self.palette[1]]); 160];
+        }
         std::array::from_fn(|y| w.gradient[sky::backdrop_entry(w.gradient_start, y)])
     }
 

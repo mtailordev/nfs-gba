@@ -670,7 +670,7 @@ fn ring_decode(m: &mut Mem, src: u32, dst: u32, ring: u32) {
 }
 
 /// `load_car_palettes(1)` (`0x0813b6d0`) through `paint::load_car_palettes`, on the base palette.
-fn load_car_palettes(rom: &[u8], palette: &mut [u16], w: &World) {
+pub(crate) fn load_car_palettes(rom: &[u8], palette: &mut [u16], w: &World) {
     let r = &w.records[w.cars[0] as usize];
     let mut record = [0u8; 0x11];
     record[..7].copy_from_slice(&[r.spoiler, r.u_01, r.rim, r.exhaust, r.u_04, r.paint, r.glass]);
