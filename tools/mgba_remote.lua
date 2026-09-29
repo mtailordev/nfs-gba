@@ -5,6 +5,7 @@
 --   shot NAME                  screenshot to NAME.png
 --   dump NAME                  every memory domain except the cartridge to NAME.<domain>.bin, registers to log
 --   save NAME / load NAME      savestate NAME.ss
+--   poke ADDR VALUE            write one byte to RAM (test scenarios, e.g. unlocking a wingman; never the ROM)
 --   trace NAME [SKIP] / untrace
 --                              log every call of the car handler FUN_0814bd4c for entity 0 (the player) to
 --                              NAME.csv, at its entry: frame, keys, a few globals, entity 0 (0xA4 bytes) and its
@@ -99,6 +100,8 @@ local function run(line)
     for _, g in ipairs(GLOBALS) do table.insert(header, g[1]) end
     trace:write(table.concat(header, ",") .. ",entity,physics\n")
     breakpoint = emu:setBreakpoint(traceStep, 0x0814BD4C)
+  elseif op == "poke" then
+    emu:write8(tonumber(a), tonumber(b))
   elseif op == "untrace" then
     if breakpoint then emu:clearBreakpoint(breakpoint) end
     if trace then trace:close(); traceRam:close() end
