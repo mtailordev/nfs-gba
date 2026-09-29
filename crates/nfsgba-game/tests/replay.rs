@@ -222,3 +222,81 @@ fn frames_match_the_trace() {
     );
     assert_eq!(failed, 0, "{failed} of {} frames differ", trace.timing.len());
 }
+
+/// The same trace as one run: the game keeps its own state from the first traced state on (the player's car, the
+/// audio engine, HUD, palette and frame buffer carry over); only what is not ported (the opponents' AI, the camera,
+/// the matrix slots and effect sprites) is taken from the reference at its checkpoint. Every frame must match.
+#[test]
+fn free_run_matches_the_trace() {
+    std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
+    let Ok(rom) = rom::canonical_rom() else {
+        eprintln!("skipping: no ROM vault");
+        return;
+    };
+    let dir = rom::data_dir().join("work/e5298b24/game-loop");
+    let Ok(trace) = Trace::load(&dir, "drive") else {
+        eprintln!("skipping: no trace in {}", dir.display());
+        return;
+    };
+    let mut g = Game::new(trace.machine(&rom, 0));
+    for k in 0..trace.timing.len() {
+        let (next, effects) = (&trace.states[k + 1], &trace.effects[k]);
+        g.frame_with(trace.keys(k), &trace.timing[k], &mut |at, g| {
+            assist(next, effects, at, g)
+        })
+        .unwrap_or_else(|e| panic!("frame {k}: {e}"));
+        let got = g.machine().state();
+        let skip = scratch(&g.sim.mem);
+        let first = (0..got.len()).find(|&o| got[o] != next[o] && !skip.iter().any(|(r, _)| r.contains(&addr(o))));
+        if let Some(o) = first {
+            panic!(
+                "frame {k}: first difference at {:#010x}: got {:#04x}, want {:#04x}",
+                addr(o),
+                got[o],
+                next[o]
+            );
+        }
+    }
+    eprintln!("{} frames free-running, all exact", trace.timing.len());
+}
+
+/// Where live play leaves the reference (`cargo test -p nfsgba-game -- --ignored --nocapture`): a free run with
+/// the opponents frozen (D4), then one with `standin::slots` for the matrix slots (R25); prints each run's first
+/// differing frame and address.
+#[test]
+#[ignore]
+fn live_play_divergence() {
+    std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
+    let (Ok(rom), Ok(trace)) = (
+        rom::canonical_rom(),
+        Trace::load(&rom::data_dir().join("work/e5298b24/game-loop"), "drive"),
+    ) else {
+        return;
+    };
+    for variant in ["opponents frozen", "slot stand-in"] {
+        let mut g = Game::new(trace.machine(&rom, 0));
+        for k in 0..trace.timing.len() {
+            let (next, effects) = (&trace.states[k + 1], &trace.effects[k]);
+            let r = g.frame_with(trace.keys(k), &trace.timing[k], &mut |at, g| match (variant, at) {
+                ("opponents frozen", Checkpoint::Entities) => true,
+                ("slot stand-in", Checkpoint::Slots) => {
+                    nfsgba_game::standin::slots(&mut g.sim.mem);
+                    true
+                }
+                _ => assist(next, effects, at, g),
+            });
+            if let Err(e) = r {
+                eprintln!("{variant}: frame {k}: {e}");
+                break;
+            }
+            let got = g.machine().state();
+            let skip = scratch(&g.sim.mem);
+            if let Some(o) =
+                (0..got.len()).find(|&o| got[o] != next[o] && !skip.iter().any(|(r, _)| r.contains(&addr(o))))
+            {
+                eprintln!("{variant}: first difference in frame {k} at {:#010x}", addr(o));
+                break;
+            }
+        }
+    }
+}
