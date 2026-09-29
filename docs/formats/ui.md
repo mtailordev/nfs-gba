@@ -328,6 +328,140 @@ Oracle gotcha: `Result.read` rebuilds memory from the snapshot plus the call's w
 inputs, so a byte an input set and the call left alone reads back as the snapshot's. Apply the writes to your own
 inputs (`after()` in `tools/ui_menu_oracle.py`).
 
+## Menus, continued (menus-2: `menu.rs`)
+
+The other screen kinds, ported from the disassembly and checked against the game's code through the oracle like the
+intro kind (`tools/ui_menu_oracle.py`, cases under `$NFSGBA_DATA/work/<sha8>/menus2/`).
+
+### The screens
+
+| Screen | Kind | Heading (English) | Background (material, palette) |
+|---|---|---|---|
+| 0 | List | MAIN MENU | 1, 1 |
+| 1 | List | RACE TYPE | 1, 1 |
+| 2 | List | MY PROFILE | 1, 1 |
+| 3 | List | CREW HOUSE | 1, 1 |
+| 4 | List | GARAGE | 1, 1 |
+| 5 | List | PAUSED | 1, 1 |
+| 6 | List | END OF RACE | 1, 1 |
+| 7, 8 | Kind7 (map) | SELECT TRACK (circuits, sprints) | 218, 7 |
+| 9 | List | CAR SELECT | 1, 1 |
+| 0xA | Setup | RACE INFO | 1, 1 |
+| 0xB, 0xC | Results | RACE RESULTS (record and unlocks; standings) | 1, 1 |
+| 0xD | Career event | RACE EVENT | 1, 1 |
+| 0xE | Kind7 (map) | SELECT ZONE | 218, 7 |
+| 0xF | Setup | SETTING CIRCUIT / ELIMINATION / HUNTER / SPRINT (by race mode) | 1, 1 |
+| 0x10 | Setup | OPTIONS | 1, 1 |
+| 0x11 | Kind7 (map) | TRACK RECORDS | 218, 7 |
+| 0x12–0x14 | Kind18 | the garage's car pages | (their enter handler) |
+| 0x1B | List | MY DASH | 1, 1 |
+| 0x1C | List | QUICK PLAY | 1, 1 |
+| 0x1D | List | PERFORMANCE UPGRADE | 1, 1 |
+| 0x1E | List | VISUAL UPGRADE | 1, 1 |
+| 0x23 | List | AERODYNAMICS | 1, 1 |
+| 0x24 | List | ACCESSORIES | 1, 1 |
+| 0x26 | Kind38 | career hints (story pages) | per entry (e.g. 226, 8) |
+| 0x27 | Kind38 | the wingman's introduction | per entry (226, 8) |
+| 0x28 / 0x29 / 0x2A | Kind38 | save / "hint n" wait / clear, between hints | 5, 5 before the first hint, else 226, 8 |
+| 0x2B | Kind38 | a race mode's first-race hint | per entry |
+| 0x2D, 0x2E | List | MY CREW | 1, 1 |
+
+The background is what `menu_scene_setup_a/_b` load (`menu_scene_setup` in `menu.rs`): the material (unpacked when
+packed) into the menu scene, menu palette `0x33EF14 + 0x200·palette` into world `+0x30` and both base palettes, OBJ
+palette 1 scaled to black, and optionally a sprite screen. `_a` (a screen entered from outside the menus) first
+waits a VBlank, blacks out BG palette RAM, clears the exit request and loads the menu descriptor `0x7F2FE8`. This
+answers FIDELITY U4 for every kind: the page record of each screen names its palette (intro pages `+8`, List pages
+`0x7E544C` `+8`, results `0x7E510C` `+10`, event `0x7E5090` `+8`, setup `0x7E6260` `+8`, maps 7, hint entries `+2`).
+
+### Map screens (Kind7: 7, 8, 0xE, 0x11)
+
+State `0x03006230` (`+0`/`+4` view, `+8` cursor, `+9` moved). Left/right move over 12 entries (18 for sprints and
+the sprint records, step 2 on the district map). A by profile `+0x404`: 0 picks a track (circuits through
+`0x7E472C`, sprints `cursor + 0x18`; the route number from `0x7E4A70`) if its district is unlocked (`0x117 +`
+cursor/2 or /3) and goes to 0x2D; 1 picks the district (profile `+0x1FB`); 2 switches the record pages to mode 3; 3
+goes back. The draw shows the heading, the arrows lit while their key-repeat delay runs, and A's prompt 0x15A over a
+locked district. Not ported: the map's zone palette (`map_zone_palettes` `0x08143284`) and the scrolling map draw
+(`map_draw` `0x081435C4`).
+
+### Career event (0xD)
+
+The zone's events in rows of 3 (12; 6 in zone 5), cursor per zone at profile `+0x388`. SELECT opens the district map.
+A on an open event (a boss race needs its unlock `0x122 + zone` / `0x11D + zone`; events past 0x3C need the one
+before won) clears the result slots, copies the event into the race globals (`career_event_to_globals`, from
+`career::events`), then shows a due hint (0x28) or goes on. The draw: the grid with mode icons (`0x7E5078`), boss
+lock icons, won/second marks, the cursor; the event's track, mode, reward (the ladder reward, halved once won, times
+the car's style percentage: `career::style_rating`, `reward_percent`) and record time.
+
+**Hints** (`hint_due` `0x0812CF48`): in career mode, the hints seen (`+0x1F8 + 0x1F9`) pick the next one per zone and
+per screen it precedes (3, 6, 0xD, 0x2D, and 10 for a race mode's first race), some only on boss events or with car
+record bits `+0x450…+0x453`.
+
+**Texts built on the stack:** numbers (`number_text` `0x081633CC`, with the thousands separator `0x0812D62C`: a space
+in French, a dot in German and Italian, above 999) and times (`time_text` `0x0812FC00`: `mm:ss:cc` with the last
+colon a dot in French, German and Spanish, a comma in Italian). Both divide through the IWRAM routine, whose
+remainder stores (`0x03006480`) are part of the exact RAM effect.
+
+### Race results (Career kind: 0xB, 0xC)
+
+Entering 0xB after a race copies the results `0x03005650` to the ranked table `0x03005730`, ranks an elimination by
+time then knock-out, checks for a new track record (the player's best lap against profile `+0x218`, not in two-player
+career) and pays out (`career_race_payout`, still a stub here; `career::race_payout` models it on a `Save`); with no
+record it goes straight to the standings (0xC). 0xB shows the record (track, time) or the unlock messages
+(`+0x4AA…`, new cars and districts highlighted); 0xC the standings per mode (hunter: life/2^19·100; circuit and
+elimination: finish time and best lap, dashes when knocked out; sprint: finish time), then the payout. A on 0xC
+returns to the career menu (6), cutting the back stack at its first 0xC. Racer names: the player's (profile), a
+boss's (`0x7E4954[id − 0x10]`) or an opponent's (text `id + 0xA4`).
+
+### Settings (Setup: 0xA, 0xF, 0x10)
+
+Records `0x7E6260` (`career::setup_screens`): 0x10 options, 0xA Quick Play, 0xF by race mode. Entering copies the
+settings into the profile (`+0x3BC…+0x3F4`, volumes / 8; at most 2 opponents with a wingman); outside 0xA the copies
+drive the race globals every frame. Left/right step the item's value within its range (laps and opponents move
+together in an elimination; at most 2 with a wingman), up/down the cursor. A runs the item's action: a screen (Quick
+Play 0x81 may show a hint first, 0x2B), back when nothing changed, or the save question (0x87, message box 2, text
+0x1D8); a "yes" on the options writes the settings back and saves. The draw lists the items (0xA first a summary:
+track or mode, car, wingman, blinking on bit 7 of the frame counter) with their value texts.
+
+**The career race's opponents** (`FUN_0812B320`, run when entering screen 15): three different random picks
+(`rand & 7`) of the zone's eight opponents (ids `0x40 + 8·zone`; zone 5 `0x60`) into the result slots
+`0x03005655..=57`; on the zone's boss events (and event 0x41) the first is the boss (`0x10 + 2·zone`, `+1`); the
+wingman (`0x20 + wingman`) takes the last opponent slot; in a two-player career before the first hint the first
+opponent is fixed (0x2D). This answers where career races choose their opponents (career.md "Not decoded").
+
+### Hints and story pages (Kind38: 0x26–0x2B)
+
+Page records (0xC bytes: `+0` enter script, `+4` draw script, `+8` entries of 10 bytes: background, line, text,
+action): hints `0x7E8570 + 0xC·hint`, the wingman page `0x7E8534`, the race modes' hints `0x7E8540 + 0xC·mode`.
+**Page scripts** (`page_script` `0x081348E8`): u16 sections `[id, commands…, 0xFFFF]`, the section run is the page
+(hints: profile `+0x1FA`); commands 0xFFF5 stop a sound; 0xFFF6 set a wait and play a sound; 0xFFF7 play a sound;
+0xFFF8 stop a sound once the wait is over; 0xFFF9 stop the music; 0xFFFA play music; 0xFFFB a flash (palette
+0xC0.. from `0x7E6ED4` and a filled rectangle); 0xFFFC a picture on the map grid (profile `+0x254`); 0xFFFD a
+portrait (the wingman's on 0x27, `0x7E78A0`) and its 64 colours (`0x7E6EEC…`). A: 0x40 next page, 0x41 hints done
+(next zone when `+0x256`, save, screen 3), 0x42 back, 0x81 a tutorial race (`FUN_08134CC0`: one of three) or a
+mode's first race, others a screen (9 also resets every car record and sets the cash to 1000). B: the page before,
+or out. Between hints: 0x28 saves the hints seen, 0x29 shows "hint n" until the wait, 0x2A clears both frame buffers
+(`fill32`) and returns to 0x26.
+
+### Verification (menus-2)
+
+Each kind's handlers are called directly on random menu states over the five menu snapshots, with every unported
+callee stubbed on both sides (same calls, same arguments, same order), plus `goto_screen(15)` for the opponent
+picks. Every changed RAM byte (VRAM and palette RAM included) and the update handler's result must match.
+
+| Test | Cases | Mutations caught |
+|---|---|---|
+| `map_screens_match_the_game` (kind7) | 1,600 | 6 of 6 |
+| `career_event_screen_matches_the_game` (event) | 1,600 | 12 of 12 |
+| `race_results_match_the_game` (career) | 1,600 | 9 of 10 (the tenth is equivalent) |
+| `settings_screens_match_the_game` (setup) | 1,600 | 14 of 14 |
+| `hint_pages_match_the_game` (kind38) | 1,600 | 12 of 12 |
+| `top_level_matches_the_game`, `intro_screens_match_the_game` (regenerated) | 2,400 each | — |
+
+Stub arguments that point into the game's stack (the number and time texts, the rectangle of `fill_rect8`) are
+recorded by content and compared with the port's `Gba::texts`. After porting any kind, **every** case set must be
+regenerated (`tools/ui_menu_oracle.py all`): handlers enter and draw arbitrary screens (`menu_back`,
+`goto_screen`), whose handlers were stubs in older sets.
+
 ## The "raw 8bpp region" `0x4018C0–0x794000`
 
 Every byte up to the city tables is a material of a known table (script `coverage`, not kept):

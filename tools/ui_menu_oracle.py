@@ -428,8 +428,12 @@ def kind38(_gba, rng, n=1600):
 
 
 def main(which):
+    """`all` regenerates every set: needed after porting any kind, since handlers enter and draw arbitrary screens
+    (menu_back, goto_screen) whose handlers were stubs when the older sets were made."""
     OUT.mkdir(parents=True, exist_ok=True)
     gba, rng = Gba("ui-2d/n7"), random.Random(0x6E66)
+    if which == ["all"]:
+        which = ["fades", "toplevel", "intro"] + [k for k in PORTED_KINDS if k != "intro"]
     for name in which or ["fades"]:
         cases = globals()[name](gba, rng)
         path = OUT / f"{name}.jsonl"
