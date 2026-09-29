@@ -65,6 +65,7 @@ Then: boot → menus → race at 240×160 (a playable reference), the timing mod
 
 ## Environment notes
 
+- **Commit messages carry no attribution trailers** (no `Co-Authored-By`/session lines; the user's rule). The history was cleaned of them on 2026-09-29 (backup: `data/work/_archive/pre-trailer-rewrite.bundle`); every agent prompt must say so, and rebased agent branches get them stripped.
 - **GitHub:** private repo `mtailordev/nfs-gba` (`origin`); push `main` only. The account blocks pushes that expose its private email, so this repo commits as `18623619+mtailordev@users.noreply.github.com` (local git config). On 2026-09-29 the whole history was rewritten to that address (a backup bundle of the old refs is in `data/work/_archive/pre-email-rewrite.bundle`). Branches made before the rewrite (the old `worktree-agent-*` ones, and the dedup agent's) must be **rebased** onto `main`, never merged, or the old addresses come back and the push is refused.
 
 - Toolchains: Rust 1.98.1 (clippy, rustfmt), Git 2.55.0, uv 0.12.20, Python 3.14.7 pinned by `.python-version` (the global pyenv stays 3.12.10); the analysis venv is `.venv` (unicorn, capstone, numpy, pillow).
