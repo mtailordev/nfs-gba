@@ -93,9 +93,9 @@ their own state. The other one stops with `Unported` in a car path the physics-p
 
 ## Verification
 
-- **Traces:** `tools/mgba_game_trace.lua` (loaded next to the remote through `NFSGBA_MGBA_SCRIPTS`) records the
+- **Traces:** `tools/record.py game` (loaded next to the remote through `NFSGBA_MGBA_EXTRA`) records the
   whole machine state at every `main_frame` entry, and per frame the IRQ counter at the points above, timer 3's
-  ticks, and the effect-sprite list as `draw_effect_sprites` finds it. `tools/game_trace.py record drive` plays
+  ticks, and the effect-sprite list as `draw_effect_sprites` finds it. `tools/record.py game record drive` plays
   the scenario from `race.ss` (accelerate, steer both ways, brake, accelerate; 150 game frames, 581 video frames)
   and `pack` stores it as a base state plus per-frame byte runs (5.5 MB), in `data/work/e5298b24/game-loop/`.
 - **More traces (live-race):** in `data/work/e5298b24/live-race/`, recorded with `NFSGBA_MGBA_SESSION=live-race`.
@@ -228,7 +228,7 @@ the decompiled code:
 - **Traces to record:**
   - the 14 race-init starts, arming at state 4 (intro, countdown, first racing frames);
   - a circuit finish with laps set to 1 on the info screen (a legal setting, 1..6), driven by the autopilot from
-    `tools/trace_race_rules.lua`;
+    `tools/recorders/rules.lua`;
   - a pause.
 
   `Trace` then has to stream its states: it holds every state in memory, about 400 KB each.

@@ -175,7 +175,7 @@ The mode updates call, in this order, with the driver `*(entity[*0x030057F8] + 0
 
 **Located, not called by the HUD, not ported:** `FUN_0814279c` (a countdown timer: `*0x03006154` − race time, race state 7 at zero, blinking under 10 s), `FUN_08142aac` (best lap driver `+0xB4`, else the profile's record time `+0x218` of track slot `0x7E49C4[route]`), `FUN_08143094` (a units panel frame).
 
-**Verification.** `python tools/ui_hud_trace.py STATE FRAMES NAME KEYS POKES` (mGBA with `tools/ui_hud_trace.lua`; traces in `$NFSGBA_DATA/work/e5298b24/hud-logic/`, about 30 KB per frame, not in git). Tag 0 at the `bl hud_update` in `race_frame_update` (`0x0813aa9c`) and tag 1 after `sprite_screen_update` (`0x0813aaa8`) each hold the IWRAM windows `0x03000000–0x03000200` and `0x03005300–0x03006900`, the 0x37 objects, entities 0–3 and their driver structs, profile `+0x402`, OBJ VRAM tiles 0x200–0x3FF, the OBJ palette and DISPCNT. Tags 2 and 3 hold the entry and exit of `hud_message_show`, `FUN_08142e44`, `hud_reset` and `FUN_08143010` (they nest). Pokes set inputs just before `hud_update`; temporary ones are restored after tag 1, so the game only sees them in the HUD. The tests in `hud.rs` run `hud::update` + `ui::update_sprites` from every tag-0 state and require tag 1's objects, globals, message slots, whole shadow OAM, OBJ palette and OBJ VRAM; call records must give the exit's objects and slots. Since the IRQ can tick the race time mid-update, each object, OAM entry and tile may match the run with either value (see *Not 1:1*).
+**Verification.** `python tools/record.py hud STATE FRAMES NAME KEYS POKES` (mGBA with `tools/record.py hud`; traces in `$NFSGBA_DATA/work/e5298b24/hud-logic/`, about 30 KB per frame, not in git). Tag 0 at the `bl hud_update` in `race_frame_update` (`0x0813aa9c`) and tag 1 after `sprite_screen_update` (`0x0813aaa8`) each hold the IWRAM windows `0x03000000–0x03000200` and `0x03005300–0x03006900`, the 0x37 objects, entities 0–3 and their driver structs, profile `+0x402`, OBJ VRAM tiles 0x200–0x3FF, the OBJ palette and DISPCNT. Tags 2 and 3 hold the entry and exit of `hud_message_show`, `FUN_08142e44`, `hud_reset` and `FUN_08143010` (they nest). Pokes set inputs just before `hud_update`; temporary ones are restored after tag 1, so the game only sees them in the HUD. The tests in `hud.rs` run `hud::update` + `ui::update_sprites` from every tag-0 state and require tag 1's objects, globals, message slots, whole shadow OAM, OBJ palette and OBJ VRAM; call records must give the exit's objects and slots. Since the IRQ can tick the race time mid-update, each object, OAM entry and tile may match the run with either value (see *Not 1:1*).
 
 | Trace | From | Frames / calls | Covers |
 |---|---|---|---|
@@ -309,13 +309,13 @@ material, `+8` menu palette, `+0xA` item count, `+0x10` item list). The enter ha
 
 ### Verification
 
-- `menu::tests::top_level_matches_the_game`: 2,400 oracle cases (`tools/ui_menu_oracle.py toplevel`) of
+- `menu::tests::top_level_matches_the_game`: 2,400 oracle cases (`tools/oracle/cases.py menus toplevel`) of
   `menu_frame`, `game_state_step` and `main_frame` over six snapshots (menus, career, race) with random screens, exit
   requests, fades, message boxes, keys, back stacks, key delays, profile flags, routes, reverse, random index,
   palettes and handler results. The unported callees (the kind handlers, sound, timers, race functions) are stubbed on
   both sides and must be called in the same order with the same arguments; every changed RAM byte and the result
   must match. 0 mismatches; breaking the rand-before-draw rule or one key-repeat slot fails it.
-- `menu::tests::intro_screens_match_the_game`: 2,400 oracle cases (`tools/ui_menu_oracle.py intro`) of `menu_frame`,
+- `menu::tests::intro_screens_match_the_game`: 2,400 oracle cases (`tools/oracle/cases.py menus intro`) of `menu_frame`,
   `goto_screen` (entering each intro screen and 0x80/0x81/0x82) and `draw_screen` on the intro screens with random
   keys, deadlines, keyboard and name states, languages, credits lists, blink colours, profile flags and save results.
   The drawing primitives are stubbed on both sides, so every blit and text call must have the same arguments. Six
@@ -326,12 +326,12 @@ material, `+8` menu palette, `+0xA` item count, `+0x10` item list). The enter ha
 
 Oracle gotcha: `Result.read` rebuilds memory from the snapshot plus the call's writes, **without** the call's `mem`
 inputs, so a byte an input set and the call left alone reads back as the snapshot's. Apply the writes to your own
-inputs (`after()` in `tools/ui_menu_oracle.py`).
+inputs (`after()` in `tools/oracle/cases.py menus`).
 
 ## Menus, continued (menus-2: `menu.rs`)
 
 The other screen kinds, ported from the disassembly and checked against the game's code through the oracle like the
-intro kind (`tools/ui_menu_oracle.py`, cases under `$NFSGBA_DATA/work/<sha8>/menus2/`).
+intro kind (`tools/oracle/cases.py menus`, cases under `$NFSGBA_DATA/work/<sha8>/menus2/`).
 
 ### The screens
 
@@ -476,7 +476,7 @@ picks. Every changed RAM byte (VRAM and palette RAM included) and the update han
 
 Stub arguments that point into the game's stack (the number and time texts, the rectangle of `fill_rect8`) are
 recorded by content and compared with the port's `Gba::texts`. After porting any kind, **every** case set must be
-regenerated (`tools/ui_menu_oracle.py all`): handlers enter and draw arbitrary screens (`menu_back`,
+regenerated (`tools/oracle/cases.py menus all`): handlers enter and draw arbitrary screens (`menu_back`,
 `goto_screen`), whose handlers were stubs in older sets.
 
 ## The "raw 8bpp region" `0x4018C0–0x794000`

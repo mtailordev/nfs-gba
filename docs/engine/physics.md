@@ -324,16 +324,16 @@ The car table `0x087F0BD8` (`docs/formats/vehicle-models.md`) is not read by the
 - **Traces:** `tools/mgba_remote.lua` `trace NAME [SKIP]` breaks on `FUN_0814bd4c` when r1 is the player's entity.
   - Each hit logs the frame, keys, a few globals, the entity and the physics struct to `NAME.csv`, and appends the
     full EWRAM + IWRAM to `NAME.ram.bin`.
-  - `tools/trace_race.py` records the scenarios and stores that RAM as deltas from the first step's dump
+  - `tools/record.py car` records the scenarios and stores that RAM as deltas from the first step's dump
     (`NAME.ramdelta`, about 0.2–3 MB per scenario).
   - Reruns give identical files.
-- **Scenarios** (`tools/trace_race.py`):
+- **Scenarios** (`tools/record.py car`):
   - from the reference race `race.ss` (23 s in, opponents out of reach): accel, brake, steer, wall, drive
     (R, A+L, R+L; sector 760→759), reverse (760→751→748), handbrake, long (760→759→760; waypoints 33→34→0→1
     over the start line);
   - start: from the menu (Quick Play, 3-lap circuit, heavy traffic) through the car init, the intro (phase 9),
     the launch, sectors 263→270→269→265 with a ramp, and a traffic spawn at step 96.
-- **Oracle:** `tools/trace_oracle.py` runs `FUN_0814bd4c` from the ROM in unicorn on each step's full RAM
+- **Oracle:** `tools/oracle/cases.py car` runs `FUN_0814bd4c` from the ROM in unicorn on each step's full RAM
   (ARMv5 core; SWI Div emulated). It reproduces all 1,149 steps and writes each step's RAM changes and sound calls
   (`NAME.oracle.txt`). The sound entry points and `draw_decal_on_atlas` are stubbed and recorded; the IWRAM stack
   is ignored.
@@ -343,8 +343,8 @@ The car table `0x087F0BD8` (`docs/formats/vehicle-models.md`) is not read by the
   - `replay_matches_the_trace`: the player's car runs on its own state, with the rest of RAM from the reference at
     each step, and reproduces every traced car state.
 - **More scenarios** (physics-paths, session `physics-paths`, then copied to `vehicle-physics`): recorded with the
-  autopilot `tools/trace_autopilot.lua` (steers from the racing line or at a car; loaded with the remote's `lua`
-  command and driven by `luax`), counted with the probe `tools/trace_probe.lua`:
+  autopilot `tools/recorders/autopilot.lua` (steers from the racing line or at a car; loaded with the remote's `lua`
+  command and driven by `luax`), counted with the probe `tools/recorders/calls.lua`:
   - `hunter` (hunter race, ramming opponent 3): car-to-car responses, hunter hits and wall hits;
   - `tipped` (hunter race, hunting the nearest car): 86 tipped-over steps;
   - `stuck`: the tipped drive with the tipped counter raised to 100 in RAM after 20 tipped steps (a test input: the
@@ -355,12 +355,12 @@ The car table `0x087F0BD8` (`docs/formats/vehicle-models.md`) is not read by the
   marked `external` in `NAME.oracle.txt`: only that step's own writes and sounds are compared, and the replay carries
   on from the game's state.
 - **Oracle cases for paths no recording reaches** (`tests/trace.rs`, `tests/suspension.rs`):
-  - `tools/trace_fuzz.py` (`fuzz.jsonl`): real steps with extreme speeds (far sector search, the player's and the
+  - `tools/oracle/cases.py fuzz` (`fuzz.jsonl`): real steps with extreme speeds (far sector search, the player's and the
     opponents' push-back loops), random controls (manual gearbox, nitro, wingman command), and the car init with
     random career globals on every racer slot; 4,500 cases;
-  - `tools/trace_calls.py` (`calls.jsonl`): `traffic_spawn` in all kinds, `wingman_command` in both roles,
+  - `tools/oracle/cases.py calls` (`calls.jsonl`): `traffic_spawn` in all kinds, `wingman_command` in both roles,
     `lap_crossing` (493 crossings with knock-outs and finishes); 4,500 cases;
-  - `tools/trace_suspension.py` (`suspension.jsonl`): the suspension step on the reference race with random racers,
+  - `tools/oracle/cases.py suspension` (`suspension.jsonl`): the suspension step on the reference race with random racers,
     681 sectors, speeds, springs and frame times; 3,000 cases.
   Mutation checks: one changed constant in each ported path (push-back distances, AI halving, manual shift, nitro
   drain and torque, career grid, wingman row, spawn speed, suspension damping, neutral revs, side-hit flags) breaks

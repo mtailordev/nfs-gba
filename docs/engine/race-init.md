@@ -51,7 +51,7 @@ race's RAM (R24: the rim draw later reads next to its buffer).
 
 ## Inputs
 
-What `race_start_from_table_a` reads before writing it (`tools/race_init_inputs.py`, read hook in the oracle; the
+What `race_start_from_table_a` reads before writing it (`tools/oracle/cases.py race-init-inputs`, read hook in the oracle; the
 career capture: 259 bytes):
 
 | Where | What |
@@ -77,13 +77,13 @@ equals mGBA (`NAME_seed.txt`). The race music (`rand & 3`) and every later rando
 
 ## Verification
 
-- **Captures** (`tools/race_init_capture.py` + `tools/race_init_capture.lua`, session `race-init`): the machine at
+- **Captures** (`tools/record.py race-init`, session `race-init`): the machine at
   the entry and return of `race_start_from_table_a`, from race-info savestates of other sessions and the main
   menu. 14 starts: all four modes (circuit, elimination ×2, hunter ×2, sprint ×3), routes 1, 3, 19, 25, 40,
   environments 0, 1, 9, 10, traffic 0–2, difficulty 0–2, a Quick Play wingman, a career event (wingman 2, career
   flag, the previous race's lapped flag 1 and atlas block), and each Quick Play setup twice from different menu
   histories (other RNG index and tick).
-- **Against the game's code** (`tools/race_init_oracle.py`): the oracle runs `race_start_from_table_a` on each
+- **Against the game's code** (`tools/oracle/cases.py race-init`): the oracle runs `race_start_from_table_a` on each
   entry state; `tests/race_init.rs` requires the port's EWRAM, IWRAM, I/O, palette, VRAM and OAM to equal it byte
   for byte. 14/14.
 - **Against mGBA:** with the recorded seed timing, the port equals the emulator's state at the return in every

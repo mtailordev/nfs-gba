@@ -300,14 +300,14 @@ Life is driver `+0x4E8`, 0..=`0x80000`. `hunter_tuning_init` (`FUN_081412ec`) ru
 
 Two sources, one replay test (`race_rules_match_the_traces` in `career.rs`), which reads every file in `data/work/e5298b24/race-rules/` and skips when there are none.
 
-1. **mGBA traces** (`tools/trace_race_rules.lua`, `*.log`). The tracer is loaded through `NFSGBA_MGBA_EXTRA` (tools/mgba_remote.lua) and logs each traced call with the racers and globals before and after:
+1. **mGBA traces** (`tools/recorders/rules.lua`, `*.log`). The tracer is loaded through `NFSGBA_MGBA_EXTRA` (tools/mgba_remote.lua) and logs each traced call with the racers and globals before and after:
    - `lap_crossing`, the player's tracker and the AI advance (with the state at a nested `lap_crossing`);
    - `race_progress`, positions, the hunter functions and the finish estimate;
    - payout, style rating, unlock rebuild and `save_encode` (with the heap bytes it overwrote);
    - the plane build.
 
    An autopilot (`auto on`) steers along the racing line. Captured: the story races (routes 1 and 3, wingmen), a career event (lost, place 3), five game-written saves (two with the `.sav` mGBA wrote).
-2. **Oracle cases** (`tools/oracle_race_rules.py`, `oracle-*.jsonl`, the same keys). They run each function in the function oracle (`tools/oracle`, `docs/engine/harness.md`) on generated inputs over the reference race's RAM:
+2. **Oracle cases** (`tools/oracle/cases.py rules`, `oracle-*.jsonl`, the same keys). They run each function in the function oracle (`tools/oracle`, `docs/engine/harness.md`) on generated inputs over the reference race's RAM:
    - random and edge values for places, laps, flags, times, lives, impulses, statuses and records;
    - the racing line of all 43 routes, circuit and sprint, with both build flags, through the real load functions.
 

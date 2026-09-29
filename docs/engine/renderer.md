@@ -380,7 +380,7 @@ A neighbour with floor 0 is replaced by its `+0x20` alias when that is set. Othe
 
 ### Frame captures (`data/work/e5298b24/entity-draw/`)
 
-`tools/mgba_frame_probe.lua` (loaded with `NFSGBA_MGBA_SCRIPTS`, armed by writing `NAME [ADDR=VALUE …]` to `probe.txt`, atomically) keeps IWRAM and EWRAM at the start of `draw_visible_sectors` and VRAM at its end, the page again one frame later (`NAME.final.bin`), and can apply 16-bit writes first to steer the renderer into paths the data does not reach. States: `race.ss` (the reference race) and `g0.ss` (a Quick Play from `mainmenu.ss`, A ×4, saved during the countdown). All 16 match on every written pixel:
+`tools/recorders/frame.lua` (loaded with `NFSGBA_MGBA_EXTRA`, armed by writing `NAME [ADDR=VALUE …]` to `probe.txt`, atomically) keeps IWRAM and EWRAM at the start of `draw_visible_sectors` and VRAM at its end, the page again one frame later (`NAME.final.bin`), and can apply 16-bit writes first to steer the renderer into paths the data does not reach. States: `race.ss` (the reference race) and `g0.ss` (a Quick Play from `mainmenu.ss`, A ×4, saved during the countdown). All 16 match on every written pixel:
 
 | Capture | What | Entities shown (depth) |
 |---|---|---|

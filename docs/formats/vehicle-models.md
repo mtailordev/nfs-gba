@@ -3,7 +3,7 @@
 **Status: verified.**
 - **From the code:** the layout was read from the renderer's decompiled code (Ghidra, IWRAM routines at their runtime addresses).
 - **From the data:** every count and range is consistent (`tools/test_tools.py::test_vehicle_models_fill_their_arrays_exactly`), and the wireframes render as recognisable cars.
-- **Parser:** `tools/models.py` exports all 102 models to OBJ in `$NFSGBA_DATA/out/models/<sha1-8>/`.
+- **Parser:** `nfsgba_formats::models()` (tested in the crate); the viewer shows them. (An early Python OBJ exporter, `tools/models.py`, was removed in the consolidation.)
 
 ## How the game finds it
 

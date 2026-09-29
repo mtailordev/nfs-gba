@@ -355,7 +355,7 @@ then `stop_music`, then `play_module(module 0)`.
 ## Verification
 
 Tools:
-- `tools/audio_trace.py STATE FRAMES [NAME [KEYS]]` runs mGBA with `tools/mgba_audio_trace.lua`.
+- `tools/record.py audio STATE FRAMES [NAME [KEYS]]` runs mGBA with `tools/record.py audio`.
 - The script loads a savestate and breaks at `FUN_08151b10` (tag 0) and at its return `0x0812AC4E` (tag 1).
 - At each break it records the 16 bytes of globals at `0x03006370`, the whole work area and both buffers.
 - Between updates it logs every call into the engine API (tag 2: function and r0–r3).

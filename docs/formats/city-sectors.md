@@ -3,7 +3,7 @@
 **Status: the structure is verified; some field meanings are hypotheses.**
 - **From the code:** the layout was read from the decompiled IWRAM renderer (`FUN_0300224c` scene, `FUN_03000978` wall transform, `FUN_030013ac` wall drawing).
 - **From the data:** sectors tile the wall array exactly, and **2,682 of 2,688 portal walls** have their edge, reversed, in the sector they link to (`tools/test_tools.py::test_city_sectors_are_contiguous_and_portals_match`). Top-down and 3D renders show a coherent street network.
-- **Parser:** `tools/city.py` exports `city.svg` (top-down) and `city.obj` (walls and floors) to `$NFSGBA_DATA/out/city/<sha1-8>/`.
+- **Parser:** `nfsgba_formats::city()` (tested in the crate); the viewer and `render` draw it. (An early Python SVG/OBJ exporter, `tools/city.py`, was removed in the consolidation.)
 
 ## What it is
 

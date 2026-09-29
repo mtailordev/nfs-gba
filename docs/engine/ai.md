@@ -122,13 +122,13 @@ and counts it. The per-call test is exact, because the oracle sees the same RAM.
 
 - **Traces:**
   - the nine player-car traces of `docs/engine/physics.md` (session `vehicle-physics`);
-  - three recorded here with `tools/trace_ai_race.py` (session `ai-traffic`), from race-info savestates made through Quick Play > CUSTOM:
+  - three recorded here with `tools/record.py ai` (session `ai-traffic`), from race-info savestates made through Quick Play > CUSTOM:
     - `sprint`: JUNKPOINT, normal difficulty, heavy traffic, catch-up on;
     - `circuit`: LONGPOINT, 2 laps, hard difficulty, heavy traffic, catch-up on;
     - `wingman`: JUNKTOWN BLITZ with KITA. Wingmen were made selectable with `poke 0x02000C5A 0xFF`, a new `tools/mgba_remote.lua` command that sets RAM, never the ROM.
 
   The scenarios cover the race start, launches and overtaking, lane changes, shortcuts, stuck opponents, traffic spawning and removal, a racer hitting a traffic car, knocked-away traffic, catch-up, boost and the wingman.
-- **Oracle** (`tools/trace_ai_oracle.py`, on the harness's `tools/oracle`): for every traced frame it runs the game's own entity loop on the frame's RAM, chaining the calls. It records each call's RAM writes and stubbed calls (sounds, the rim blit, `opponent_effects` with its arguments) in `<name>.ai-oracle.txt`. It checks every opponent and traffic car against the next traced frame: 12,425 of 12,468 match, and all 43 mismatches are the timing field above.
+- **Oracle** (`tools/oracle/cases.py ai`, on the harness's `tools/oracle`): for every traced frame it runs the game's own entity loop on the frame's RAM, chaining the calls. It records each call's RAM writes and stubbed calls (sounds, the rim blit, `opponent_effects` with its arguments) in `<name>.ai-oracle.txt`. It checks every opponent and traffic car against the next traced frame: 12,425 of 12,468 match, and all 43 mismatches are the timing field above.
 - **Rust** (`crates/nfsgba-sim/tests/ai_trace.rs`):
   - `each_call_matches_the_game`: each frame replays the loop; the player's and the effect entities' calls apply the game's writes. Every opponent and traffic call runs the port, which must write exactly the same bytes and make the same calls. Only the car-physics stops listed there may stop.
   - `replay_matches_the_trace`: the opponents and traffic carry their own entity and data block from frame to frame over the reference RAM. They must reproduce every next traced frame (external bits masked, as in the physics tests). A car that reaches unported code takes the game's result for that call and re-syncs from the trace.
