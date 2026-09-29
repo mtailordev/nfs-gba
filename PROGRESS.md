@@ -39,6 +39,8 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **sector-renderer:** R7–R11. Owns `crates/nfsgba-formats/src/render.rs`, `docs/engine/renderer.md`.
 - **vehicle-physics:** car simulation plus trace harness. Owns `crates/nfsgba-sim`, `docs/engine/physics.md`, `tools/trace_*`.
 - **audio:** GBAMOD30 and the LS_Play mixer. Owns `crates/nfsgba-audio`, `docs/formats/audio.md`.
+- **ui-2d:** HUD, fonts, menus, sprites and the raw 8bpp region. Owns `crates/nfsgba-formats/src/ui.rs`, `docs/formats/ui.md`, `tools/ui_*`.
+- **career-events:** career, events, race rules and the EEPROM save. Owns `crates/nfsgba-formats/src/career.rs`, `docs/formats/career.md`.
 
 Each writes "Integration notes" (address-map rows, symbols rows, FIDELITY changes) for the parent to merge into the central docs. Each emulator session uses `NFSGBA_MGBA_SESSION=<agent>`. Ghidra: the agents read `carbon_decomp.c`, or work on a private copy of the project.
 
