@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SCENARIOS: [&str; 12] = [
+const SCENARIOS: [&str; 15] = [
     "accel",
     "brake",
     "steer",
@@ -25,6 +25,9 @@ const SCENARIOS: [&str; 12] = [
     "hunter",
     "tipped",
     "stuck",
+    "sprint",
+    "circuit",
+    "wingman",
 ];
 const EWRAM: usize = 0x4_0000;
 /// Bits other game code maintains between car steps, as (offset, mask): the entity's sector-list link
@@ -390,17 +393,18 @@ fn perturbed_steps_match_the_oracle() {
     );
 }
 
-/// `traffic_spawn` (`FUN_08143d48`) in all three kinds, called directly on real trace states in the function oracle
-/// (`tools/trace_spawn.py`): kinds 0 and 2 only come from spawner entities no Carbon race has. Same return value and
-/// RAM writes.
+/// Functions called directly on real trace states in the function oracle (`tools/trace_calls.py`), for branches no
+/// recording reaches: `traffic_spawn` (`FUN_08143d48`) in all three kinds (0 and 2 only come from spawner entities
+/// no Carbon race has), and the wingman command (`FUN_0814078c`) in both roles. Same RAM writes (and return value,
+/// for the spawn).
 #[test]
-fn traffic_spawns_match_the_oracle() {
+fn calls_match_the_oracle() {
     let Some(dir) = trace_dir() else {
         eprintln!("traces not found; skipped");
         return;
     };
-    let Ok(text) = fs::read_to_string(dir.join("spawn.jsonl")) else {
-        eprintln!("spawn cases not found (tools/trace_spawn.py); skipped");
+    let Ok(text) = fs::read_to_string(dir.join("calls.jsonl")) else {
+        eprintln!("call cases not found (tools/trace_calls.py); skipped");
         return;
     };
     let cases: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
@@ -416,9 +420,16 @@ fn traffic_spawns_match_the_oracle() {
             mem.set_bytes(p[0].as_u64().unwrap() as u32, &hex(p[1].as_str().unwrap()));
         }
         let before = mem.clone();
-        let near = mem.u32(W_ENTITIES) + 0xA4 * c["near"].as_u64().unwrap() as u32;
-        let kind = c["kind"].as_u64().unwrap() as u32;
-        let got = match nfsgba_sim::traffic::spawn(&mut mem, near, kind) {
+        let fun = c["fn"].as_str().unwrap();
+        let result = match fun {
+            "spawn" => {
+                let near = mem.u32(W_ENTITIES) + 0xA4 * c["near"].as_u64().unwrap() as u32;
+                nfsgba_sim::traffic::spawn(&mut mem, near, c["kind"].as_u64().unwrap() as u32).map(Some)
+            }
+            "wingman" => nfsgba_sim::route::wingman_command(&mut mem).map(|()| None),
+            other => panic!("unknown function {other}"),
+        };
+        let got = match result {
             Ok(v) => v,
             Err(err) => {
                 failures.push(format!("case {n}: {err}"));
@@ -437,9 +448,10 @@ fn traffic_spawns_match_the_oracle() {
             .collect();
         let extra: Vec<_> = writes.iter().filter(|w| !want.contains(w)).take(8).collect();
         let missing: Vec<_> = want.iter().filter(|w| !writes.contains(w)).take(8).collect();
-        if got as u64 != c["ret"].as_u64().unwrap() || !extra.is_empty() || !missing.is_empty() {
+        let ret_differs = got.is_some_and(|v| v as u64 != c["ret"].as_u64().unwrap());
+        if ret_differs || !extra.is_empty() || !missing.is_empty() {
             failures.push(format!(
-                "case {n} (kind {kind}): returned {got:#x} want {:#x}, extra {extra:x?} missing {missing:x?}",
+                "case {n} ({fun}): returned {got:x?} want {:#x}, extra {extra:x?} missing {missing:x?}",
                 c["ret"].as_u64().unwrap()
             ));
         }
@@ -451,5 +463,5 @@ fn traffic_spawns_match_the_oracle() {
         cases.len(),
         failures[..failures.len().min(10)].join("\n")
     );
-    eprintln!("traffic spawns: {} oracle cases exact", cases.len());
+    eprintln!("direct calls: {} oracle cases exact", cases.len());
 }

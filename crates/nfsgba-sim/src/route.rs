@@ -385,13 +385,44 @@ pub fn traffic_countdown(mem: &mut Mem) -> Result<()> {
     Ok(())
 }
 
-/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (0x03006104 = 1..=12).
+/// `FUN_0814078c` (control action 8, R+L): the wingman command; only with a wingman (0x03006104 = 1..=12), commands
+/// left (0x030061DC), none running (0x030061E8) and the cooldown (0x030061D8) over. The attacker (0x030061F8 = 0)
+/// targets the best-placed racer other than 0x0300619C (the wingman's car); otherwise the command flag 0x0300618C
+/// is set. A given command costs one of 0x030061DC and starts the cooldown 0x1E000.
 pub fn wingman_command(mem: &mut Mem) -> Result<()> {
     if mem.i32(0x0300_6104).wrapping_sub(1) as u32 >= 0xC {
         return Ok(());
     }
-    if mem.i32(0x0300_61DC) != 0 && mem.i32(0x0300_61E8) == 0 && mem.i32(0x0300_61D8) == 0 {
-        return Err(Unported("FUN_0814078c (wingman command)"));
+    if mem.i32(0x0300_61DC) == 0 || mem.i32(0x0300_61E8) != 0 || mem.i32(0x0300_61D8) != 0 {
+        return Ok(());
+    }
+    let given = if mem.i32(0x0300_61F8) == 0 {
+        let racers = mem.u32(OPPONENTS);
+        let (mut target, mut place) = (0u32, 100);
+        if racers != u32::MAX {
+            let mut e = mem.u32(W_ENTITIES);
+            for _ in 0..=racers {
+                let p = mem.i32(mem.u32(e + 0x8C) + 0xA8);
+                if e != mem.u32(0x0300_619C) && mem.u16(e) as u32 <= racers && p < place {
+                    (target, place) = (e, p);
+                }
+                e += 0xA4;
+            }
+        }
+        mem.set_u32(0x0300_61E4, mem.u32(0x0300_6188));
+        mem.set_u32(0x0300_6178, target);
+        mem.set_u32(0x0300_61FC, 0);
+        mem.set_u32(0x0300_61F0, 0);
+        (target.wrapping_neg() | target) >> 31 != 0
+    } else {
+        mem.set_u32(0x0300_618C, 1);
+        mem.set_u32(0x0300_61E4, mem.u32(0x0300_6188));
+        true
+    };
+    if given {
+        mem.set_i32(0x0300_61DC, mem.i32(0x0300_61DC) - 1);
+        mem.set_u32(0x0300_61E8, 1);
+        mem.set_u32(0x0300_61D8, 0x1_E000);
     }
     Ok(())
 }
