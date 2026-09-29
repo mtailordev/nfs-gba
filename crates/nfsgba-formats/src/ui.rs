@@ -218,8 +218,8 @@ pub fn blit(fb: &mut [u8], stride: usize, x: i32, y: i32, src: &[u8], w: usize, 
 /// Exact port of `blit_rows` (IWRAM overlay code, ROM `0x08169880`, reached by `menu_blit_material_alt` through
 /// `iwram_call_7`): copies `w × h` bytes from `src` to (`x`, `y`) of a `stride`-byte frame buffer by halfwords (an
 /// odd `w` drops each row's last byte and the source rows are `w & !1` apart), with no key colour. A halfword store
-/// to an odd address goes to the even one below it, as on the ARM7TDMI. Bytes outside `fb` are dropped (NOT 1:1
-/// (N1), as `blit`).
+/// to an odd address goes to the even one below it, as on the ARM7TDMI. Bytes outside `fb` are dropped, as in `blit`
+/// (NOT 1:1 (N1)).
 pub fn blit_halves(fb: &mut [u8], stride: usize, x: i32, y: i32, src: &[u8], w: usize, h: usize) {
     for row in 0..h {
         let dst = (y as i64 + row as i64) * (stride & !1) as i64 + x as i64;
