@@ -17,6 +17,7 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 19. **HUD details:** material kind bit 4 (materials 5–33), element bytes `+0x0F`/`+0x10`, and which race mode HUD screen 3 serves.
 20. **Menu sprite screens (`0x347778`):** all elements use material 0. Hit boxes or cursor anchors?
 21. **The 128 bytes at `0x71F168`**, zero apart from one word, just before the city palettes.
+22. **Who calls `FUN_0814279c` (countdown timer), `FUN_08142aac` (best lap) and `FUN_08143094` (units panel)?** The HUD modes don't.
 16. **Audio module header bytes `+0x038` and `+0x138`** are never read by the player. What did they hold for the converter?
 17. **What calls the sound re-init/shutdown pair at `0x08149dbe`–`0x0814a018`?** Hypothesis: link play.
 

@@ -48,7 +48,7 @@ Done since the last update: race routes (grid plus racing line, `docs/formats/ra
 - **race-rules:** D5–D7: trace-check the race rules, find the lap-arming code and hunter life at zero, write the exact save encoder. Owns `career.rs`, `docs/formats/career.md`.
 - **entity-draw:** done and merged. `render/entities.rs`: the car draw is exact, so `draw_world` reproduces whole frames pixel for pixel (17 captures); R12 closed. Matrix-slot building is still an input (R25).
 - **viewer-geometry:** R23 racers and atlas from `atlas`, R8, R10, R11, R14, R19, R22 in the viewer, plus an original-resolution mode from `render::draw_world`. Owns `crates/nfsgba-viewer`, a new section of `docs/engine/viewer-rendering.md`.
-- **hud-logic:** U1/U2, the HUD element logic and the minimap, traced frame by frame against shadow OAM, tiles and OBJ palette. Owns `ui.rs` (+ `hud.rs`), `docs/formats/ui.md`, `tools/ui_*`.
+- **hud-logic:** done and merged. `hud.rs`: every HUD element, the messages and the minimap, exact over 7,096 traced frames (U1, U2 closed). The HUD arrow is the off-route warning `0x0300601C`.
 - **harness:** done and merged. `tools/oracle` (unicorn function oracle; `trace_oracle.py` runs on it; 93,169 cases vs the Rust ports, 0 mismatches), `coverage.py` (465 of 880 functions run in 4 scenarios; 200 of those unnamed), `rom_attribution.py` (98.907% of the ROM claimed), `notes_merge.py`. See `docs/engine/harness.md`.
 - **ai-traffic:** D4's AI part: opponent handler 0x29 and traffic handler 0x36, trace-exact. Owns new `nfsgba-sim` modules (`ai.rs`, `traffic_ai.rs`), `docs/engine/ai.md`.
 - **physics-paths:** D9–D13, the car paths that still stop with `Unported`. Owns the existing `nfsgba-sim` modules, `docs/engine/physics.md`, `tools/trace_*`.

@@ -22,6 +22,8 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x154354…` | | per-rate note → step tables, linear mode (pointers at `0x7F5BA4`) | formats/audio |
 | `0x15CF2C` / `0x15CFD4` | | LZ77-packed ARM mixer, mode 0 / **mode 1** (→ IWRAM `0x03005A00`, 0x3EC bytes) | formats/audio |
 | `0x14FC38`, `0x165154`, `0x168264` | | ARM code copied to IWRAM for races (`0x03000000 + off − 0x164F14` etc.) | below |
+| `0x165134` / `0x1651AC` | | ARM divide with remainder / 32-byte block copy (IWRAM `0x03000220` / `0x03000298`) | formats/ui |
+| `0x169AAC` | | ARM minimap window copy (IWRAM `0x03004B98`) | formats/ui |
 | `0x169208` | | ARM ring-buffer LZ77 decoder, the game's decompressor (IWRAM copy) | formats/ui |
 | `0x224EE0` | | data inside the image bank; Ghidra's `FUN_08224ee0` is a false function | engine/harness |
 | `0x16C244–0x402000` | 294 blobs | LZ77 image bank; `0x16C244` is the menu texel base (menu descriptor `+0x10`) | formats/lz77-images, formats/ui |
@@ -123,7 +125,8 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F4598` | 1 per route | minimap palette per route | formats/ui |
 | `0x7F5BA4` | | pointers to the linear-mode step tables | formats/audio |
 | `0x7F5BC8` | 256 | character → glyph map | formats/ui |
-| `0x7F5CC8` | 48 B | unknown byte map (`e0 e1 e2 …`); one plausible code reference (`0x169B20`) | engine/harness |
+| `0x7F5CC8` | 32 B | unknown byte map (`e0 e1 e2 …`) | engine/harness |
+| `0x7F5CE8` | 4 × u32 | minimap copy masks per byte shift (0, 0xFF000000, 0xFFFF0000, 0xFFFFFF00), read by the minimap copy (`0x169B20` literal) | formats/ui |
 | `0x7F5CF8–0x800000` | | zero fill to the end of the ROM | engine/harness |
 | `0x7F0636` | i16 per `car·0x10 + rec[0]` | entity `+0x64` source (clamped at 0) | formats/car-paint |
 | `0x7F4344` | 12 × u32 | opponent 1's paint per wingman 1..12 (`pick_opponent_cars` reads `[wingman − 1]`; wingman 0 reads `0x7F4340` = 11) | formats/car-paint |
@@ -161,7 +164,10 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03000060` | u32 player entity index (0) |
 | `0x0300006C` | environment index (**11** in the reference race) |
 | `0x0300003C` | current music id (−1 none) |
-| `0x03000048` | race phase (9 intro, 2 racing, 3 over; 1 and 4 skip the dynamics) |
+| `0x03000048` | race phase (9 intro, 2 racing, 3 over; 1 and 4 skip the dynamics; `hud_timer` sets 8 past 59:59.98, the countdown timer 7 at zero) |
+| `0x030000AC` | race-state changed flag |
+| `0x03000298` | IWRAM 32-byte block copy (used by `obj_upload_tiles`) |
+| `0x03004B98` | IWRAM minimap window copy |
 | `0x03000220` | IWRAM image start; `iwram_divmod` (signed divide storing a remainder in `0x03006480`) |
 | `0x03005384` | wrong way (more than 27 steps against the route) |
 | `0x03005628` | counter that picks the traffic type (hypothesis: a frame counter) |
@@ -169,7 +175,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030057D8` | u16 control word per entity (`0xFC00 \| keys` for the player) |
 | `0x03005FB4` | pointer to the waypoint lines (0x20 each: direction, widening, crossing plane, length) |
 | `0x03006000` | 5 words: the player's upgrade totals; `+0x10` nitro level × 10 |
-| `0x0300601C` | off-route warning (−1/0/1) |
+| `0x0300601C` | off-route warning (−1/0/1), written by `car_dynamics`; the HUD arrow shows it |
 | `0x03006030` | gravity (0x4F0, set by `car_init`) |
 | `0x03006074` | manual gearbox state |
 | `0x03006078`, `0x03006084`, `0x03006088`, `0x03006028`, `0x03006090`, `0x03006158`, `0x03006190` | race-start globals (`race_start_setup`) |
@@ -178,13 +184,15 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step; non-zero lets `build_entity_matrix` take the physics orientation (entity `+0x0A` bit 5) |
 | `0x03006120` | per route segment: distance scale (0x100 for the main route) |
 | `0x03006150`, `0x0300614C` | nitro full-tank flag; grip-doubling flag |
-| `0x03006154` | time limit (0x4650; 0x2328 in career) |
-| `0x0300615C` | time gap to the car ahead/behind |
+| `0x03006154` | time limit (0x4650; 0x2328 in career); `hud_countdown_timer` counts it down against the race time |
+| `0x0300615C` | split time in frames: gap to the car ahead/behind (`route_gap`; `hud_split` clamps it to 0) |
 | `0x030061F0` | traffic wall-hit flag |
 | `0x03006240`, `0x03006264`, `0x03006260`, `0x03006298`, `0x0300625C` | traffic: spawned count (max 4), countdown (byte), countdown reload, traffic on, type count |
 | `0x03006270` | 8 × pointer: live traffic cars |
 | `0x0300629C` | u8 control binding set (0 automatic, 1 manual) |
-| `0x03006480` | IWRAM divider remainder |
+| `0x03006480` / `0x03006494` | IWRAM divider remainder / pointer to the divide routine (`0x03000220`) |
+| `0x030061D4` / `0x030061DC` | wingman portrait blink / frame (inside the loose "hunter tuning" range below) |
+| `0x030061E4` / `0x03006188` | wingman bar value / full scale |
 | `0x03000044` | rand seed applied by `setup_race_cars` |
 | `0x03005A00` | IWRAM block (0x54C): mode-1 mixer code, then mix buffers `0x03005DEC` / `0x03005E9C` (176 samples each) |
 | `0x03005F4C` / `0x03005F50` | sound work-area pointer (0x26AC allocated) / 28-byte engine config |
@@ -354,12 +362,15 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 |---|---|
 | `+0xA8` | position |
 | `+0xAC` | distance |
+| `+0x3C` / `+0x40` / `+0x44` | revs / gear / speed (read by the HUD) |
 | `+0x90` | wheel angle (`>> 8`; the rim redraw rotates by it) |
 | `+0xB4` | best lap |
 | `+0xB8` | lap start |
 | `+0xBC` | finish time |
 | `+0xC5` | laps left |
 | `+0x4D8` | race flags (bit 1: lap armed) |
+| `+0x454` | needle rev scale |
+| `+0x4C8` | nitro tank (`car_nitro_drain`; the HUD dial shows it) |
 | `+0x4E8` | hunter life |
 
 ### Profile (`*0x030056EC` = `0x02000808`)
@@ -371,6 +382,7 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x205` | event status (2 bits per event) |
 | `+0x218` | record times |
 | `+0x3B8…+0x3F8` | setting values |
+| `+0x402` | needle scale (0x2000 instead of 0x1C00) |
 | `+0x42D` | unlock bits (40 bytes) |
 
 ## Functions
