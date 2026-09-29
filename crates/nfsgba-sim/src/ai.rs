@@ -879,10 +879,17 @@ fn drive(sim: &mut Sim, e: u32, frame_time: i32) -> Result<()> {
         m.i32(b + body::MOMENTUM + 4) + (dt * (m.i32(0x0300_6030).wrapping_mul(m.i32(b)) >> 12) >> 11),
     );
     if m.i32(p + 0x138) < 0xF21 {
-        return Err(Unported("FUN_081484f0 (opponent tipped over / airborne)"));
+        crate::contact::tipped(sim, e, dt);
+        let m = &mut sim.mem;
+        for k in 0..4u32 {
+            m.set_i32(p + crate::contact::WHEELS + crate::contact::WHEEL_SIZE * k + 0x64, 0);
+        }
+        m.set_i16(p + 0x4E4, m.i16(p + 0x4E4).wrapping_add(1));
+    } else {
+        wheels(m, e, dt);
+        m.set_u16(p + 0x4E4, 0);
     }
-    wheels(m, e, dt);
-    m.set_u16(p + 0x4E4, 0);
+    let m = &mut sim.mem;
     m.set_u32(p + 0x448, 0);
     let (x, z) = (
         m.i32(e + 0xC).wrapping_add(m.i32(p + 0x140) * 3) >> 8,

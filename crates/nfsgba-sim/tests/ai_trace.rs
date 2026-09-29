@@ -244,7 +244,7 @@ fn each_call_matches_the_game() {
 }
 
 /// Unported code the traces reach (owned by the car-physics port: FIDELITY D9 and D10).
-const EXPECTED_STOPS: [&str; 2] = ["FUN_08144fa4", "FUN_081484f0"];
+const EXPECTED_STOPS: [&str; 0] = [];
 
 /// Bits other game code maintains between entity steps, as (offset, mask): the sector-list link (+0x02), the
 /// draw-list link (+0x04), flags +0x0A bit 2, view depth (+0x28) and the matrix slot (+0x88); in the physics

@@ -532,12 +532,20 @@ pub fn dynamics(sim: &mut Sim, e: u32, input: u32, frame_time: i32) -> Result<()
         m.i32(p + 0xFC) + (dt * (m.i32(0x0300_6030) * m.i32(b) >> 12) >> 11),
     );
 
-    // Ground contact (or the airborne step when the car is tipped over).
-    if m.i32(p + 0x138) < 0xF21 {
-        return Err(Unported("FUN_081484f0 (car tipped over / airborne)"));
-    }
-    let grounded = contact::wheels(sim, e, dt)?;
-    sim.mem.set_i16(p + 0x4E4, 0);
+    // Ground contact, or the body corners when the car is tipped over (then the wheels stop and +0x4E4 counts).
+    let grounded = if m.i32(p + 0x138) < 0xF21 {
+        contact::tipped(sim, e, dt);
+        let m = &mut sim.mem;
+        for k in 0..4u32 {
+            m.set_i32(p + contact::WHEELS + contact::WHEEL_SIZE * k + 0x64, 0);
+        }
+        m.set_i16(p + 0x4E4, m.i16(p + 0x4E4).wrapping_add(1));
+        0
+    } else {
+        let n = contact::wheels(sim, e, dt)?;
+        sim.mem.set_i16(p + 0x4E4, 0);
+        n
+    };
     walls::racers(sim, e, dt)?;
     let m = &mut sim.mem;
     if speed_len < 0xA0
