@@ -105,12 +105,12 @@ pub fn remap_atlas(pixels: &mut [u8], body: u8, trim: u8) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::{canonical_rom, city, city_palette_raw, data_dir, environments, sector_light, vehicle_textures};
+    use crate::{canonical_rom, city, city_palette_raw, data_dir, environments, sector_light};
     use std::fs;
 
-    fn rom() -> Option<Vec<u8>> {
+    pub(crate) fn rom() -> Option<Vec<u8>> {
         std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).unwrap();
         canonical_rom()
             .map_err(|e| eprintln!("skipping: no ROM vault ({e})"))
@@ -118,10 +118,10 @@ mod tests {
     }
 
     /// IWRAM, EWRAM and palette RAM of an mGBA dump (`<dir>/<name>.<domain>.bin`).
-    struct Dump(Vec<u8>, Vec<u8>, Vec<u16>);
+    pub(crate) struct Dump(Vec<u8>, Vec<u8>, pub(crate) Vec<u16>);
 
     impl Dump {
-        fn load(dir: &str, name: &str) -> Option<Dump> {
+        pub(crate) fn load(dir: &str, name: &str) -> Option<Dump> {
             let path = data_dir().join("work/e5298b24").join(dir);
             let read = |domain: &str| fs::read(path.join(format!("{name}.{domain}.bin"))).ok();
             let pal = read("palette")?
@@ -131,16 +131,16 @@ mod tests {
                 .collect();
             Some(Dump(read("iwram")?, read("wram")?, pal))
         }
-        fn at(&self, a: u32) -> &[u8] {
+        pub(crate) fn at(&self, a: u32) -> &[u8] {
             match a {
                 0x0300_0000.. => &self.0[(a - 0x0300_0000) as usize..],
                 _ => &self.1[(a - 0x0200_0000) as usize..],
             }
         }
-        fn word(&self, a: u32) -> u32 {
+        pub(crate) fn word(&self, a: u32) -> u32 {
             u32::from_le_bytes(self.at(a)[..4].try_into().unwrap())
         }
-        fn bytes4(&self, a: u32) -> [i8; 4] {
+        pub(crate) fn bytes4(&self, a: u32) -> [i8; 4] {
             <[u8; 4]>::try_from(&self.at(a)[..4]).unwrap().map(|b| b as i8)
         }
         /// Base palette buffer `*0x030055F0`.
@@ -212,35 +212,6 @@ mod tests {
                 [base[192], base[208]],
                 "{after}: palette RAM holds the raw shades"
             );
-        }
-    }
-
-    /// The player's atlas at entity `+0x84` is the car material remapped by `FUN_08163e5c(.., 0xD0, 0xC0)`,
-    /// except inside the two decal rectangles that `FUN_0813bd90` draws over it afterwards (table `0x7EF816`,
-    /// 0x10 bytes per car × 15 decals: first corner, material, second corner; clipped to 1/8 inside).
-    #[test]
-    fn player_atlas_is_remapped_into_the_car_slots() {
-        let Some(rom) = rom() else { return };
-        let Some(d) = Dump::load("mgba", "race") else { return };
-        let player = d.word(0x0300_00C0 + 0x3C) + 0xA4 * d.word(0x0300_0060);
-        let material = u16::from_le_bytes([d.at(player + 0x48)[0], d.at(player + 0x48)[1]]) as usize;
-        let textures = vehicle_textures(&rom);
-        let mut pixels = textures[material].pixels.clone();
-        remap_atlas(&mut pixels, 0xD0, 0xC0);
-        let car = d.at(player + 0x89)[0] as usize;
-        let decal = d.at(d.word(0x0300_539C) + 0x11 * car as u32 + 2)[0] as usize;
-        let row = |k: usize| i16_at(&rom, 0x7E_F816 + 0x10 * (15 * car + decal) + 2 * k) as i32;
-        let t = &textures[row(2) as usize];
-        let (w, h) = (t.width as i32, t.height as i32);
-        let inside = |x: i32, y: i32| {
-            [(row(0), row(1)), (row(4), row(5))].iter().any(|&(x0, y0)| {
-                (x0 + (w >> 3)..=x0 + w - (w >> 3)).contains(&x) && (y0 + (h >> 3)..=y0 + h - (h >> 3)).contains(&y)
-            })
-        };
-        let got = &d.at(d.word(player + 0x84))[..pixels.len()];
-        for (i, (&g, &p)) in got.iter().zip(&pixels).enumerate() {
-            let (x, y) = ((i % 256) as i32, (i / 256) as i32);
-            assert!(g == p || inside(x, y), "atlas pixel ({x}, {y}): {g} != {p}");
         }
     }
 
