@@ -1,15 +1,24 @@
 //! The race results screens (Career kind: 0xB the record and unlock messages, 0xC the standings) on typed state.
 //! Results at `MenuGlobals::results`, the ranked copy the screens show at `ranked` (4 slots).
 
-use nfsgba_sim::state::{MenuState, RaceResults};
+use nfsgba_formats::career::{payout_place, race_payout, reward_percent};
+use nfsgba_sim::state::{MenuProfile, MenuState, RaceResults};
 
+use super::event::career_style_rating;
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
+use super::garage::group;
+use super::save;
 use super::text::{frames_to_centiseconds, number_text, thousands, time_text};
 use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, TEXT_BOX, TEXT_MENU, WORLD};
 
 const RESULT_PAGES: u32 = 0x087E_510C;
 /// Track slot per route (`0x7E49C4`).
 const ROUTE_SLOTS: u32 = 0x087E_49C4;
+/// `FUN_0812ED28`'s bases: the first id of each sub-group (u16 per group; group 0.. below id 0x79, group + 10 above).
+const SUB_BASE: u32 = 0x0879_7CA8;
+/// The unlock message text keys (same indexing) and the heading key per kind (`0x087E513C`).
+const UNLOCK_KEYS: u32 = 0x087E_514A;
+const UNLOCK_HEADINGS: u32 = 0x087E_513C;
 
 /// `rank_results` (`0x0812E8E4`, key, descending) on the ranked results: [`nfsgba_formats::career::rank_results`]
 /// over `opponents + 1` slots.
@@ -322,14 +331,192 @@ fn unlock_messages(st: &MenuState, h: &mut impl Host) {
     }
 }
 
-/// `career_race_payout` (`0x0812EFE8`) outside a career (`career` 0): it ranks the standings (hunter by life, most
-/// first; circuit, elimination and sprint by time) and nothing else. In a career it also pays out and updates the
-/// event status (`career::race_payout`, `style_rating`, `FUN_0812EE14`): not ported, the call is logged (U3).
+/// `career_race_payout` (`0x0812EFE8`): ranks the standings (hunter by life, most first; circuit, elimination and
+/// sprint by time), in a career event (`career` 1) pays out ([`race_payout`]: the event's status, the cash and
+/// the payout at profile `+0x3B8`), and in any career mode builds the unlock messages ([`unlock_news`]).
 pub fn career_payout(st: &mut MenuState, h: &mut impl Host) {
+    let rom = h.rom();
     if let Some((key, descending)) = nfsgba_formats::career::payout_ranking(st.g.race_mode) {
         rank_results(st, key, descending);
     }
+    if st.g.career == 1 {
+        let place = payout_place(&st.g.ranked.to_bytes());
+        let percent = reward_percent(career_style_rating(rom, &st.profile));
+        let mut s = save::to_save(st);
+        let paid = race_payout(
+            rom,
+            &mut s,
+            st.profile.zone as usize,
+            st.profile.event_slot as usize,
+            place,
+            percent,
+        );
+        st.profile.events[..18].copy_from_slice(&s.events);
+        (st.profile.cash, st.profile.payout) = (s.cash as i32, paid as u32);
+    }
     if st.g.career != 0 {
-        h.call(0x0812_EFE8, &[]);
+        unlock_news(st, rom);
+    }
+}
+
+/// `FUN_0812ED28`: the position of unlock `id` (of part group `group`) within its group's message keys.
+#[allow(clippy::match_overlapping_arm)] // open ranges: the first arm that fits wins, as in the game
+fn message_index(rom: &[u8], group: i32, id: i32) -> u32 {
+    if id < 0x79 {
+        let u = (id as u32).wrapping_sub(rom_u16(rom, SUB_BASE + 2 * group as u32) as u32);
+        let u = if id == 0x70 || id == 0x78 || u == 0xC { 4 } else { u & 3 };
+        return u.wrapping_sub(1) & 0xFFFF;
+    }
+    let d = id.wrapping_sub(rom_u16(rom, SUB_BASE + 2 * (group + 10) as u32) as i32);
+    let n = match group {
+        0 => match id {
+            ..0x80 => 0,
+            ..0x85 => 1,
+            ..0x88 => 2,
+            _ => 3,
+        },
+        1 => d.wrapping_add(1) >> 1,
+        2 => match id {
+            ..0x94 => 0,
+            ..0x97 => 1,
+            ..0x9A => 2,
+            ..0x9C => 3,
+            ..0x9E => 4,
+            _ => 5,
+        },
+        3 | 7..=12 => d,
+        4 => match id {
+            ..200 => 0,
+            ..0xD0 => 1,
+            ..0xD8 => 2,
+            _ => 3,
+        },
+        _ => 0,
+    };
+    n as u32 & 0xFFFF
+}
+
+/// `FUN_0812EE14`, after a career race: rebuilds the unlock bits, and for every bit that changed lists its message
+/// key at profile `+0x4AA` (a heading key first whenever the kind changes, the kinds at `+0x4C8`), 0-terminated;
+/// sets the record flag (`+0x3B4`), and `zone_step` for a new district (kind 3).
+#[allow(clippy::match_overlapping_arm)]
+fn unlock_news(st: &mut MenuState, rom: &[u8]) {
+    let old: [u8; 40] = std::array::from_fn(|i| st.profile.unlock_byte(i));
+    save::rebuild_unlocks(st, rom);
+    let (mut n, mut kind, mut last) = (0usize, 0x5A, 0);
+    // ponytail: the game's list has no bound; past the 14 declared slots (never seen) writes are dropped.
+    let put = |p: &mut MenuProfile, j: usize, key: u16, kind: Option<u16>| {
+        if let Some(m) = p.unlock_messages.get_mut(j) {
+            *m = key;
+        }
+        if let (Some(k), Some(c)) = (kind, p.unlock_kinds.get_mut(j + 1)) {
+            *c = k;
+        }
+    };
+    let diff: [u8; 40] = std::array::from_fn(|i| old[i] ^ st.profile.unlock_byte(i));
+    for (k, d) in diff.chunks(8).enumerate() {
+        st.profile.unlock_diff[k].copy_from_slice(d);
+    }
+    for (i, &d) in diff.iter().enumerate() {
+        for bit in 0..8 {
+            if d >> bit & 1 == 0 {
+                continue;
+            }
+            let id = (i * 8 + bit) as i32;
+            let g = group(id);
+            let base = if id < 0x79 { g } else { g + 10 };
+            let key = message_index(rom, g, id) as i32 + rom_u16(rom, UNLOCK_KEYS + 2 * base as u32) as i32;
+            let k = match id {
+                ..0x79 => 0,
+                ..0x108 => 1,
+                ..0x117 => 2,
+                ..0x11D => 3,
+                ..0x127 => 4,
+                ..0x134 => 5,
+                _ => kind,
+            };
+            if k == 3 {
+                st.profile.zone_step = 1;
+            }
+            if key != last {
+                if k != kind {
+                    put(&mut st.profile, n, rom_u16(rom, UNLOCK_HEADINGS + 2 * k as u32), None);
+                    n += 1;
+                    kind = k;
+                }
+                put(&mut st.profile, n, key as u16, Some(k as u16));
+                n += 1;
+                st.profile.record_flag = 1;
+                last = key;
+            }
+        }
+    }
+    put(&mut st.profile, n, 0, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::typed::TypedHost;
+    use nfsgba_sim::Mem;
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// The game's own `career_race_payout` (with the unlock messages, `FUN_0812EE14`) on 1,500 generated profiles
+    /// (`tools/oracle/cases.py rules career_payout`): the profile and the ranked results afterwards equal ours.
+    #[test]
+    fn career_payout_matches_the_game() {
+        let Some(rom) = nfsgba_testkit::rom() else { return };
+        let Some(text) = nfsgba_testkit::read_to_string("race-rules/oracle-career_payout.jsonl") else {
+            return;
+        };
+        let (mut cases, mut paid, mut messages) = (0, 0, 0);
+        for line in text.lines() {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap();
+            let field = |k: &str| v[k].as_str().unwrap();
+            let p: u32 = field("p").parse().unwrap();
+            let globals = unhex(field("pre.g"));
+            let build = |profile: &str, ranked: &str| {
+                let mut m = Mem::new(rom.clone(), vec![0; 0x40000], vec![0; 0x8000]);
+                m.set_bytes(p, &unhex(profile));
+                m.set_u32(0x0300_56EC, p);
+                m.set_bytes(0x0300_5730, &unhex(ranked));
+                m.set_bytes(0x0300_5784, &globals[..4]);
+                m.set_bytes(0x0300_56E0, &globals[4..8]);
+                m.set_bytes(0x0300_00A0, &globals[8..]);
+                m
+            };
+            let mut st = MenuState::load(&build(field("pre"), field("pre.ranked")));
+            let want = MenuState::load(&build(field("post"), field("post.ranked")));
+            let cash = st.profile.cash;
+            let mut host = TypedHost::new(&rom, &st);
+            career_payout(&mut st, &mut host);
+            assert!(st.g == want.g, "case {cases}: globals");
+            let (a, b) = (&st.profile, &want.profile);
+            assert!(
+                a == b,
+                "case {cases}: profile; messages {:?} {:?} want {:?} {:?}, cash {} want {}, events {:?} want {:?}",
+                a.unlock_messages,
+                a.unlock_kinds,
+                b.unlock_messages,
+                b.unlock_kinds,
+                a.cash,
+                b.cash,
+                a.events,
+                b.events
+            );
+            cases += 1;
+            paid += (st.profile.cash != cash) as u32;
+            messages += (st.profile.unlock_messages[0] != 0) as u32;
+        }
+        eprintln!("{cases} cases, {paid} paid, {messages} with unlock messages");
+        assert!(
+            cases >= 1000 && paid > 100 && messages > 50,
+            "the cases cover the payout and the messages"
+        );
     }
 }

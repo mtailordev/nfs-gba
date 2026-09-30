@@ -504,13 +504,60 @@ def gen_race_lines(gba, rng, n):
     return out
 
 
+def gen_career_payout_full(gba, rng, n):
+    """career_race_payout with FUN_0812EE14 running (the unlock messages), over the whole profile: `pre` and `post`
+    are the profile's 0x4F0 bytes, `pre.g` the globals the menu flow reads, and the ranked results."""
+    p, recs = gba_u32(gba, PROFILE_PTR), gba_u32(gba, RECORDS_PTR)
+    out = []
+    for _ in range(n):
+        opponents = rng.randrange(1, 4)
+        mode = rng.choice([0, 1, 2, 3, 3, 4])
+        flag = rng.choice([1, 1, 1, 1, 0, 2])
+        zone = rng.randrange(6)
+        slot = rng.randrange(6 if zone == 5 else 12)
+        car = rng.randrange(15)
+        statuses = bytearray(random_statuses(rng, rng.randrange(1, 6)))
+        if rng.random() < 0.6:  # the event is open: a win changes the progress
+            e = 12 * zone + slot
+            statuses[e >> 2] = statuses[e >> 2] & ~(3 << (2 * (e & 3))) & 0xFF | 3 << (2 * (e & 3))
+        f1f8 = rng.randrange(4)
+        flags = [rng.randrange(2) for _ in range(6)]
+        c = Case(gba)
+        for a, f, v in [(0x03005784, "I", opponents), (0x030056E0, "I", mode), (0x030000A0, "I", flag)]:
+            c.put(a, f, v)
+        c.put(p + 0x1FB, "B", zone)
+        c.put(p + 0x1FC, "B", slot)
+        c.put(p + 0x10, "b", car)
+        c.put(p + 0xC, "I", rng.randrange(0, 200000))
+        c.raw(p + 0x205, bytes(statuses))
+        c.put(p + 0x1F8, "B", f1f8)
+        for o, v in zip([0x47C, 0x480, 0x484, 0x48C, 0x488, 0x478], flags):
+            c.put(p + o, "I", v)
+        c.raw(recs + 17 * car, bytes([rng.randrange(21), rng.randrange(9), rng.randrange(17), rng.randrange(12),
+                                      rng.randrange(64), rng.randrange(4)] + [0] * 11))
+        c.raw(0x03005730, random_ranked(rng, opponents))
+        _, mid, _ = c.run(FN["rebuild_unlocks"])  # the unlocks the pre state holds
+        old = mid.hex(p + 0x42D, 40)
+        if rng.random() < 0.2:
+            # a few bits off: more than 13 changes would overflow the game's message list into its neighbours
+            old = bytes(b ^ (1 << rng.randrange(8) if rng.random() < 0.1 else 0) for b in bytes.fromhex(old)).hex()
+        c.raw(p + 0x42D, bytes.fromhex(old))
+        if rng.random() < 0.5:  # stale messages from an earlier race
+            c.raw(p + 0x4A8, bytes(rng.randrange(256) for _ in range(0x3C)))
+        pre, post, _ = c.run(FN["career_race_payout"])
+        out.append({"p": p, "pre": pre.hex(p, 0x4F0), "post": post.hex(p, 0x4F0),
+                    "pre.g": pre.hex(0x03005784, 4) + pre.hex(0x030056E0, 4) + pre.hex(0x030000A0, 4),
+                    "pre.ranked": pre.hex(0x03005730, 0x40), "post.ranked": post.hex(0x03005730, 0x40)})
+    return out
+
+
 GENERATORS = {
     "style_rating": gen_style_rating, "rebuild_unlocks": gen_rebuild_unlocks, "race_progress": gen_race_progress,
     "lap_crossing": gen_lap_crossing, "update_places": gen_update_places, "track_player": gen_track_player,
     "hunter_life_tick": gen_hunter_life_tick, "hunter_hit": gen_hunter_hit,
     "hunter_drain_a": gen_drain("hunter_drain_a"), "hunter_drain_b": gen_drain("hunter_drain_b"),
     "finish_estimate": gen_finish_estimate, "rank_results": gen_rank_results,
-    "career_race_payout": gen_career_race_payout, "save_encode": gen_save_encode, "race_lines": gen_race_lines,
+    "career_race_payout": gen_career_race_payout, "career_payout": gen_career_payout_full, "save_encode": gen_save_encode, "race_lines": gen_race_lines,
 }
 
 

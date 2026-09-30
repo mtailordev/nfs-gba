@@ -206,6 +206,8 @@ layout! {
         0x494 u_494: u16,
         0x4A8 new_record: u16,
         0x4AA unlock_messages: [u16; 14],
+        /// The message kinds (`+0x4C8`, entry `j` of the messages at `[j + 1]`): the heading group of each key.
+        0x4C8 unlock_kinds: [u16; 14],
         /// `+0x256`: a career zone step is due; `+0x258`: the upgrades save question is open.
         /// The hint page's map grid cell (`+0x254`).
         0x254 map_grid: u16,
@@ -224,6 +226,8 @@ layout! {
         0x350 cursors: [u8; 17],
         /// Map screens' mode.
         0x404 map_mode: u8,
+        /// The unlock bits that the last career payout changed (old xor new; scratch of `FUN_0812EE14`).
+        0x405 unlock_diff: [[u8; 8]; 5],
         /// `+0x328`: the profile was loaded from a save (`save_load_profile`).
         0x328 loaded: u8,
         /// The saved names of save slots 0 and 1 (`+0x496`, 9 bytes each).
