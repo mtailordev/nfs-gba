@@ -16,6 +16,7 @@ const HEALTH_SCREEN_IMAGE: u32 = 0x0813_644C; // (world, material)
 const COPY_PALETTE_TO_RAM: u32 = 0x0815_DFD8; // (source)
 const PAGES: [u32; 2] = [0x0600_0000, 0x0600_A000];
 
+#[derive(Clone)]
 pub struct TypedHost<'a> {
     pub rom: &'a [u8],
     pub screen: Screen,
@@ -26,6 +27,8 @@ pub struct TypedHost<'a> {
     pub language: u32,
     /// The cartridge's EEPROM (the `.sav` image): the profile saves.
     pub eeprom: Vec<u8>,
+    /// The garage car's atlas (`garage_load_car_atlas`).
+    pub car: Option<super::car::GarageCar>,
     /// The state's pointers to the second base palette and the race palette buffers (the scene's `palettes`).
     palette_handles: [u32; 2],
 }
@@ -40,6 +43,7 @@ impl<'a> TypedHost<'a> {
             calls: Vec::new(),
             language: st.g.language,
             eeprom: Vec::new(),
+            car: None,
             palette_handles: [st.g.second_palette, st.g.race_palette],
         }
     }
@@ -288,6 +292,12 @@ impl Host for TypedHost<'_> {
                 super::garage::load_car_palette(st, self.rom, buffer);
             }
         }
+    }
+    fn car_atlas(&mut self, st: &mut MenuState) {
+        self.car_load(st);
+    }
+    fn draw_car(&mut self, st: &mut MenuState, x: u32, y: u32, z: u32) {
+        self.car_draw(st, x, y, z);
     }
     fn quick_race_random(&mut self, st: &mut MenuState) {
         super::list::quick_race_random(st, self);

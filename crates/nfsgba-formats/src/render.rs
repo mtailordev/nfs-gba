@@ -7,7 +7,7 @@
 use super::{LEVEL_TABLE, i16_at, ptr, u16_at, u32_at};
 
 mod entities;
-pub use entities::{Entity, Scene, draw_entities, project_model};
+pub use entities::{Entity, Scene, draw_car_model, draw_entities, project_model};
 
 pub use nfsgba_fixed::recip;
 

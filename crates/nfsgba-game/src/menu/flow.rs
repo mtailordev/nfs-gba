@@ -87,6 +87,14 @@ pub trait Host {
     fn car_palette(&mut self, _st: &mut MenuState) {
         self.call(0x0812_BF48, &[]);
     }
+    /// `garage_load_car_atlas` (`0x0812BEEC`) and `garage_draw_car` (`0x0812BFA4`, centre x, y and depth z): the
+    /// defaults log the calls; [`super::typed::TypedHost`] runs [`super::car`].
+    fn car_atlas(&mut self, _st: &mut MenuState) {
+        self.call(0x0812_BEEC, &[]);
+    }
+    fn draw_car(&mut self, _st: &mut MenuState, x: u32, y: u32, z: u32) {
+        self.call(0x0812_BFA4, &[x, y, z]);
+    }
     /// `quick_race_random` (`0x0812FFB0`): the Quick Play settings; the default logs the call.
     fn quick_race_random(&mut self, _st: &mut MenuState) {
         self.call(0x0812_FFB0, &[]);

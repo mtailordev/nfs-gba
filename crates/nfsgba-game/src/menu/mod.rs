@@ -200,6 +200,7 @@ fn vram_offset(addr: u32) -> usize {
 
 mod adapt;
 pub mod boot;
+mod car;
 pub mod draw;
 mod event;
 pub mod flow;

@@ -375,6 +375,30 @@ pub fn project_model(rom: &[u8], frame: &Frame, m: &[i32; 12], model: usize) -> 
         .collect()
 }
 
+/// `draw_model_polygons` for a model outside the race world: the garage turntable's car (`garage_draw_car`
+/// `0x0812BFA4` → `draw_model_param_block`), drawn into a 240×160 page clipped to the whole screen. `atlas` is the
+/// car's texture as the game keeps it in EWRAM (rows `1 << log2w` bytes apart), `height` the material's height.
+pub fn draw_car_model(
+    rom: &[u8],
+    view: super::View,
+    model: usize,
+    m: &[i32; 12],
+    (atlas, log2w, height): (&[u8], u32, u32),
+    screen: &mut [u8],
+) {
+    const AT: u32 = 0x0200_0000; // where the atlas sits in the scene's EWRAM window
+    let mut ram = vec![0; 0x4_0000];
+    ram[..atlas.len()].copy_from_slice(atlas);
+    let frame = Frame {
+        view,
+        camera: [0; 12],
+        rect: [0, 240, 0, 160],
+    };
+    let mut scene = Scene::new(Vec::new(), Vec::new(), Vec::new(), &ram);
+    let tex = Texture { at: AT, log2w, height };
+    draw_model(rom, &frame, &mut scene, model, m, &tex, [0, 0, 240, 160], screen);
+}
+
 /// A polygon corner: screen position and texture coordinates (1.15 of the texture's width and height), as the
 /// game stores them (halfwords).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

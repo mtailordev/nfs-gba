@@ -44,8 +44,7 @@ fn power_on_screens_match_the_game() {
 
 /// The garage screens (`tools/oracle/garage_capture.py`: a headless career run through the part shop 0x13, the upgrade
 /// pages 0x14 and the profile 0x12): each settled screen entered by the typed host, the cursor state of the capture
-/// put back, redrawn, and compared with the shown page, base palette and shadow OAM. The car model
-/// (`garage_draw_car`, a software 3D draw: FIDELITY U3) is the only difference allowed, inside its box.
+/// put back, redrawn, and compared with the shown page, base palette and shadow OAM, the turntable car included.
 #[test]
 fn garage_screens_match_the_capture() {
     let Some(rom) = rom() else { return };
@@ -65,6 +64,10 @@ fn garage_screens_match_the_capture() {
         st.g.garage_car = live.g.garage_car;
         st.profile.u_338 = live.profile.u_338;
         st.profile.repeats = live.profile.repeats;
+        // The shown page was drawn one frame before the capture's angle (the game is drawing the other page); the
+        // draw turns the car first.
+        st.g.garage_angle = live.g.garage_angle.wrapping_sub(0x80);
+        h.car_load(&mut st);
         if *screen != 0x13 {
             h.car_palette(&mut st); // the level changes reload the palette in the game
         }
@@ -87,20 +90,11 @@ fn garage_screens_match_the_capture() {
             wrong.len(),
             h.calls.iter().map(|c| c.0).collect::<Vec<_>>()
         );
-        // The glass colours (slots 192 and 208) are `shade_car_paint`'s, part of `garage_draw_car`.
         assert!(
-            pal.iter().all(|&i| (192..208).contains(&i) || i == 208),
-            "screen {screen:#x}: base palette"
+            pal.is_empty(),
+            "screen {screen:#x}: base palette (glass slots 192, 208 included)"
         );
         assert_eq!(oam, 0, "screen {screen:#x}: shadow OAM");
-        if *screen == 0x13 {
-            assert!(wrong.is_empty(), "screen 0x13: page");
-        } else {
-            // The car model turns on its turntable and fills most of the top 120 rows; the rest of the page is exact.
-            assert!(
-                wrong.is_empty() || (y0 >= 16 && y1 < 120),
-                "screen {screen:#x}: page differs outside the car rows"
-            );
-        }
+        assert!(wrong.is_empty(), "screen {screen:#x}: page (car rows included)");
     }
 }

@@ -12,8 +12,6 @@ use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_BOX, TEXT_MENU, WORLD};
 
 const LIST_PAGES: u32 = 0x087E_544C;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
-const GARAGE_LOAD_CAR_ATLAS: u32 = 0x0812_BEEC; // ()
-const GARAGE_DRAW_CAR: u32 = 0x0812_BFA4; // (x, y, angle)
 const UPGRADES_CHANGED: u32 = 0x0813_02C4; // (performance page?)
 
 /// An i16 ROM read, sign-extended as the game passes it.
@@ -50,7 +48,7 @@ fn garage_copy_car_record(st: &mut MenuState) {
 
 fn garage_select_car(st: &mut MenuState, h: &mut impl Host) {
     garage_copy_car_record(st);
-    h.call(GARAGE_LOAD_CAR_ATLAS, &[]);
+    h.car_atlas(st);
     h.car_palette(st);
 }
 
@@ -456,7 +454,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
     let arrow_y;
     if st.g.screen == 9 {
         arrow_y = 0x5A;
-        h.call(GARAGE_DRAW_CAR, &[0x78, 0x3C, 0xFA]);
+        h.draw_car(st, 0x78, 0x3C, 0xFA);
         let name = s16(h, items.wrapping_add((cur as i32 * 8) as u32));
         h.call(TEXT_BOX, &[0xC, name, 0x78, 0x74, 200, 1, 8]);
         h.car_stats(st, cur as i32 as u32, 0x78, 0x54, 0);

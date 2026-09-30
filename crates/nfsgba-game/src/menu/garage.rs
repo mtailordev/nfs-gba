@@ -11,8 +11,6 @@ use super::flow::{self, CARBON_PLAY_SOUND, Host, message_box_open, rom_u16, rom_
 use super::text::{number_text, thousands};
 use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_MENU, WORLD};
 
-const ATLAS: u32 = 0x0812_BEEC; // garage_load_car_atlas ()
-const DRAW_CAR: u32 = 0x0812_BFA4; // garage_draw_car (x, y, angle)
 const PAGES: u32 = 0x087E_6EA4; // Kind18 screen headers, 0x10 bytes: 0x13, 0x14, 0x12
 const PART_BASE: u32 = 0x0879_7C68; // first unlock id of each part group (ids below 0x79), u16
 const PART_BASE_B: u32 = 0x0879_7C7C; // the same for the groups above (ids from 0x79), u16
@@ -437,21 +435,21 @@ fn set_level(st: &mut MenuState, h: &mut impl Host, id: i32, reload: bool) {
             *b = v;
         }
         if g < 4 {
-            h.call(ATLAS, &[]);
+            h.car_atlas(st);
         }
         if g == 6 {
             h.car_palette(st);
         }
         if g == 5 {
-            h.call(ATLAS, &[]);
+            h.car_atlas(st);
         }
         if g == 4 {
-            h.call(ATLAS, &[]);
+            h.car_atlas(st);
             h.car_palette(st);
         }
     }
     if reload {
-        h.call(ATLAS, &[]);
+        h.car_atlas(st);
     }
 }
 
@@ -636,7 +634,7 @@ pub fn enter(st: &mut MenuState, h: &mut impl Host) -> u32 {
         st.g.player_car = st.profile.career_car as i32 as u32;
         copy_car_record(st);
         st.profile.u_338 = level_of(st, s16(h.rom(), items + 6));
-        h.call(ATLAS, &[]);
+        h.car_atlas(st);
         h.car_palette(st);
     }
     st.g.screen_changed = 1;
@@ -809,7 +807,7 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
     }
     if st.g.keys == 2 {
         copy_car_record(st);
-        h.call(ATLAS, &[]);
+        h.car_atlas(st);
         h.car_palette(st);
         h.call(CARBON_PLAY_SOUND, &[3, 1]);
     }
@@ -921,7 +919,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
             percent_n = Some(n * 10);
         }
         0x14 => {
-            h.call(DRAW_CAR, &[0x78, 0x3C, 0xFA]);
+            h.draw_car(st, 0x78, 0x3C, 0xFA);
             items = items.wrapping_add(st.profile.u_338.wrapping_mul(10));
             text(h, 0xC, s16(h.rom(), items) as u32, 0x78, 0x6E, 1, 8);
             if st.g.message_box < 0 {
@@ -955,7 +953,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
             percent_n = Some(rated * 10);
         }
         _ => {
-            h.call(DRAW_CAR, &[0xB2, 0x3C, 0x172]);
+            h.draw_car(st, 0xB2, 0x3C, 0x172);
             car_stats_draw(st, h, st.profile.career_car as i32, 0x8C, 0x68, 1);
             let name: Vec<u8> = st.profile.name.iter().copied().take_while(|&b| b != 0).collect();
             let name = h.text_arg(name);
