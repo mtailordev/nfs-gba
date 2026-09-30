@@ -1,0 +1,3 @@
+0x0812ee14,unlock_messages_after,function,the unlocks a race brought: rebuild_unlocks then the changed bits as text keys (0x7E514A per group + position) with headings (0x7E513C) into profile +0x4AA/+0x4CA; sets +0x3B4 and the zone step (menu/results.rs)
+0x0812ed28,unlock_position,function,(group; id) the text key offset of an unlock id inside its group (menu/results.rs)
+0x0815240c,snd_stop_music,function,stop music and zero the music channels (a menu sound call the session drops)

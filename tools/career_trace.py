@@ -39,6 +39,7 @@ def rows(s, blobs):
         ew = s[0x21000:0x21000 + 0x40000]
         blob = ew[row["profile"] & 0x3FFFF:][:PROFILE].hex()
         row["blob"] = blobs.setdefault(blob, len(blobs))
+        row["hint"] = ew[(row["profile"] & 0x3FFFF) + 0x1FA]
     dispcnt = struct.unpack_from("<H", s, 0x400)[0]
     row["dispcnt"] = dispcnt
     page = 0x1000 + (0xA000 if dispcnt & 0x10 else 0)
@@ -72,7 +73,7 @@ def main(argv):
         r.run(1, keys=held.get(f, ()))
         s = r.serialize()
         row, shot = rows(s, blobs)
-        key = (row["screen"], row["state"])
+        key = (row["screen"], row["state"], row.get("hint"))  # a hint page counts as a visit
         if key != last_key:  # the last settled frame of the visit that ended carries its screen
             if settled is not None:
                 trace[settled[0]]["shot"] = [x.hex() for x in settled[1]]

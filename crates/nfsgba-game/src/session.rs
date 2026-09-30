@@ -34,7 +34,8 @@ const SEED_VBLANKS: u32 = 6;
 
 /// Game functions the menu frames call that change nothing the session models: timer 3, the frame's tail
 /// (effect sprites, OAM copy, key read, page flip: the session does them), the debug print and the tick reads.
-const HARMLESS: [u32; 11] = [
+const HARMLESS: [u32; 12] = [
+    0x0815_1454, // vblank_intr_wait (swi 5): the hint pages' waits
     super::menu::VBLANK_INTR_WAIT,
     0x0816_2228,
     0x0816_223C,
@@ -189,6 +190,7 @@ impl<'a> Session<'a> {
         self.menu_sound = self.engine().vblank(rom);
         let st = &mut self.st;
         (st.g.keys, st.g.keys_held, st.g.ticks) = (edge, held, self.frames as i32);
+        st.g.flash = self.frames; // the VBlank counter: one per video frame
         self.host.language = st.g.language;
         self.host.screen.dispcnt = self.host.screen.dispcnt & !0x10 | ((st.g.frame_counter as u16 & 1) << 4);
         flow::main_frame(st, &mut self.host);

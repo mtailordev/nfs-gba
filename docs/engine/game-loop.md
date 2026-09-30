@@ -171,6 +171,22 @@ goes back to the menus: `Results` = `goto_screen(0xB)`/`menu_back` with the resu
 `goto_screen(5)`, and the menus' state 5 resumes (`Game::resume`) or quits. Unported stops: menu calls other than the
 harmless ones (`HARMLESS`) and the sound functions (`SOUND`: played by the engine) give `Unported`, as do the race
 paths below (hunter races, ...), and a career race's payout. Check: `tests/session.rs` against `tools/session_trace.py`.
+harmless ones (`HARMLESS`, `SOUND` in `session.rs`; the menus' sound is dropped) give `Unported`, as do the race
+paths below (hunter races, ...). Check: `tests/session.rs` against `tools/session_trace.py`.
+
+**The career in the session** (`tests/career.rs`, `tools/career_trace.py`, scripts `tools/career/*.script.json`, saves from
+`cargo run -p nfsgba-game --example career_save NAME` on `career/base.sav`): headless mGBA runs from a chosen save press
+through the career menus (0, 3, 0xD, 0x2D, 0xA), the event's race (the player marked finished, a win by counting every
+lap and the distance), the results (0xB unlock messages, 0xC standings), the end screen (6) and back to 3. Both runs
+make the same choices: a press when the screen has been settled for N frames. Compared at each settled visit: the
+career fields of the profile (cash, event status, hints, zone step, unlock bits, unlock messages), the page, the
+palettes and the OAM. Exact: an ordinary event (a win pays and sets the status), boss 1 (a sprint, its mode hint page
+0x2B), boss 2 (the zone is done: district unlock messages, the zone step, zone 0 to 1 on the end screen), the last
+event of a zone, a boss of zone 5 (two hint pages), and the Gauntlet's last event followed by the ending's hint pages
+(0x28, 0x29, 0x2A, then eleven 0x26 pages: pictures, text, flashes). Not compared (T1): the boot screens' blink phase,
+the opponents' names and the standings' times (they follow the tick count and the race's frame count), and the end
+screen's profile while the game saves. The Gauntlet's story has no credits screen after page 11 in these runs
+(the run stops there; `docs/OPEN-QUESTIONS.md`).
 
 ## Not ported
 

@@ -81,3 +81,5 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
   - `FUN_0300224c`: scene;
   - `FUN_03000978` / `FUN_030013ac` / `FUN_03000304`: walls;
   - `FUN_03001cf0` / `FUN_03004018` / `FUN_03004190` / `FUN_03003808`: vehicles.
+
+- **Story screens and the ending (answered from the ROM: `menu/event.rs` `hint_due`; checked by `tests/career.rs`):** the story is the career hint pages (0x28 save, 0x29 wait, 0x2A clear, 0x26 pages, 0x27 the wingman, 0x2B a mode first-race hint). `hints_a + hints_b` (profile +0x1F8/+0x1F9) counts the hints seen; `FUN_0812CF48(screen, event)` says whether the next is due before `screen`, per zone (zone 1: n=0 before the career menu 3, n=1,2 before the events 0xD, n=3 and n=4 before the end screen 6; zone 2 to 5 before the crew pick 0x2D or 6; zone 6: n=0x16 before 0xD, n=0x17 before 6 with an unlock byte bit). The ending pages (eleven 0x26 pages and possibly more) play after the Gauntlet last event is won. Whether the credits (0x15) follow the last page is not reached yet.

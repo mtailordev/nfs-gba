@@ -55,8 +55,11 @@ fn game_visits(t: &Value) -> Vec<Visit> {
     let mut key = None;
     for f in t["frames"].as_array().unwrap() {
         let now = (n(f, "screen"), n(f, "state"));
-        if key != Some(now) {
-            key = Some(now);
+        // A hint page is a visit of its own (the hint flag counts the pages of one screen).
+        let hint = f.get("blob").map_or(0, |b| blobs[b.as_u64().unwrap() as usize][0x1FA])
+            * u8::from(matches!(now.0, 0x26..=0x2B));
+        if key != Some((now, hint)) {
+            key = Some((now, hint));
             out.push(None);
         }
         if let (false, Some(b)) = (f["shot"].is_null(), f.get("blob")) {
@@ -73,7 +76,7 @@ fn game_visits(t: &Value) -> Vec<Visit> {
     }
     out.into_iter()
         .flatten()
-        .filter(|(k, _)| k.1 == 1 && k.0 < 0x80)
+        .filter(|(k, _)| k.1 == 1 && k.0 < 0x80 && !matches!(k.0, 0x28 | 0x2A))
         .map(|(_, v)| v)
         .collect()
 }
@@ -157,8 +160,9 @@ fn compare(name: &str) {
         if !racing {
             poked = false;
         }
-        if last_key != Some((screen, state)) {
-            last_key = Some((screen, state));
+        let hint = s.st.profile.hint_flag * u8::from(matches!(screen, 0x26..=0x2B));
+        if last_key != Some(((screen, state), hint)) {
+            last_key = Some(((screen, state), hint));
             eprintln!("ours: frame {f} screen {screen:#x} state {state}");
             ours.push(None);
         }
@@ -211,7 +215,7 @@ fn compare(name: &str) {
     let ours: Vec<Visit> = ours
         .into_iter()
         .flatten()
-        .filter(|(k, _)| k.1 == 1 && k.0 < 0x80)
+        .filter(|(k, _)| k.1 == 1 && k.0 < 0x80 && !matches!(k.0, 0x28 | 0x2A))
         .map(|(_, v)| v)
         .collect();
     let game = game_visits(&t);
