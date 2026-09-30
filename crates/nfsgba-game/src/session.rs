@@ -96,6 +96,14 @@ pub struct Session<'a> {
     frames: u32,
 }
 
+/// The calls the race start and the pause resume make (`game_state_step` states 4 and 5): the session runs them.
+fn race_call(function: u32) -> bool {
+    matches!(
+        function,
+        0x0813_9E34 | 0x0813_A514 | 0x0813_A954 | 0x0813_72E4 | 0x0813_9E10 | 0x0814_3010
+    )
+}
+
 /// A game function the menus called that the session does not port, by address (the first such call of a frame).
 fn unported_name(function: u32) -> &'static str {
     match function {
@@ -203,7 +211,7 @@ impl<'a> Session<'a> {
         if let Some(f) = calls
             .iter()
             .map(|c| c.0)
-            .find(|f| !HARMLESS.contains(f) && !SOUND.contains(f) && !self.race_calls(*f))
+            .find(|f| !HARMLESS.contains(f) && !SOUND.contains(f) && !race_call(*f))
         {
             self.host.calls = calls;
             return Err(Unported(unported_name(f)));
@@ -215,13 +223,6 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// The calls the race start and the pause resume make (`game_state_step` states 4 and 5): the session runs them.
-    fn race_calls(&self, function: u32) -> bool {
-        matches!(
-            function,
-            0x0813_9E34 | 0x0813_A514 | 0x0813_A954 | 0x0813_72E4 | 0x0813_9E10 | 0x0814_3010
-        )
-    }
 
     /// `game_state_step` state 4: the race start from the menus' choice.
     fn start_race(&mut self) -> Result<()> {
@@ -382,5 +383,79 @@ pub fn apply_choice(s: &mut Setup, st: &MenuState) {
             glass: b[6],
             upgrades: b[7..17].try_into().unwrap(),
         };
+    }
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    /// The stop for an unported menu call (`Session::menu_frame`) is unreachable (FIDELITY N1): every game function
+    /// the typed menus call through `Host::call` (`adapt.rs` is the oracle's host, not the session's) is drawn by
+    /// `TypedHost::call`, dropped (`HARMLESS`), a sound request (`SOUND`), run by the session (`race_calls`), a
+    /// `Host` default that `TypedHost` overrides, or in `game_state_step`'s states 4 and 5, which `main_frame`
+    /// never runs in a session: `start_race` and `resume` take over on the frame the state changes.
+    #[test]
+    fn every_menu_call_is_handled() {
+        let sources = [
+            include_str!("menu/event.rs"),
+            include_str!("menu/flow.rs"),
+            include_str!("menu/garage.rs"),
+            include_str!("menu/hints.rs"),
+            include_str!("menu/intro.rs"),
+            include_str!("menu/list.rs"),
+            include_str!("menu/map.rs"),
+            include_str!("menu/results.rs"),
+            include_str!("menu/save.rs"),
+            include_str!("menu/setup.rs"),
+        ];
+        // By name: TypedHost::call's arms, then the sound constants, VBLANK_INTR_WAIT (HARMLESS) and
+        // APPLY_SECTOR_LIGHT (race_calls).
+        let named = [
+            "TEXT_MENU",
+            "TEXT_MENU_WRAPPED",
+            "TEXT_BOX",
+            "MENU_BLIT_MATERIAL",
+            "MENU_BLIT_MATERIAL_ALT",
+            "INTRO_PAGE_SETUP",
+            "FILL_RECT",
+            "CARBON_PLAY_SOUND",
+            "CARBON_STOP_SOUND",
+            "CARBON_PLAY_MUSIC",
+            "SND_STOP_MUSIC",
+            "SOUND_REINIT",
+            "CARBON_SOUND_INIT",
+            "VBLANK_INTR_WAIT",
+            "APPLY_SECTOR_LIGHT",
+        ];
+        let typed = [0x0813_644C, 0x0815_DFD8, 0x0814_19C0]; // TypedHost::call's other arms
+        let overridden = [
+            0x0813_56DC, 0x0814_3284, 0x0812_C81C, 0x0812_C5C4, 0x0812_D960, 0x0812_C8A8, 0x0813_00E0, 0x0813_3D30,
+            0x0812_BF48, 0x0812_BEEC, 0x0812_BFA4, 0x0812_FFB0, 0x0812_EFE8, 0x0814_35C4, 0x0814_9D84, 0x0814_9FD8,
+            0x0813_02C4,
+        ];
+        let states_4_5 = [0x0812_EAAC, 0x0813_96C4]; // fill_results, race_cleanup
+        let mut n = 0;
+        for src in sources {
+            for (_, rest) in src.match_indices(".call(").map(|(i, _)| src.split_at(i + 6)) {
+                let arg = rest.split([',', ')']).next().unwrap().trim();
+                n += 1;
+                if let Some(hex) = arg.strip_prefix("0x") {
+                    let f = u32::from_str_radix(&hex.replace('_', ""), 16).unwrap();
+                    assert!(
+                        HARMLESS.contains(&f)
+                            || SOUND.contains(&f)
+                            || race_call(f)
+                            || typed.contains(&f)
+                            || overridden.contains(&f)
+                            || states_4_5.contains(&f),
+                        "an unhandled menu call {arg}"
+                    );
+                } else {
+                    assert!(named.contains(&arg), "an unclassified menu call {arg}");
+                }
+            }
+        }
+        assert!(n > 150, "{n} call sites found");
     }
 }

@@ -93,3 +93,27 @@ impl Game {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `obj_upload_tiles`' stop is unreachable (FIDELITY N1): with the race's tile base (0x200, set by `race_init`
+    /// alone) every countdown upload of the ROM's HUD materials ends inside OBJ VRAM (0x10000..0x18000).
+    #[test]
+    fn countdown_uploads_fit_in_vram() {
+        let Some(rom) = nfsgba_testkit::rom() else { return };
+        let r16 = |a: usize| u16::from_le_bytes([rom[a], rom[a + 1]]) as u32;
+        let uploads = [
+            (0x1C0, r16(DIGITS + 0xE) * r16(DIGITS + 0xC) >> 6),
+            (0x1FC, r16(TILES_A + 0x32) * r16(TILES_A + 0x30) >> 6),
+            (0x1E4, r16(TILES_B + 0xC) * r16(TILES_B + 0xE) * 6 >> 6),
+            (0x1CC, r16(TILES_C + 0xC) * r16(TILES_C + 0xE) * 6 >> 6),
+            (0x1BC, r16(TILES_D + 0xE) * r16(TILES_D + 0xC) >> 6),
+        ];
+        for (tile, n) in uploads {
+            let end = 0x1_0000 + (tile + 0x200) * 0x20 + 32 * n;
+            assert!(end <= 0x1_8000, "tile {tile:#x}: {n} tiles end at {end:#x}");
+        }
+    }
+}
