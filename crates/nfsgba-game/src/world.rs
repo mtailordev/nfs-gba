@@ -133,6 +133,8 @@ pub struct World {
     /// The sky gradient (the backdrop colour per line pair) and the entry the last VBlank chose.
     pub gradient: Vec<u16>,
     pub gradient_start: usize,
+    /// Timing input (not game state): race-time ticks the car step lent to the lap crossing less than to the rest.
+    pub lap_lag: i32,
     /// Per city material: its frame and u/v scroll (world `+0x48`), and its size (the ROM's material table).
     pub materials: Vec<(u16, i16, i16)>,
     pub material_info: Vec<MaterialInfo>,
@@ -295,6 +297,7 @@ impl World {
             fade_gradient,
             fade_obj: palette(m.u32(0x0300_00C0 + 0x34)),
             gradient: Ptr::<u16>::new(gradient_ptr).read_n(m, GRADIENT as u32),
+            lap_lag: 0,
             gradient_start: (gradient_at.wrapping_sub(gradient_ptr) / 2) as usize,
             materials: (0..hdr.material_count as u32)
                 .map(|k| {
@@ -381,6 +384,7 @@ impl World {
         let mut w = CarWorld {
             rom,
             data,
+            lap_lag: self.lap_lag,
             slots: take(&mut self.slots),
             heads: take(&mut self.heads),
             g: take(&mut self.g),
@@ -422,6 +426,7 @@ impl World {
             data,
             g: SlotGlobals {
                 timer3: g.frame_ticks,
+                time: g.time,
                 slot_counter: self.slot_counter,
                 lights: self.lights,
                 records: Ptr::NULL,

@@ -73,6 +73,8 @@ SCENARIOS = {
     "hunter": ("hunter-race", "racing", 500, ["wait 1100"], [*AUTOPILOT, "luax AUTOPILOT.target=3",
                                                             'luax AUTOPILOT.mode="ram"']),
     "elimination": ("elimination-race", "racing", 900, ["wait 2000"], [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
+    # The same race for 1,745 game frames: past the first lap crossing (a knock-out), before the race ends.
+    "elimlap": ("elimination-race", "racing", 1745, ["wait 10"], [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
     "attacker": ("attacker-race", "racing", 700, ["wait 400", "luax AUTOPILOT.extra=0x300", "wait 12",
                                                   "luax AUTOPILOT.extra=0", "wait 1200"],
                  [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),

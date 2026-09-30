@@ -254,6 +254,7 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
         },
         gradient: s.gradient.clone(),
         gradient_start: 0,
+        lap_lag: 0,
         materials: vec![(0, 0, 0); n_materials as usize],
         material_info: (0..n_materials)
             .map(|k| MaterialInfo::load(&m, mats + 0x24 * k))

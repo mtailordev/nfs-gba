@@ -372,6 +372,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x0300618C` | wingman: cleared when a command ends (4); set when a command is given in the drafter role (`0x030061F8` set) |
 | `0x0300619C` | the wingman's partner entity (the player's; world +0x3C) (4) |
 | `0x030061A4` | someone finished |
+| `0x03006198` | hunter: chase target time (400), the AI's `+0x4F0` reload |
 | `0x030061B0` | hunter life gain by place, 5 × 4 (0, 200, 150, 100, 0) |
 | `0x030061D0` / `0x030061E0` | hunter: wrong-way frames (27) / wall frames (50) before the drain |
 | `0x030061D4` / `0x030061DC` | wingman: command available (the HUD portrait blinks) / command count (loaded from `0x7F4284`; one spent per command; the HUD portrait frame) |

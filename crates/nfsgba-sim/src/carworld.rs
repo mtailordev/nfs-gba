@@ -121,6 +121,8 @@ pub struct PointExtra {
 pub struct CarWorld<'a> {
     pub rom: &'a [u8],
     pub data: &'a GameData,
+    /// Timing input: ticks of race time `lap_crossing` reads less than the rest of the step.
+    pub lap_lag: i32,
     /// Entities `0..n` (the racers, and every entity the step looks at) with their drivers.
     pub slots: Vec<Slot>,
     pub g: CarGlobals,

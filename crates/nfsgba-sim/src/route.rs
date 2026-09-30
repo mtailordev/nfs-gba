@@ -152,6 +152,7 @@ pub fn track_waypoint(w: &mut CarWorld, i: usize) {
 /// the race's own, which in sprints is two points longer than the ROM's.
 pub fn lap(w: &mut CarWorld, i: usize) {
     let mut race = w.race();
+    race.time = race.time.wrapping_sub(w.lap_lag as u32);
     // The racers, and the car crossing (a wingman's car has an id above the opponents).
     let n = (race.player + race.opponents + 1).max(i as u32 + 1) as usize;
     let mut cars: Vec<_> = w.slots[..n].iter().map(Slot::racer).collect();

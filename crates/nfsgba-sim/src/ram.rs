@@ -87,6 +87,7 @@ pub fn load<'a>(m: &Mem, rom: &'a [u8], data: &'a GameData, who: usize) -> CarWo
     CarWorld {
         rom,
         data,
+        lap_lag: 0,
         route: load_route(m, &hdr, &g),
         slots,
         profile: CarProfile::load(m, profile_at),

@@ -24,7 +24,11 @@ use nfsgba_sim::layout::Field;
 /// effect and the nitro flames), `fadeout` and `fadein` (20 and 14 frames from the reference race with `main_frame`'s
 /// palette fade counter poked: the palettes and the sky gradient fade to black, and in from black).
 /// (session, trace, game frames): every frame of every trace must replay.
-const TRACES: [(&str, &str, usize); 9] = [
+const TRACES: [(&str, &str, usize); 13] = [
+    ("live-race", "elimlap", 1744),
+    ("live-race", "elimination", 899),
+    ("live-race", "attacker", 699),
+    ("live-race", "career", 599),
     ("live-race", "hunter", 499),
     ("live-race", "start", 89),
     ("game-loop", "fadeout", 19),

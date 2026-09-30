@@ -80,6 +80,15 @@ impl Trace {
                     pause: r.get(15).and_then(|f| at(f)),
                     exit: r.get(16).and_then(|f| at(f)),
                     handover: r.get(17).and_then(|f| at(f)),
+                    marker: r.get(18).and_then(|f| at(f)),
+                    laps: r
+                        .get(19)
+                        .unwrap_or(&"")
+                        .split(';')
+                        .filter_map(|p| p.split_once(':'))
+                        .map(|(d, n)| (u32::from_str_radix(d, 16).unwrap(), num(n).unwrap() - start))
+                        .map(|(d, n)| (entity_of_driver(&states[k], d), n))
+                        .collect(),
                     lanes: r
                         .get(10)
                         .unwrap_or(&"")

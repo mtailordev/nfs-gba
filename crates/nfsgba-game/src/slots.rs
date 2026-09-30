@@ -525,6 +525,48 @@ impl Slots<'_> {
         }
     }
 
+    /// `FUN_0814bf98` (entity handler 0xF, the wingman's marker): state 0 puts it 0xC8 above the player; state 1
+    /// hovers it 0x1000 above the last AI car, bobbing with the race time, and takes a billboard slot.
+    /// (State 0's `place_on_floor` leaves no trace: the height is overwritten and the world scratch is not kept.)
+    pub fn marker_handler(&mut self, i: usize) {
+        let index = self.entities[i].index as usize;
+        match self.entities[i].race_state {
+            1 => {
+                let bob = sin_q14(self.rom, ((self.g.time as i32) << 9) & 0x3FFF);
+                let e = &mut self.entities[i];
+                e.angles[1] = (0x1000 - (e.heading >> 8) & 0x3FFF) as i16;
+                self.unlink_entity(index);
+                let t = &self.entities[self.g.ai_cars as usize];
+                let (pos, sector) = (t.pos, t.sector);
+                let e = &mut self.entities[i];
+                e.pos = [pos[0], pos[1].wrapping_add(bob >> 2).wrapping_sub(0x1000), pos[2]];
+                e.sector = sector;
+                self.assign_billboard_slot(i);
+                self.link_entity(index);
+            }
+            0 => {
+                let p = &self.entities[0];
+                let (pos, sector) = (p.pos, p.sector);
+                let e = &mut self.entities[i];
+                e.extra_model = 0;
+                e.model = 0x62;
+                e.material = 0x92;
+                e.pos = [pos[0], pos[1].wrapping_sub(0xC8), pos[2]];
+                e.sector = sector;
+                e.draw_next = 0xFFFF;
+                e.state = 7;
+                e.flags = 2;
+                e.material_offset = 0;
+                e.next = 0xFFFF;
+                e.material_step = 0;
+                (e.dir_x, e.u_1c, e.dir_z, e.heading, e.angles[1]) = (0, 0, 0, 0, 0);
+                e.race_state = 1;
+                e.slot = 0xFF;
+            }
+            _ => {}
+        }
+    }
+
     /// `FUN_0814fa6c`, all that is left of it: it finds the sector under each of the four wheel points around the
     /// car (heading only), and its only effect is the last query it leaves in the world scratch (the sector search
     /// and the floor height it computes are not kept).

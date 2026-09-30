@@ -62,7 +62,7 @@ emu:setBreakpoint(function()
     return
   end
   left = left - 1
-  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
+  row = {emu:currentFrame(), emu:getKeys(), emu:read32(0x030053B4), "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 end, 0x0812AE64)
 
 emu:setBreakpoint(function()
@@ -124,6 +124,17 @@ emu:setBreakpoint(function()
   end
 end, 0x0813C95C)
 
+-- The wingman marker's handler (FUN_0814bf98) reads the race time at 0x0814BFC0: column 19.
+emu:setBreakpoint(function() if row then row[19] = vb() end end, 0x0814BFC0)
+
+-- lap_crossing (FUN_0813f098) reads the race time at 0x0813F106 (driver struct in r5): column 20, `driver:counter`
+-- pairs like the lane timers.
+emu:setBreakpoint(function()
+  if row then
+    row[20] = row[20] .. (row[20] == "" and "" or ";") .. string.format("%x:%d", emu:readRegister("r5"), vb())
+  end
+end, 0x0813F106)
+
 -- Marks of the race-start frame (columns 13..15, the VBlank counter at the first hit in a frame): rand_seed
 -- (setup_race_cars' read of the tick counter), snd_play_module (the race music's request), race_start_from_table_b.
 local function mark(col)
@@ -163,7 +174,7 @@ callbacks:add("frame", function()
   local n, count, cond = line:match("^(%S+)%s+(%d+)%s*(%S*)")
   name, left, waitRacing, waitStart = n, tonumber(count), cond == "racing", cond == "start"
   csv = assert(io.open(dir .. "/" .. name .. ".csv", "w"))
-  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads,seed,music,start,pause,exit,handover\n")
+  csv:write("video_frame,keys,vblanks_start,vblanks_entities,vblanks_hud,timer3,vblanks_sounds,vblanks_gap,vblanks_timer,effects,lanes,gap_reads,seed,music,start,pause,exit,handover,marker,laps\n")
   bin = assert(io.open(dir .. "/" .. name .. ".frames.bin", "wb"))
   log("armed " .. line)
 end)

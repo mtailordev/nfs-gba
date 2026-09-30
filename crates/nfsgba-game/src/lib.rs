@@ -74,6 +74,10 @@ pub struct Timing {
     pub pause: Option<u32>,
     pub exit: Option<u32>,
     pub handover: Option<u32>,
+    /// At the wingman marker handler's read of the race time.
+    pub marker: Option<u32>,
+    /// Per car, the counter at `lap_crossing`'s read of the race time.
+    pub laps: Vec<(usize, u32)>,
 }
 
 impl Timing {
@@ -96,6 +100,8 @@ impl Timing {
             pause: None,
             exit: None,
             handover: None,
+            marker: None,
+            laps: Vec::new(),
         }
     }
 }
@@ -451,14 +457,19 @@ impl Game {
         Ok(())
     }
 
+    /// The race-time ticks lent to a read `at` IRQs into the frame.
+    fn lent(&self, at: Option<u32>) -> u32 {
+        match at {
+            Some(n) if self.race_time_runs() => n.saturating_sub(self.irqs),
+            _ => 0,
+        }
+    }
+
     /// Runs `step` on the car world for car `who` with the race time the game read `at` IRQs into the frame (the
     /// IRQs themselves run later, where the frame's other timing points put them): the ticks between now and
     /// then are lent to it.
     fn lend<R>(&mut self, at: Option<u32>, who: usize, step: impl FnOnce(&mut CarWorld) -> R) -> (R, Vec<Command>) {
-        let lent = match at {
-            Some(n) if self.race_time_runs() => n.saturating_sub(self.irqs),
-            _ => 0,
-        };
+        let lent = self.lent(at);
         let w = &mut self.world;
         w.g.time = w.g.time.wrapping_add(lent);
         let r = w.with_cars(&self.rom, &self.data, who, step);
@@ -581,12 +592,15 @@ impl Game {
                     // counted; the sim runs the step whole, so those IRQs' race-time ticks are lent to it and
                     // the IRQs themselves run after it, between the sound commands they fell between.
                     let at = t.gap_reads.first().copied().or(t.gap);
+                    let lap_at = t.laps.iter().find(|(e, _)| *e == i).map(|&(_, n)| n);
+                    self.world.lap_lag = self.lent(at) as i32 - self.lent(lap_at.or(at)) as i32;
                     // FUN_0814bd4c: the entity leaves its sector's list for the step.
                     let ((), commands) = self.lend(at, i, |w| {
                         w.unlink(i);
                         nfsgba_sim::car::handler(w, i);
                         w.link(i);
                     });
+                    self.world.lap_lag = 0;
                     // The player's decal, unpacked into its rim buffer: NOT 1:1 (R24), in the heap arena.
                     if state == 0 && i as u32 == self.world.g.player {
                         self.world.on_arena(&self.rom, i, nfsgba_sim::decal::unpack_decal);
@@ -610,6 +624,9 @@ impl Game {
                     // The lane-change timer reads the race time the IRQs have counted by then.
                     let at = t.lanes.iter().find(|(e, _)| *e == i).map(|&(_, n)| n);
                     let driving = state.wrapping_sub(1) < 2;
+                    // `lap_crossing` reads it earlier in the handler than the lane timer does.
+                    let lap_at = t.laps.iter().find(|(e, _)| *e == i).map(|&(_, n)| n);
+                    self.world.lap_lag = self.lent(at) as i32 - self.lent(lap_at.or(at)) as i32;
                     // FUN_0814a2a0: a driving car leaves its sector's list for the step.
                     let (effects, commands) = self.lend(at, i, |w| {
                         if driving {
@@ -621,6 +638,7 @@ impl Game {
                         }
                         r
                     });
+                    self.world.lap_lag = 0;
                     self.play_commands(commands, t, &mut sounds)?;
                     // The player's entity on this handler (FUN_0814a390's last call): the decal, as for handler 0..3.
                     if state == 0 && i as u32 == self.world.g.player {
@@ -637,6 +655,14 @@ impl Game {
                 0x34 => {
                     let (rom, data) = (&self.rom, &self.data);
                     self.world.with_slots(rom, data, |s| s.effect_handler(i));
+                }
+                0xF => {
+                    // Like the lane timers: it reads the race time the IRQs have counted by then.
+                    let lent = self.lent(t.marker);
+                    self.world.g.time = self.world.g.time.wrapping_add(lent);
+                    let (rom, data) = (&self.rom, &self.data);
+                    self.world.with_slots(rom, data, |s| s.marker_handler(i));
+                    self.world.g.time = self.world.g.time.wrapping_sub(lent);
                 }
                 0x36 => {
                     // FUN_081443fc.

@@ -10,6 +10,8 @@ layout! {
     pub struct SlotGlobals: 0 {
         /// Timer 3's count at the frame's start (the frame time the sparks integrate).
         0x0300_5934 timer3: i32,
+        /// Race frames.
+        0x0300_5800 time: u32,
         /// Matrix slots handed out this frame (`FUN_0814f8ac`).
         0x0300_5394 slot_counter: u32,
         /// The effect lights are on (`FUN_0814e414` returns without).

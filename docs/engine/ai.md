@@ -132,8 +132,9 @@ and counts it. The per-call test is exact, because the oracle sees the same RAM.
 - **Rust** (`crates/nfsgba-sim/tests/ai_trace.rs`):
   - `each_call_matches_the_game`: each frame replays the loop; the player's and the effect entities' calls apply the game's writes. Every opponent and traffic call runs the port, which must write exactly the same bytes and make the same calls. Only the car-physics stops listed there may stop.
   - `replay_matches_the_trace`: the opponents and traffic carry their own entity and data block from frame to frame over the reference RAM. They must reproduce every next traced frame (external bits masked, as in the physics tests). A car that reaches unported code takes the game's result for that call and re-syncs from the trace.
+- **Hunter races:** traced (`hunter`, `tipped`, `stuck`: 8,000+ calls exact): the chase target (`FUN_0813fdb0`, every 0x28 steps on a roll under `*0x03006190`, kept `*0x03006198` steps) and the hunter life tick.
+- **Whole game loop** (`nfsgba-game/tests/replay.rs`, `live-race/{hunter,elimination,elimlap,attacker,career}`): a hunter race with life bars, elimination (`elimlap` crosses a lap and knocks a car out), a circuit with the wingman and its command (R+L; the marker entity, handler 0xF), a career event. Exact per frame and free-running. Race-time reads inside a frame are timing inputs (`marker`, `laps` columns).
 - **Not traced:**
-  - the hunter race mode (the AI stops at `Unported` there);
   - mode 0xE/0xF setups;
   - the push-back loop;
   - traffic without a route.
@@ -145,8 +146,12 @@ Each stops with `Unported`:
 - tipped-over dynamics, D9;
 - the car-to-car response, D10;
 - the sector search two portals away and the push-back loop, D11;
-- in hunter races: `FUN_0813FDB0` and `hunter_life_tick`;
 - a traffic car without a route.
+
+Stops that stay, by design (the game reads memory it never wrote, so there is no defined result): `FUN_0814dd24`
+with a wheel point outside every sector (an uninitialised stack word), branch odds for a difficulty above 2 (the
+stack), a traffic car without a route (BIOS memory). None occurs in the recorded modes. The player's entity on the
+opponent handler is ported (its `unpack_decal` call) but no trace reaches it.
 
 `opponent_effects` is rendering and is reported, not run.
 
