@@ -692,3 +692,16 @@ address,name,kind,comment
 0x087f0626,car_has_model,data,byte per car: nonzero when the garage draws a 3D model for it
 0x087f0636,car_spoiler_models,data,i16 per (car * 16 + level of part 0): the spoiler model number (0 = none), garage_load_car_atlas stores it in the entity +0x64
 0x087f0816,car_spoiler_offsets,data,i16 pairs (y, -z) per (car * 16 + level of part 0): the spoiler position in the car's frame (garage_draw_car)
+0x081389cc,camera_look_at,function,(entity; n) camera target from the entity's position and sector; camera view = 7; called only by entity_handler_10
+0x0814a198,entity_handler_10,function,handler table entries 0x10 and 0x37: the look-at camera entity (camera_look_at; view 7 back to 0/2 via camera_toggle_view); no entity gets these handlers
+0x0813a120,camera_init_thunk,function,camera_init(r0; r2): uncalled (the only caller of camera_init besides race_init)
+0x08146bf8,link_set_flag_a,function,link play: stores the link flag 0x03005624; uncalled
+0x08146ca4,link_set_flag_b,function,link play: stores the link flag 0x03005624; uncalled
+0x08146e10,link_set_flag_c,function,link play: link flag 0x03005624 = 1; uncalled
+0x08146f60,link_set_flag_d,function,link play: stores the link flag 0x03005624; uncalled
+0x08146fac,link_set_flag_e,function,link play: stores the link flag 0x03005624; uncalled
+0x08147164,link_set_flag_f,function,link play: link flag 0x03005624 = 1; uncalled
+0x08147250,link_set_flag_g,function,link play: stores the link flag 0x03005624; uncalled
+0x0814ae2c,spawn_entity_33_chain,function,top of the only call chain to spawn_entity_33 (FUN_0814c32c); uncalled
+0x08797ce8,upgrade_item_ids,data,u16 item ids of the upgrade lists (upgrades_changed and the list new-marks)
+0x08797d0a,quick_race_modes,data,4 race modes Quick Play's random race picks from (0..3)
