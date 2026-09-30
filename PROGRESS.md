@@ -24,8 +24,9 @@ What exists (evidence in `docs/FIDELITY.md` "Closed"):
 ## Start here (next session)
 
 1. `docs/FIDELITY.md` "Open" is empty (2026-09-30); a new deviation found later goes there. Everything under "Accepted" is settled by the contract; don't re-open it without a new reason (a path becoming reachable, a decision to model CPU timing).
-2. **Extras (the roadmap's milestone 5), none started:**
-   - **Other platforms.** The engine crates depend only on `std` and `serde_json`, so they build for any Rust target; Bevy covers Windows, macOS, Linux, the web (WebGPU, WebGL2 fallback), Android and iOS. The viewer needs a thin platform layer: the ROM from a file picker instead of `NFSGBA_DATA`/`.env`, the save in browser storage or the app's folder instead of `std::fs`, the `NFSGBA_*` environment switches as flags or an options menu, gamepad and touch input. First step: `cargo check --target wasm32-unknown-unknown` on the engine crates, then add it to the gate.
+2. **Extras (the roadmap's milestone 5):**
+   - **Web: done (2026-09-30).** The repo is public; `.github/workflows/pages.yml` deploys the WebGL2 build to https://mtailordev.github.io/nfs-gba/ on every push to `main` (the player picks their own ROM; SHA-1 checked; saves in `localStorage`, downloadable in the EEPROM format; touch pad on phones; gamepad). Local build: `tools/web_build.py` (`docs/engine/viewer-rendering.md` "Web build"). Untested: a real phone and a real gamepad; loading a save mid-game needs a reload; the wasm is not in the gate (add `cargo clippy --target wasm32-unknown-unknown` to `tools/gate.py`).
+   - **Native mobile** (Android/iOS apps) would reuse the same platform layer; not started.
    - A high-rate mode (read how `mstan/MarioKartSuperCircuitRecomp` does 60 fps; licence unclear, read only), widescreen, free roam.
    - Link play over the network (Carbon's link code is dead: nothing sets the flag, `reach::link_play_is_unreachable`), then the sibling Pocketeers titles.
 
