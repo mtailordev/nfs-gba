@@ -34,6 +34,8 @@ def norm(addr: str) -> str:
 def read_rows(text: str) -> list[dict]:
     """symbols.csv rows: the last column (comment) may hold unquoted commas, as ApplySymbols.java reads it."""
     lines = [l for l in text.splitlines() if l.strip()]
+    if lines and lines[0].startswith("0x"):  # an agent's notes file without the header line
+        lines.insert(0, "address,name,kind,comment")
     keys = lines[0].split(",")
     return [dict(zip(keys, l.split(",", len(keys) - 1))) for l in lines[1:]]
 
