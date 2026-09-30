@@ -590,7 +590,10 @@ fn hud_blend_is_the_games_blend() {
                 assert_eq!(got, want, "{name} {k} pixel {p} ({}, {})", p % W, p / W);
                 if under == r.picture[p] {
                     agree += 1;
-                    assert_eq!(got, want_exact, "{name} {k} pixel {p}: not the exact frame with the HUD");
+                    assert_eq!(
+                        got, want_exact,
+                        "{name} {k} pixel {p}: not the exact frame with the HUD"
+                    );
                     exact_blend += o.is_some_and(|(_, s)| s) as usize;
                 }
             }
@@ -602,7 +605,10 @@ fn hud_blend_is_the_games_blend() {
          is the exact frame's, {exact_blend} of them semi-transparent, all equal to the exact frame with the HUD"
     );
     assert!(states >= 20, "{states} states");
-    assert!(semi > 100_000, "{semi} semi-transparent pixels: the blend is not exercised");
+    assert!(
+        semi > 100_000,
+        "{semi} semi-transparent pixels: the blend is not exercised"
+    );
 }
 
 /// R29: traffic whose atlas the game keeps in RAM (entity flag bit 3) is drawn. No recorded state has one, so each
@@ -633,12 +639,19 @@ fn traffic_with_a_ram_atlas_is_drawn() {
                 let Some(info) = game.world.material_info.get(e.material as usize) else {
                     continue;
                 };
-                let (size, texture) = (info.width as usize * info.height as usize, textures.get(e.material as usize));
+                let (size, texture) = (
+                    info.width as usize * info.height as usize,
+                    textures.get(e.material as usize),
+                );
                 let free = game.world.heap.windows(size).position(|w| w.iter().all(|&b| b == 0));
                 let (Some(texture), Some(at), true) = (texture, free, e.slot != 0xFF && e.flags & 0x10 == 0) else {
                     continue;
                 };
-                if e.material_offset != 0 || e.material_step >> 8 != 0 || e.flags & 8 != 0 || texture.pixels.len() != size {
+                if e.material_offset != 0
+                    || e.material_step >> 8 != 0
+                    || e.flags & 8 != 0
+                    || texture.pixels.len() != size
+                {
                     continue;
                 }
                 game.world.heap[at..at + size].copy_from_slice(&texture.pixels);
@@ -654,8 +667,12 @@ fn traffic_with_a_ram_atlas_is_drawn() {
             let (ram_play, n) = state(k, true);
             let ram_view = rig.show(ram_play);
             moved += n;
-            let differ = (0..W * H).filter(|&p| rom_view[4 * p..4 * p + 4] != ram_view[4 * p..4 * p + 4]).count();
-            eprintln!("{name} {k:>3}: {n} traffic cars with a RAM atlas, {differ} pixels differ from the ROM atlas's view");
+            let differ = (0..W * H)
+                .filter(|&p| rom_view[4 * p..4 * p + 4] != ram_view[4 * p..4 * p + 4])
+                .count();
+            eprintln!(
+                "{name} {k:>3}: {n} traffic cars with a RAM atlas, {differ} pixels differ from the ROM atlas's view"
+            );
             assert_eq!(differ, 0, "{name} {k}");
         }
     }

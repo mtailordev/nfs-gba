@@ -357,7 +357,11 @@ fn add_viewer(app: &mut App) {
         brightness: 500.0,
         ..default()
     })
-    .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default(), composite::plugin))
+    .add_plugins((
+        FreeCameraPlugin,
+        MaterialPlugin::<Indexed>::default(),
+        composite::plugin,
+    ))
     .init_resource::<Smooth>()
     .add_systems(Startup, setup)
     .add_systems(
@@ -386,6 +390,7 @@ fn add_viewer(app: &mut App) {
     embedded_asset!(app, "composite.wgsl");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -590,8 +595,14 @@ fn setup(
     let target = offscreen.as_ref().map(|o| o.0.clone());
     #[cfg(not(test))]
     let target = None;
-    let (scene_target, ui_camera) =
-        composite::spawn(&mut commands, &mut meshes, &mut composites, &mut images, hud.clone(), target);
+    let (scene_target, ui_camera) = composite::spawn(
+        &mut commands,
+        &mut meshes,
+        &mut composites,
+        &mut images,
+        hud.clone(),
+        target,
+    );
     let ui_camera = UiTargetCamera(ui_camera);
     play::spawn_menu(&mut commands, &mut images, ui_camera.clone());
     commands.spawn((
@@ -1347,7 +1358,9 @@ fn traffic(
         clip_material(&mut indexed, look, race.clip.get(part.ent).copied().flatten());
         if let (Some(px), Some(handle)) = (mem.atlas(part.ent), indexed.get(&look.0).map(|m| m.indices.clone())) {
             // A traffic atlas kept in RAM (flag bit 3) is the game's own buffer: what it holds now.
-            if images.get(&handle).is_some_and(|i| i.data.as_deref() != Some(px)) && let Some(mut i) = images.get_mut(&handle) {
+            if images.get(&handle).is_some_and(|i| i.data.as_deref() != Some(px))
+                && let Some(mut i) = images.get_mut(&handle)
+            {
                 i.data = Some(px.to_vec());
             }
         }

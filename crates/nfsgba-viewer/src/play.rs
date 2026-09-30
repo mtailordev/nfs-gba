@@ -31,8 +31,8 @@ use bevy::{
     asset::RenderAssetUsages,
     audio::{ChannelCount, Decodable, Sample, SampleRate, Source},
     image::ImageSampler,
-    render::render_resource::TextureFormat,
     prelude::*,
+    render::render_resource::TextureFormat,
 };
 use nfsgba_formats as rom;
 use nfsgba_game::{Flow, Game, Machine, Timing, race_init, race_setup, session::Session, view};
@@ -162,7 +162,10 @@ impl Play {
     pub fn load(rom_bytes: Vec<u8>, prefix: &str, hud: Handle<Image>, running: bool) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24").join(prefix);
         let mut play = Play::new(Game::new(Machine::load_dump(rom_bytes, &path)?), hud, !running, None);
-        if let Some(io) = rom::Dump::load(&path).ok().and_then(|d| d.io.get(0x52..0x54).map(<[u8]>::to_vec)) {
+        if let Some(io) = rom::Dump::load(&path)
+            .ok()
+            .and_then(|d| d.io.get(0x52..0x54).map(<[u8]>::to_vec))
+        {
             play.bldalpha = u16::from_le_bytes([io[0], io[1]]);
         }
         Ok(play)
@@ -409,7 +412,10 @@ const RACE_BLDALPHA: u16 = 0x0D0F;
 
 /// (EVA, EVB) of a `BLDALPHA` value: each field's 5 bits, at most 16.
 fn blend_of(bldalpha: u16) -> (u32, u32) {
-    (u32::from(bldalpha & 0x1F).min(16), u32::from(bldalpha >> 8 & 0x1F).min(16))
+    (
+        u32::from(bldalpha & 0x1F).min(16),
+        u32::from(bldalpha >> 8 & 0x1F).min(16),
+    )
 }
 
 /// The game's alpha blend of a semi-transparent sprite colour over what is under it, both BGR555:
@@ -583,14 +589,7 @@ pub fn menu_layer(
     let oam: Vec<u8> = v.oam.iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
     let objects = draw_objects(&oam, &tiles, &v.palette[256..]);
     let a = full.session.blend();
-    let out = compose(
-        v.page,
-        &v.palette[..256],
-        |_| v.palette[0],
-        objects,
-        blend_of(a),
-        true,
-    );
+    let out = compose(v.page, &v.palette[..256], |_| v.palette[0], objects, blend_of(a), true);
     if let Some(mut image) = images.get_mut(&screen.0.0) {
         image.data = Some(out);
     }

@@ -54,12 +54,7 @@ pub fn spawn(
     hud: Handle<Image>,
     target: Option<Handle<Image>>,
 ) -> (Handle<Image>, Entity) {
-    let scene = images.add(Image::new_target_texture(
-        960,
-        640,
-        TextureFormat::Rgba8UnormSrgb,
-        None,
-    ));
+    let scene = images.add(Image::new_target_texture(960, 640, TextureFormat::Rgba8UnormSrgb, None));
     let material = materials.add(Composite {
         scene: scene.clone(),
         hud,
@@ -67,10 +62,7 @@ pub fn spawn(
     });
     let mut camera = commands.spawn((
         Camera2d,
-        Camera {
-            order: 1,
-            ..default()
-        },
+        Camera { order: 1, ..default() },
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::Fixed {
                 width: 2.0,
