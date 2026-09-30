@@ -26,6 +26,9 @@ use crate::{
     race_setup::{Display, Heap, Setup},
 };
 
+/// Handles standing for the menu palette buffers' heap addresses (`MenuGlobals::second_palette`, `race_palette`).
+const PALETTE_HANDLES: u32 = 0x0200_A000;
+
 /// The VBlanks that run before the race start reads the tick counter as the rand seed (T1).
 const SEED_VBLANKS: u32 = 6;
 
@@ -103,6 +106,8 @@ impl<'a> Session<'a> {
     pub fn new(rom: &'a [u8], eeprom: Vec<u8>) -> Session<'a> {
         let mut st = MenuState::default();
         boot::init(&mut st, rom, &eeprom);
+        // The menu's two palette buffers (the game's heap blocks): handles for the typed host, which owns them.
+        (st.g.second_palette, st.g.race_palette) = (PALETTE_HANDLES, PALETTE_HANDLES + 0x200);
         let mut host = TypedHost::new(rom, &st);
         host.eeprom = eeprom;
         // The boot's sound start-up (`0x08135DF8`): the engine, and no music playing.

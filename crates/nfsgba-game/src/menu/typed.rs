@@ -200,6 +200,8 @@ impl Host for TypedHost<'_> {
         }
         self.scene
             .setup(self.rom, &mut self.screen, first, material, palette, sprite);
+        // `set_base_palette` raises the flag (`0x0300563C`) that `main_frame` copies the palette to RAM for.
+        st.g.palette_dirty |= u32::from(std::mem::take(&mut self.scene.palette_dirty));
     }
 
     fn world_palette(&self) -> u32 {
