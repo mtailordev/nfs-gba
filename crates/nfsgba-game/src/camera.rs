@@ -161,7 +161,12 @@ fn update(rom: &[u8], data: &GameData, f: &mut CameraFrame) -> Result<()> {
     let (ax, az) = (x.wrapping_add(probe[0]), z.wrapping_add(probe[2]));
     let mut ahead = geo.find_sector_near(sector as u32, ax, az);
     if ahead == NONE {
-        return Err(Unported("find_sector_far (FUN_0814dbbc) for the camera's probe point"));
+        // The far search (two portals away) from the same query point, else the camera keeps its sector. From the
+        // decompilation of `camera_update` (no recording reaches it; route 36 does after 319 frames: coverage.rs).
+        ahead = geo.find_sector_far(sector as u32, ax, az);
+        if ahead == NONE {
+            ahead = sector as u32;
+        }
     }
     let (bx, bz) = (x.wrapping_sub(probe[0]), z.wrapping_sub(probe[2]));
     let behind = geo.find_sector_near(sector as u32, bx, bz);
