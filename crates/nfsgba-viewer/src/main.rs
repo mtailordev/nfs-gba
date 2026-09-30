@@ -27,6 +27,8 @@
 
 mod game;
 mod play;
+#[cfg(test)]
+mod shots;
 
 use std::{collections::BTreeMap, f64::consts::TAU};
 
@@ -306,11 +308,7 @@ fn garage_base(data: &[u8], city: &[u16], car: usize, paint: i8) -> Vec<u16> {
 
 fn main() {
     let mut app = App::new();
-    app.insert_resource(GlobalAmbientLight {
-        brightness: 500.0,
-        ..default()
-    })
-    .add_plugins(DefaultPlugins.set(WindowPlugin {
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "NFS Carbon GBA viewer (unofficial) - play: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>".into(),
             // Four times the GBA screen: every GBA pixel is 4×4 window pixels.
@@ -319,11 +317,32 @@ fn main() {
         }),
         ..default()
     }))
-    .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
     .add_audio_source::<play::GbaSound>()
+    .add_systems(PostStartup, play::start_sound);
+    add_viewer(&mut app);
+    app.run();
+}
+
+/// Tests: the game to start from (instead of `NFSGBA_DUMP`/`NFSGBA_ROUTE`).
+#[cfg(test)]
+#[derive(Resource)]
+struct Start(Option<play::Play>);
+
+/// Tests: the image the camera renders to instead of a window.
+#[cfg(test)]
+#[derive(Resource)]
+struct Offscreen(Handle<Image>);
+
+/// The viewer's materials, resources and systems: everything but the window, the audio and the runner, which
+/// the visual check replaces (`shots.rs`).
+fn add_viewer(app: &mut App) {
+    app.insert_resource(GlobalAmbientLight {
+        brightness: 500.0,
+        ..default()
+    })
+    .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
     .init_resource::<Smooth>()
     .add_systems(Startup, setup)
-    .add_systems(PostStartup, play::start_sound)
     .add_systems(
         Update,
         (
@@ -345,7 +364,6 @@ fn main() {
         ),
     );
     embedded_asset!(app, "indexed.wgsl");
-    app.run();
 }
 
 fn setup(
@@ -354,6 +372,8 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut indexed: ResMut<Assets<Indexed>>,
     mut images: ResMut<Assets<Image>>,
+    #[cfg(test)] start: Option<ResMut<Start>>,
+    #[cfg(test)] offscreen: Option<Res<Offscreen>>,
 ) {
     let data = rom::canonical_rom().expect("no ROM vault found: run `python tools/vault.py` first (see README)");
     let textures = rom::city_textures(&data);
@@ -565,10 +585,19 @@ fn setup(
         keep
     });
     let running = std::env::var("NFSGBA_PLAY").is_ok();
-    let race_game = match &dump {
-        Some(prefix) => play::Play::load(data.clone(), prefix, hud.clone(), running)
+    #[cfg(test)]
+    let supplied = start.and_then(|mut s| s.0.take());
+    #[cfg(not(test))]
+    let supplied: Option<play::Play> = None;
+    let dump = supplied.as_ref().map(|_| "supplied".to_string()).or(dump);
+    let race_game = match (supplied, &dump) {
+        (Some(mut p), _) => {
+            p.hud = hud.clone();
+            p
+        }
+        (None, Some(prefix)) => play::Play::load(data.clone(), prefix, hud.clone(), running)
             .unwrap_or_else(|e| panic!("NFSGBA_DUMP={prefix}: {e} (needs the dump's palette, vram and oam too)")),
-        None => play::Play::grid(
+        (None, None) => play::Play::grid(
             data.clone(),
             env as u32,
             start_route.unwrap_or(23),
@@ -708,7 +737,8 @@ fn setup(
             (v.len() == 6).then(|| (Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
         })
         .unwrap_or((Vec3::new(center.x, max.y + 480.0, max.z + 640.0), center));
-    commands.spawn((
+    #[cfg_attr(not(test), allow(unused_variables))]
+    let camera = commands.spawn((
         Camera3d::default(),
         // The game's projection: focal 150 on the 240×160 screen, optical centre (120, 79), near plane 64.
         Projection::custom(GbaProjection {
@@ -732,7 +762,14 @@ fn setup(
             Transform::from_xyz(0.0, 0.0, -20000.0),
             NotShadowCaster,
         )],
-    ));
+    ))
+    .id();
+    #[cfg(test)]
+    if let Some(o) = offscreen {
+        commands
+            .entity(camera)
+            .insert(bevy::camera::RenderTarget::Image(o.0.clone().into()));
+    }
     info!(
         "city bounds {min:.0} .. {max:.0} m; play a race: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>; keys: R next route, \
          G game/free camera, O original frame, T racing line, K sky; \

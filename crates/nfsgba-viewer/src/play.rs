@@ -145,7 +145,7 @@ impl Play {
         }
     }
 
-    fn new(game: Game, hud: Handle<Image>, paused: bool, grid: Option<(u32, u32)>) -> Play {
+    pub fn new(game: Game, hud: Handle<Image>, paused: bool, grid: Option<(u32, u32)>) -> Play {
         let script = std::env::var("NFSGBA_PLAY_KEYS").ok().map(|s| {
             s.split(',')
                 .flat_map(|step| {
