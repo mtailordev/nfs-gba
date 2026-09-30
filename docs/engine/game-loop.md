@@ -162,13 +162,14 @@ Play stops at the first unported code path and logs it (the pause menu, the race
 
 ## The whole game (`session.rs`)
 
-`Session::new(rom, eeprom, template)` then `frame(keys)` per video frame; `view()` (page, palettes, OAM) and `sound()`.
-The typed menus (`menu::flow::main_frame` on a `TypedHost`) run until game state 4; then `apply_choice` writes the
-menu state's race choice into a `Setup` (the template is a captured race start for the parts the menus do not model:
-heap arena, sound engine, display memory), `race_init::start` builds the race and `Game::frame` runs it. A `Handover`
+`Session::new(rom, eeprom)` then `frame(keys)` per video frame; `view()` (page, palettes, OAM) and `sound()`.
+The typed menus (`menu::flow::main_frame` on a `TypedHost`) run until game state 4 (their sound calls go to the
+session's `Engine`, which runs one VBlank per frame from power-on); then `Setup::menus` (constants, the session's engine,
+`Heap::menus`/`after_race`) and `apply_choice` (the menu state's race choice) make the race start's input, the
+menus' screen the display memory; `race_init::start` builds the race and `Game::frame` runs it. A `Handover`
 goes back to the menus: `Results` = `goto_screen(0xB)`/`menu_back` with the results and ranked blocks; `Pause` =
 `goto_screen(5)`, and the menus' state 5 resumes (`Game::resume`) or quits. Unported stops: menu calls other than the
-harmless ones (`HARMLESS`, `SOUND` in `session.rs`; the menus' sound is dropped) give `Unported`, as do the race
+harmless ones (`HARMLESS`) and the sound functions (`SOUND`: played by the engine) give `Unported`, as do the race
 paths below (hunter races, ...), and a career race's payout. Check: `tests/session.rs` against `tools/session_trace.py`.
 
 ## Not ported

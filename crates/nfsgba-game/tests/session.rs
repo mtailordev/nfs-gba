@@ -6,7 +6,7 @@
 //! the menus run `main_frame` several times per video frame, a race frame takes about four), so the race is driven by
 //! game frames on our side, not by the video frame of the trace.
 
-use nfsgba_game::{race_setup::load_pre, session::Session};
+use nfsgba_game::session::Session;
 use serde_json::Value;
 
 const KEYS: [&str; 10] = ["A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L"];
@@ -93,10 +93,9 @@ fn game_visits(frames: &[Value]) -> Vec<Visit> {
 
 #[test]
 fn session_matches_the_game() {
-    let (Some(rom), Some(text), Some(pre)) = (
+    let (Some(rom), Some(text)) = (
         nfsgba_testkit::rom(),
         nfsgba_testkit::read_to_string("session/quickplay.json"),
-        nfsgba_testkit::fixture("race-init/circuit_pre.wram.bin"),
     ) else {
         return;
     };
@@ -112,9 +111,7 @@ fn session_matches_the_game() {
             .iter_mut()
             .for_each(|h| *h |= 1 << key);
     }
-    let prefix = pre.to_str().unwrap().strip_suffix(".wram.bin").unwrap().to_owned();
-    let template = load_pre(rom.clone(), std::path::Path::new(&prefix)).unwrap();
-    let mut s = Session::new(&rom, vec![0xFF; 512], template);
+    let mut s = Session::new(&rom, vec![0xFF; 512]);
 
     // Our run: the script's keys by video frame; the race is poked to its finish after `finish_at` game frames.
     let (mut ours, mut key, mut poked, mut race_at) = (vec![], None, false, None);
@@ -240,10 +237,9 @@ fn sync_choice(s: &mut Session, row: &Value) {
 /// No original to compare with: the pause hand-over itself is checked by `handovers_match_the_game`.
 #[test]
 fn session_pauses_and_resumes() {
-    let (Some(rom), Some(text), Some(pre)) = (
+    let (Some(rom), Some(text)) = (
         nfsgba_testkit::rom(),
         nfsgba_testkit::read_to_string("session/quickplay.json"),
-        nfsgba_testkit::fixture("race-init/circuit_pre.wram.bin"),
     ) else {
         return;
     };
@@ -257,12 +253,7 @@ fn session_pauses_and_resumes() {
             .iter_mut()
             .for_each(|h| *h |= 1 << key);
     }
-    let prefix = pre.to_str().unwrap().strip_suffix(".wram.bin").unwrap().to_owned();
-    let mut s = Session::new(
-        &rom,
-        vec![0xFF; 512],
-        load_pre(rom.clone(), std::path::Path::new(&prefix)).unwrap(),
-    );
+    let mut s = Session::new(&rom, vec![0xFF; 512]);
     let sync_at = t["sync_at"].as_u64().unwrap() as usize;
     for (f, keys) in held.iter().enumerate().take(2700) {
         if f == sync_at {
@@ -295,4 +286,188 @@ fn session_pauses_and_resumes() {
         s.frame(0).unwrap();
     }
     assert!(race_frames(&s) > paused + 20, "the race runs again");
+}
+
+/// The menus' sound against the game's (`tools/menu_audio_trace.py`: the sound buffer the DMA plays in each video frame
+/// of a headless power-on run) for the boot script into a Quick Play race. The engine runs from power-on and takes the
+/// menus' requests: the start-up, the intro sound and the button clicks are sample-exact frame by frame while the
+/// two runs are in step; then the menu music (requested by the flow, the same module) is sample-exact from its first
+/// sample for 600 frames, but 18 video frames later in the game (T1: the original's `main_frame` takes several video
+/// frames to draw a screen, ours takes one, so its screens come later).
+#[test]
+fn menu_audio_matches_the_game() {
+    let (Some(rom), Some(text), Some(path)) = (
+        nfsgba_testkit::rom(),
+        nfsgba_testkit::read_to_string("session/quickplay.json"),
+        nfsgba_testkit::fixture("session/quickplay-audio.bin"),
+    ) else {
+        return;
+    };
+    let orig = std::fs::read(path).unwrap();
+    let t: Value = serde_json::from_str(&text).unwrap();
+    let frames = orig.len() / 176;
+    let mut held = vec![0u16; 4600];
+    for press in t["script"].as_array().unwrap() {
+        let key = KEYS.iter().position(|k| *k == press[2].as_str().unwrap()).unwrap();
+        let first = press[0].as_u64().unwrap() as usize;
+        held[first..first + press[1].as_u64().unwrap() as usize]
+            .iter_mut()
+            .for_each(|h| *h |= 1 << key);
+    }
+    let mut s = Session::new(&rom, vec![0xFF; 512]);
+    let mut ours = vec![];
+    for keys in &held {
+        if s.race.is_some() {
+            break;
+        }
+        s.frame(*keys).unwrap();
+        ours.push(s.sound().to_vec());
+    }
+    let theirs = |f: usize| &orig[f * 176..][..176];
+    let audible = |b: &[u8]| b.iter().any(|&x| x != 0);
+    // The frames before the menu music: the start-up silence and the clicks.
+    let music = (100..ours.len())
+        .find(|&f| ours[f] != theirs(f))
+        .expect("the menu music");
+    assert!(
+        music > 800,
+        "sample-exact until the menu music is requested (frame {music})"
+    );
+    assert!(
+        (0..music).any(|f| audible(&ours[f])),
+        "the clicks are in the compared frames"
+    );
+    // The music: the first audible frame after it in each run, then 600 frames in step.
+    let (a, b) = (
+        (music..ours.len()).find(|&f| audible(&ours[f])).expect("music in ours"),
+        (music..frames)
+            .find(|&f| audible(theirs(f)))
+            .expect("music in the game"),
+    );
+    assert!(
+        b > a && b - a < 40,
+        "the game's menu is a few frames behind (ours {a}, game {b})"
+    );
+    assert!(
+        (0..600).all(|k| ours[a + k] == theirs(b + k)),
+        "600 frames of the menu music"
+    );
+}
+
+/// The session builds its race start from its own state: no captured machine state (a RAM image, `load_pre`,
+/// `Machine`, `Setup::load`) is read anywhere in `session.rs`. What remains a byte image is the heap arena (R24).
+#[test]
+fn session_uses_no_ram_image() {
+    let src = include_str!("../src/session.rs");
+    for banned in ["Machine", "load_pre", "Setup::load", "Mem::new", "wram"] {
+        assert!(!src.contains(banned), "session.rs mentions {banned}");
+    }
+}
+
+/// R24 measured: the race start on `Heap::menus` (the menus' blocks with zeroed scratch) instead of the game's heap
+/// (the 11 recorded first-race starts): the same atlases at the same places, and the same screen and OAM in each of 900
+/// frames, driving from frame 250 (the rim redraw reads next to its buffer). The bytes of the heap differ (menu scratch:
+/// about 44 KB) and the vehicle matrix slots hold other stale bytes; nothing visible depends on them.
+#[test]
+fn the_default_heap_is_invisible() {
+    use nfsgba_game::{
+        Flow, Timing,
+        race_init::{arena_view, race_start, start},
+        race_setup::{Heap, load_pre},
+    };
+    let (Some(rom), Some(pre)) = (
+        nfsgba_testkit::rom(),
+        nfsgba_testkit::fixture("race-init/circuit_pre.wram.bin"),
+    ) else {
+        return;
+    };
+    let dir = pre.parent().unwrap().to_owned();
+    let data = nfsgba_sim::data::GameData::parse(&rom);
+    let firsts = [
+        "circuit",
+        "circuitb",
+        "elimination",
+        "golf",
+        "ref",
+        "refb",
+        "rx7",
+        "sprint",
+        "sprintb",
+        "wingman",
+        "wingmanb",
+    ];
+    for name in firsts {
+        let (setup, display) = load_pre(rom.clone(), &dir.join(format!("{name}_pre"))).unwrap();
+        let records: Vec<[u8; 17]> = setup
+            .records
+            .iter()
+            .map(|r| {
+                let mut b = [0u8; 17];
+                b[..7].copy_from_slice(&[r.spoiler, r.u_01, r.rim, r.exhaust, r.u_04, r.paint, r.glass]);
+                b[7..].copy_from_slice(&r.upgrades);
+                b
+            })
+            .collect();
+        let mut other = setup.clone();
+        other.heap = Heap::menus(&rom);
+        other.heap.set_records(&records);
+        let (mut d0, mut d1) = (display.clone(), display.clone());
+        let (w0, w1) = (
+            race_start(&rom, &data, &setup, 6, &mut d0).unwrap(),
+            race_start(&rom, &data, &other, 6, &mut d1).unwrap(),
+        );
+        assert_eq!(arena_view(&w0), arena_view(&w1), "{name}: atlases and node table");
+        let (mut g0, mut g1) = (
+            start(rom.clone(), &setup, display.clone(), 6).unwrap(),
+            start(rom.clone(), &other, display, 6).unwrap(),
+        );
+        for f in 0..900u32 {
+            let keys = if f < 250 {
+                0
+            } else {
+                1 | [0x10u16, 0x20, 0][(f as usize / 40) % 3]
+            };
+            let (r0, r1) = (
+                g0.frame(keys, &Timing::steady()).unwrap(),
+                g1.frame(keys, &Timing::steady()).unwrap(),
+            );
+            assert!(matches!((r0, r1), (Flow::Racing, Flow::Racing)));
+            assert!(g0.screen() == g1.screen() && g0.oam == g1.oam, "{name}: frame {f}");
+        }
+    }
+}
+
+/// A second race in a session: the first race's player atlas and rim buffer stay on the heap (as in the recorded
+/// second-race starts) and the second start runs from that heap.
+#[test]
+fn a_second_race_starts_from_the_first_ones_heap() {
+    use nfsgba_game::{
+        Flow, Timing,
+        race_init::start,
+        race_setup::{Display, Heap, Setup},
+    };
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let records = [[0u8; 17]; 15];
+    let mut first = Setup::menus(
+        &rom,
+        nfsgba_audio::Engine::new(nfsgba_audio::Rom(&rom), 16, 16),
+        100,
+        0,
+        &records,
+        None,
+    );
+    first.choose(1, 3, 0, 0);
+    let display = Display::from_screen(&Default::default());
+    let mut game = start(rom.clone(), &first, display.clone(), 6).unwrap();
+    for _ in 0..300 {
+        assert!(matches!(game.frame(0, &Timing::steady()).unwrap(), Flow::Racing));
+    }
+    let previous = Heap::after_race(&rom, &game.world).expect("the atlas and the rim buffer stay allocated");
+    let mut second = Setup::menus(&rom, game.world.audio.clone(), 200, 0, &records, Some(&previous));
+    second.choose(1, 3, 0, 0);
+    assert_eq!(second.atlases[0], previous.1[0]);
+    let mut game = start(rom.clone(), &second, display, 6).unwrap();
+    for _ in 0..300 {
+        assert!(matches!(game.frame(0, &Timing::steady()).unwrap(), Flow::Racing));
+    }
 }

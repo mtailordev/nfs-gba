@@ -161,3 +161,194 @@ pub fn load_pre(rom: Vec<u8>, prefix: &Path) -> io::Result<(Setup, Display)> {
         .ok_or(io::ErrorKind::InvalidData)?;
     Ok((Setup::load(&machine), Display::new(&machine, io)))
 }
+
+/// The blocks the boot and the menus keep on the heap for the whole session, in the order they were allocated (the
+/// profile first, its 15 car records at `+0xF9`). Identical in all 14 recorded race starts.
+const MENU_BLOCKS: [u32; 12] = [1260, 264, 512, 512, 1024, 256, 256, 8, 54784, 9900, 3840, 24];
+/// The heap's node table and data area (`heap_init(0x02000000, 0x02000800, 0x3F800)`).
+const HEAP_NODES: u32 = 0x0200_0000;
+const HEAP_DATA: u32 = 0x0200_0800;
+
+impl Heap {
+    /// NOT 1:1 (R24, G1c): the heap of a first race after power-on. The game's heap after `heap_init`, then the
+    /// blocks the menus hold (`MENU_BLOCKS`) at the addresses the game's allocator gives them. The bytes of these
+    /// blocks and of the blocks the menus allocated and freed are zero (the game's are menu scratch); the race's
+    /// blocks land where they do in the game's heap (measured: `docs/FIDELITY.md` R24).
+    pub fn menus(rom: &[u8]) -> Heap {
+        let mut m = nfsgba_sim::mem::Mem::new(rom.to_vec(), vec![0; 0x4_0000], vec![0; 0x8000]);
+        m.set_u32(0x0300_64CC, HEAP_NODES);
+        m.set_u32(0x0300_64D0, HEAP_DATA);
+        // `heap_init`: node 0 anchors the list (words 0..1), node 1 ends it at the last word.
+        let last = 0xFDFF;
+        for (node, [own, next, start, end]) in [(0, [0, 1, 0, 1]), (1, [1, 0xFFFF, last, last])] {
+            for (k, v) in [own, next, start, end].into_iter().enumerate() {
+                m.set_u16(HEAP_NODES + 8 * node + 2 * k as u32, v);
+            }
+        }
+        let profile = nfsgba_sim::heap::alloc_zeroed(&mut m, MENU_BLOCKS[0]);
+        for &size in &MENU_BLOCKS[1..] {
+            nfsgba_sim::heap::alloc_zeroed(&mut m, size);
+        }
+        Heap {
+            ewram: m.ewram,
+            nodes: HEAP_NODES,
+            data: HEAP_DATA,
+            records: profile + 0xF9,
+        }
+    }
+
+    /// The heap after a race: the race's blocks freed (their bytes stay, as in the game), the menus' blocks and the
+    /// player's atlas and rim buffer kept, which the next race start frees or reuses. Returns them (heap offsets).
+    pub fn after_race(rom: &[u8], w: &crate::world::World) -> Option<(Heap, [u32; 2])> {
+        let mut m = nfsgba_sim::mem::Mem::new(rom.to_vec(), w.heap.clone(), vec![0; 0x8000]);
+        let (nodes, data) = (w.arena[0], w.arena[1]);
+        m.set_u32(0x0300_64CC, nodes);
+        m.set_u32(0x0300_64D0, data);
+        let (atlas, rim) = (w.atlases[0], w.rim_pixels[0]);
+        let mut blocks = vec![];
+        let mut node = m.u16(nodes + 2) as u32;
+        while m.u16(nodes + 8 * node + 2) != 0xFFFF && blocks.len() < 256 {
+            blocks.push((m.u16(nodes + 8 * node + 4) as u32, node));
+            node = m.u16(nodes + 8 * node + 2) as u32;
+        }
+        let addr = |start: u32| data + 4 * start;
+        let kept = |offset: u32| {
+            blocks
+                .iter()
+                .any(|&(s, _)| offset != 0 && heap_offset(addr(s)) == offset)
+        };
+        if !(kept(atlas) && kept(rim)) || blocks.len() < MENU_BLOCKS.len() {
+            return None;
+        }
+        for &(start, _) in &blocks[MENU_BLOCKS.len()..] {
+            if ![atlas, rim].contains(&heap_offset(addr(start))) {
+                nfsgba_sim::heap::free(&mut m, addr(start));
+            }
+        }
+        let heap = Heap {
+            ewram: m.ewram,
+            nodes,
+            data,
+            records: w.arena[2],
+        };
+        Some((heap, [atlas, rim]))
+    }
+
+    /// The car records in the profile block.
+    pub fn set_records(&mut self, records: &[[u8; 17]]) {
+        let at = (self.records & 0x3_FFFF) as usize;
+        for (k, r) in records.iter().enumerate() {
+            self.ewram[at + 17 * k..][..17].copy_from_slice(r);
+        }
+    }
+}
+
+impl Setup {
+    /// NOT 1:1 (R24, G1c): the race start's input for a game that has run only the boot and the menus since power-on
+    /// (and perhaps a race: `previous`, [`Heap::after_race`]), without a capture. The race choice is
+    /// [`crate::session::apply_choice`]'s; `audio` is the running sound engine and `ticks` the tick counter (the rand
+    /// seed); `keys` the keys held (GBA layout); `records` the car records. Everything else is the game's constant or
+    /// zero: `dt` and the AI/HUD constants the boot sets (the same in all recorded captures), no earlier race's
+    /// camera, results or messages.
+    pub fn menus(
+        rom: &[u8],
+        audio: Engine,
+        ticks: u32,
+        keys: u16,
+        records: &[[u8; 17]],
+        previous: Option<&(Heap, [u32; 2])>,
+    ) -> Setup {
+        let (mut heap, [atlas, rim]) = previous.cloned().unwrap_or_else(|| (Heap::menus(rom), [0; 2]));
+        heap.set_records(records);
+        let mut g = CarGlobals {
+            catch_up: 1,
+            spin_bias: 240,
+            dt: 100,
+            u_6170: 128,
+            u_6194: 32,
+            u_6198: 400,
+            hunter_damage: 576,
+            ..CarGlobals::default()
+        };
+        g.input[0] = keys | 0xFC00;
+        Setup {
+            g,
+            wingman: 0,
+            cars: [0; 4],
+            paints: [0; 4],
+            records: vec![CarRecord::default(); 15],
+            music: 0,
+            profile: CarProfile::default(),
+            contact: 0,
+            needle_scale: 0,
+            camera: Camera::default(),
+            screen: Screen {
+                size: [240, 160],
+                mode: 8,
+                pages: [0x0600_0000, 0x0600_A000],
+                ..Screen::default()
+            },
+            input: Input {
+                pressed: 0,
+                held: keys | 0xFC00,
+            },
+            query: Query::default(),
+            rect: [0; 4],
+            sky: 0,
+            hud: Hud {
+                units: 0,
+                race_state_changed: 0,
+                language: 0,
+                enabled: 0,
+                screen: 0,
+                objects: Vec::new(),
+                messages: Default::default(),
+                oam: [[0; 4]; 128],
+                tile_base: 0x200,
+            },
+            lp: LoopGlobals {
+                ticks,
+                vblanks: ticks,
+                u_5724: ticks,
+                irq: 1,
+                game_state: 5,
+                ..LoopGlobals::default()
+            },
+            audio,
+            gradient: vec![0; 120],
+            rim_pixels: [rim, 0, 0, 0],
+            atlases: [atlas, 0, 0],
+            slot_counter: 0,
+            heap,
+        }
+    }
+}
+
+impl Display {
+    /// The display memory of a menu screen: its palettes, the two pages and the OBJ tiles in VRAM, the shadow OAM
+    /// and the registers the menus set.
+    pub fn from_screen(s: &crate::menu::draw::Screen) -> Display {
+        let mut vram = vec![0u8; 0x1_8000];
+        for (k, page) in s.pages.iter().enumerate() {
+            vram[0xA000 * k..][..page.len()].copy_from_slice(page);
+        }
+        vram[0x1_4000..][..s.obj_tiles.len()].copy_from_slice(&s.obj_tiles);
+        let mut io = [0u8; 0x400];
+        for (at, v) in [
+            (0, s.dispcnt),
+            (4, s.dispstat),
+            (0x50, s.bldcnt),
+            (0x52, s.bldalpha),
+            (0x10E, s.timer3),
+        ] {
+            io[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        }
+        let le = |h: &[u16]| h.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        Display {
+            palette: le(&s.palette),
+            vram,
+            oam: le(&s.oam.concat()),
+            io,
+        }
+    }
+}

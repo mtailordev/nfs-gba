@@ -65,7 +65,9 @@ capture of the menus (the 14 pre-states) and `Setup::choose(env, route, mode, ca
 
 `Display` is the video memory the start writes: VRAM (page clears, sprite tiles), OAM, I/O, and the untouched palette.
 
-A race from the ROM alone needs the boot and menu code that produce these fields, above all the heap's block layout.
+A race from the ROM alone: `Setup::menus` (`race_setup.rs`) builds every field the menus do not choose (boot constants, the
+session's sound engine, a heap from `Heap::menus`/`Heap::after_race`), `Display::from_screen` the display memory from the
+menus' typed `Screen`; measured against the 14 captures in FIDELITY R24. The session needs no capture.
 
 `race_start` returns the race's typed `World` (`nfsgba-game/src/world.rs`), which `Game` runs on. The heap arena is the
 one byte image left (`World::heap`, R24): the start allocates in it as the game's heap does and writes what lies around
