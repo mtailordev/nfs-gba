@@ -71,6 +71,10 @@ Viewer keys in a race: **O** switches to the original 240×160 frame, **G** togg
 | `tools/` | ROM vault, headless emulator driver, recorders, function oracle, coverage, the merge gate |
 | `docs/` | Formats, engine notes, the address map, decisions and the ledger ([index](docs/INDEX.md)) |
 
+## Licence
+
+The code is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your choice. This covers our code only, not the game or its data.
+
 ## Legal
 
 You need your own copy of the cartridge. Don't open issues or pull requests containing ROMs, extracted assets or save files. *Need for Speed* and *Carbon* are trademarks of Electronic Arts.
