@@ -116,3 +116,37 @@ fn effect_sprites_know_their_car() {
     // (Cleared before each frame, so every owner was set by this frame.)
     assert_eq!(named, owned, "owners that name no entity");
 }
+
+/// R29: a paused route start shows the game's own tint. `paused_palette` equals what `Game::tint` writes to palette
+/// RAM once the start's fade is over (all 256 colours), the tint changed the loaded palette, and the race's blend
+/// register is the game's (`Game::bldalpha`, 0x0D0F).
+#[test]
+fn a_paused_start_is_tinted_by_the_game() {
+    let (Some(rom), Some(_)) = (
+        nfsgba_testkit::rom(),
+        nfsgba_testkit::fixture("race-init/circuit_pre.wram.bin"),
+    ) else {
+        return;
+    };
+    let play = Play::grid(rom.clone(), 11, 23, Handle::default(), false).unwrap();
+    let shown = paused_palette(&play.game);
+    // The same start again (deterministic), on which the game's own `tint` runs.
+    let mut tinted = Play::grid(rom, 11, 23, Handle::default(), false).unwrap().game;
+    tinted.world.g.fade = 0;
+    tinted.tint();
+    let ram: Vec<u16> = tinted
+        .palette
+        .chunks(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    assert_eq!(shown, ram[..256], "the paused start's palette is the game's tint");
+    let loaded: Vec<u16> = play
+        .game
+        .palette
+        .chunks(2)
+        .take(256)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    assert_ne!(shown, loaded, "the tint changed the palette");
+    assert_eq!(play.game.bldalpha, 0x0D0F);
+}

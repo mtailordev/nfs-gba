@@ -589,8 +589,8 @@ fn hud_blend_is_the_games_blend() {
                 world.resource::<crate::Smooth>(),
             );
             let blend = (
-                u32::from(play.bldalpha & 0x1F).min(16),
-                u32::from(play.bldalpha >> 8 & 0x1F).min(16),
+                u32::from(play.game.bldalpha & 0x1F).min(16),
+                u32::from(play.game.bldalpha >> 8 & 0x1F).min(16),
             );
             let objects = play::hud_objects(play, race, smooth);
             // OBJ priority against BG2 (G2): the race sets BG2CNT's priority to 0 (`mgba/race.io.bin`: DISPCNT 0x1F44,

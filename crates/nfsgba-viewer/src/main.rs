@@ -1529,21 +1529,14 @@ fn tint(
         Some(m) => paint::race_palette(&base, m),
         None => base,
     };
-
-    // A paused race: the game's base palette (city and car ramps) with the light tint applied here; a race the game
-    // steps is tinted by the game (above).
-    // NOT 1:1 (R29): `Game::tint` is private to `nfsgba-game` and runs only in the race frame's tail, which a paused
-    // start never reaches, so the viewer applies the tint itself.
-    // NOT 1:1 (R17): for 1–7 scanlines per game frame the game shows the tinted glass instead.
-    let base = if race.active {
-        let setup = &race.setup;
-        let mut base = view::base_palette(&play.game.world);
-        [base[192], base[208]] = paint::glass_shades(&tint.rom, setup.record[5], setup.racers[0].heading);
-        base
+    // A paused race: the game's own tint (`Game::tinted_palette`); anything else (the free camera, the showroom) is
+    // tinted here.
+    let palette = if race.active {
+        play::paused_palette(&play.game)
     } else {
-        tint.raw.clone()
+        ram(tint.raw.clone())
     };
-    let palette = ram(base);
+    // A paused race: the game's own tint (`Game::tinted_palette`); anything else (the free camera, the showroom) is    // tinted here.    let palette = if race.active {        play::paused_palette(&play.game)    } else {        ram(tint.raw.clone())    };
     if palette != tint.written
         && let Some(mut image) = images.get_mut(&tint.palette)
     {
