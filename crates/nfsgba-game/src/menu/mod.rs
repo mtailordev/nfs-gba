@@ -433,7 +433,8 @@ mod tests {
 
     /// Oracle cases saved by `tools/ui_menu_oracle.py <name>`.
     fn cases(name: &str) -> Option<Vec<serde_json::Value>> {
-        let text = nfsgba_testkit::read_to_string(&format!("menus3/{name}.jsonl"))?;
+        let path = if name.contains('/') { format!("{name}.jsonl") } else { format!("menus3/{name}.jsonl") };
+        let text = nfsgba_testkit::read_to_string(&path)?;
         Some(text.lines().map(|l| serde_json::from_str(l).unwrap()).collect())
     }
 
@@ -530,6 +531,12 @@ mod tests {
         replay("garage");
     }
 
+    /// `upgrades_changed`, the upgrade pages' automatic purchase: `tools/oracle/cases.py upgrades`.
+    #[test]
+    fn upgrades_match_the_game() {
+        replay("reach/upgrades");
+    }
+
     /// `map_draw` and the map screens' draw handler: `tools/oracle/cases.py garage` (the `mapdraw` set).
     #[test]
     fn map_drawing_matches_the_game() {
@@ -558,7 +565,7 @@ mod tests {
                 Gba::from_dump(rom.clone(), &prefix).unwrap()
             });
             let mut g = base.clone();
-            g.garage_typed = name == "garage";
+            g.garage_typed = name == "garage" || name == "reach/upgrades";
             g.map_typed = name == "mapdraw";
             for m in c["mem"].as_array().unwrap() {
                 for (i, &b) in bytes(&m[1]).iter().enumerate() {
@@ -610,7 +617,7 @@ mod tests {
                     None
                 }
                 "0x812c81c" | "0x812c5c4" | "0x812d960" | "0x812c8a8" | "0x812c984" | "0x81300e0" | "0x8133d30"
-                | "0x812d564" | "0x81435c4" => {
+                | "0x812d564" | "0x81435c4" | "0x81302c4" => {
                     let a: Vec<u32> = c["args"]
                         .as_array()
                         .unwrap()
@@ -626,6 +633,7 @@ mod tests {
                             None
                         }
                         "0x812c984" => Some(garage::new_part(st, h, a[0] as i32)),
+                        "0x81302c4" => Some(garage::upgrades_changed(st, h, a[0] != 0)),
                         "0x81300e0" => Some(garage::list_item_new(st, h, a[0], a[1])),
                         "0x8133d30" => {
                             garage::car_stats_draw(st, h, a[0] as i32, a[1] as i32, a[2] as i32, a[3]);

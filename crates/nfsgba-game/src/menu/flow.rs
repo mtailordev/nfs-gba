@@ -95,6 +95,11 @@ pub trait Host {
     fn draw_car(&mut self, _st: &mut MenuState, x: u32, y: u32, z: u32) {
         self.call(0x0812_BFA4, &[x, y, z]);
     }
+    /// `upgrades_changed` (`0x081302C4`): the upgrade pages' automatic purchase; the default logs the call,
+    /// [`super::typed::TypedHost`] runs [`super::garage::upgrades_changed`].
+    fn upgrades_changed(&mut self, _st: &mut MenuState, second: u32) -> u32 {
+        self.call(0x0813_02C4, &[second])
+    }
     /// `quick_race_random` (`0x0812FFB0`): the Quick Play settings; the default logs the call.
     fn quick_race_random(&mut self, _st: &mut MenuState) {
         self.call(0x0812_FFB0, &[]);

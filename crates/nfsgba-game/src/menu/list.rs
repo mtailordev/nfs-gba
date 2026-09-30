@@ -12,7 +12,6 @@ use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_BOX, TEXT_MENU, WORLD};
 
 const LIST_PAGES: u32 = 0x087E_544C;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
-const UPGRADES_CHANGED: u32 = 0x0813_02C4; // (performance page?)
 
 /// An i16 ROM read, sign-extended as the game passes it.
 fn s16(h: &impl Host, a: u32) -> u32 {
@@ -389,7 +388,7 @@ fn confirmed_message(st: &mut MenuState, h: &mut impl Host, action: i32) {
     if action as i16 == 0x8B {
         if st.profile.upgrades_saving == 0 {
             st.profile.upgrades_saving = 1;
-            let changed = h.call(UPGRADES_CHANGED, &[(st.g.screen != 0x1D) as u32]);
+            let changed = h.upgrades_changed(st, (st.g.screen != 0x1D) as u32);
             st.g.upgrades_changed = changed;
             message_box_open(st, 1, 0x376, changed);
         } else {

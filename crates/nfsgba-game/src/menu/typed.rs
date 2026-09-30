@@ -282,6 +282,9 @@ impl Host for TypedHost<'_> {
     fn buy_unlock(&mut self, st: &mut MenuState, id: u32) {
         super::garage::buy(st, self.rom, id);
     }
+    fn upgrades_changed(&mut self, st: &mut MenuState, second: u32) -> u32 {
+        super::garage::upgrades_changed(st, self, second != 0)
+    }
     fn new_mark(&mut self, st: &mut MenuState, screen: u32, item: u32) -> u32 {
         super::garage::list_item_new(st, self, screen, item)
     }

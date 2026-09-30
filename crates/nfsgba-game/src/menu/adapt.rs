@@ -148,6 +148,12 @@ impl flow::Host for GbaHost<'_> {
             self.call(0x0812_C8A8, &[id]);
         }
     }
+    fn upgrades_changed(&mut self, st: &mut MenuState, second: u32) -> u32 {
+        if self.0.garage_typed {
+            return garage::upgrades_changed(st, self, second != 0);
+        }
+        self.call(0x0813_02C4, &[second])
+    }
     fn new_mark(&mut self, st: &mut MenuState, screen: u32, item: u32) -> u32 {
         if self.0.garage_typed {
             return garage::list_item_new(st, self, screen, item);

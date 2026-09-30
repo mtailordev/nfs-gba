@@ -234,7 +234,8 @@ layout! {
         0x496 slot_names: [[u8; 9]; 2],
         /// Unlock bits by id.
         0x42D unlocks: [u8; 32],
-        0x44D unlocks_more: [u8; 16],
+        /// Bytes 9.. (`+0x456`) double as `upgrades_changed`'s list of ten u16 part ids (the game's scratch).
+        0x44D unlocks_more: [u8; 30],
     }
 }
 
@@ -274,7 +275,7 @@ impl MenuProfile {
         (self.unlock_byte((id >> 3) as usize) as i32 >> (id & 7) & 1 == 0) as u32
     }
 
-    /// Byte `i` of the unlock bits (0 past the declared 48).
+    /// Byte `i` of the unlock bits (0 past the declared 62).
     pub fn unlock_byte(&self, i: usize) -> u8 {
         let byte = self
             .unlocks

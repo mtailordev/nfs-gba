@@ -18,7 +18,7 @@ sys.path[:0] = [str(HERE), str(HERE.parent)]  # the set modules import `oracle` 
 SETS = {"prove": "prove", "car": "car", "fuzz": "fuzz", "calls": "calls", "suspension": "suspension", "ai": "ai",
         "rules": "rules", "unlock": "unlock", "synth": "synth", "menus": "menus", "draw": "draw", "fill-rect-hw": "fill_rect_hw",
         "race-init": "race_init", "race-init-inputs": "race_init_inputs", "game-edges": "game_edges", "game-countdown": "game_countdown",
-        "game-end": "game_end", "garage": "garage", "turntable": "turntable", "scene": "scene", "power-on": "scene_power_on", "save": "save"}
+        "game-end": "game_end", "garage": "garage", "upgrades": "upgrades", "turntable": "turntable", "scene": "scene", "power-on": "scene_power_on", "save": "save"}
 
 
 def module(name: str):

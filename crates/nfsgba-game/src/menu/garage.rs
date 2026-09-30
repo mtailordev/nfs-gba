@@ -385,6 +385,50 @@ pub fn list_item_new(st: &mut MenuState, h: &mut impl Host, screen: u32, item: u
     any
 }
 
+/// `upgrades_changed` (`FUN_081302C4`, the upgrade pages' first item, action 0x8B): ten rounds, each (while profile
+/// `+0x12` is set) listing the parts of the item ids `ITEMS[0..10]` (`second`: `ITEMS[10..17]`) the car can now
+/// unlock at profile `+0x456` (u16 each; the game's scratch overlaps the unlock bits, kept), shuffling the list with
+/// 20 random swaps when it has two or more, then buying each one not locked (`unlock_state < 2`). Returns the number
+/// bought.
+pub fn upgrades_changed(st: &mut MenuState, h: &mut impl Host, second: bool) -> u32 {
+    const LIST: usize = 0x456 - 0x44D; // in `unlocks_more`
+    let get = |p: &MenuProfile, k: usize| u16::from_le_bytes([p.unlocks_more[LIST + 2 * k], p.unlocks_more[LIST + 2 * k + 1]]);
+    let set = |p: &mut MenuProfile, k: usize, v: u16| {
+        p.unlocks_more[LIST + 2 * k..LIST + 2 * k + 2].copy_from_slice(&v.to_le_bytes())
+    };
+    let (first, count) = if second { (10, 7) } else { (0, 10) };
+    let mut bought = 0;
+    for _ in 0..10 {
+        let mut n = 0;
+        if st.profile.u_12 != 0 {
+            for k in 0..count {
+                let id = rom_u16(h.rom(), ITEMS + 2 * (first + k)) as i32;
+                let part = new_part(st, h, id);
+                if part != 0 {
+                    set(&mut st.profile, n, part as u16);
+                    n += 1;
+                }
+            }
+        }
+        if n > 1 {
+            for _ in 0..20 {
+                let a = (flow::rand_table(st, h) % n as u32) as usize;
+                let b = (flow::rand_table(st, h) % n as u32) as usize;
+                let (x, y) = (get(&st.profile, a), get(&st.profile, b));
+                set(&mut st.profile, a, y);
+                set(&mut st.profile, b, x);
+            }
+        }
+        for k in 0..n {
+            if state(st, h.rom(), get(&st.profile, k) as u32) < 2 {
+                bought += 1;
+                buy(st, h.rom(), get(&st.profile, k) as u32);
+            }
+        }
+    }
+    bought
+}
+
 /// `garage_copy_car_record` (`FUN_0812D564`): the record of the garage car to the working copy.
 pub fn copy_car_record(st: &mut MenuState) {
     st.g.garage_car = (0..17)
