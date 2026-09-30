@@ -3,7 +3,7 @@
     .venv/Scripts/python.exe tools/oracle/coverage_report.py [FOLDER]     # default coverage3 (record.py coverage output)
 
 Reads FOLDER/coverage.csv (address, name, kind, one hits column per scenario), looks every function up in crates/
-(its address as any 0x literal, `_` separators allowed, or its symbol name from docs/engine/symbols.csv as a word),
+(its address as any 0x literal or bare 08xxxxxx / 03xxxxxx hex (`FUN_0813d1f0`), `_` separators allowed, or its symbol name from docs/engine/symbols.csv as a word),
 prints a table (all scenarios, the four original ones, the career ones) and writes FOLDER/unported.csv: the reached
 functions with no counterpart.
 """
@@ -20,7 +20,9 @@ OLD = ["boot", "menu_to_race", "drive", "pause_quit"]
 
 def rust_words():
     text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (ROOT / "crates").rglob("*.rs"))
+    # any 0x literal, or a bare 6-8 digit hex address in a comment (`0812B5F0`), `_` separators allowed
     addrs = {int(m.replace("_", ""), 16) for m in re.findall(r"0x([0-9a-fA-F][0-9a-fA-F_]*)", text)}
+    addrs |= {int(m, 16) for m in re.findall(r"(?<![0-9a-fA-F])(0[38][0-9a-fA-F]{6})(?![0-9a-fA-F])", text)}
     return addrs, set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
 
 

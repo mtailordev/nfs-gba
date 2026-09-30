@@ -24,8 +24,16 @@ fn redraw<'a>(rom: &'a [u8], st: &mut MenuState, blink: u16) -> TypedHost<'a> {
 /// Page bytes, base colours and OAM entries of the host that differ from the capture.
 fn diff(h: &TypedHost, shot: &Screen) -> [usize; 3] {
     [
-        h.screen.pages[1].iter().zip(shot.shown()).filter(|(a, b)| a != b).count(),
-        h.scene.palettes[0].iter().zip(&shot.palette[..256]).filter(|(a, b)| a != b).count(),
+        h.screen.pages[1]
+            .iter()
+            .zip(shot.shown())
+            .filter(|(a, b)| a != b)
+            .count(),
+        h.scene.palettes[0]
+            .iter()
+            .zip(&shot.palette[..256])
+            .filter(|(a, b)| a != b)
+            .count(),
         h.screen.oam.iter().zip(&shot.oam).filter(|(a, b)| a != b).count(),
     ]
 }
@@ -83,7 +91,10 @@ fn power_on_frames_match_the_game() {
                 break;
             }
         }
-        assert_eq!(d, [0; 3], "frame {frame} screen {screen}: page, base palette, shadow OAM");
+        assert_eq!(
+            d, [0; 3],
+            "frame {frame} screen {screen}: page, base palette, shadow OAM"
+        );
         history.push(st.clone());
         if *screen != 48 {
             continue;
@@ -98,7 +109,10 @@ fn power_on_frames_match_the_game() {
             intro::update(s, h);
             assert_eq!(h.second_colour(4), ram_c4, "frame {frame}: blink colour");
             assert_eq!(s.g.blink_dir, st.g.blink_dir, "frame {frame}: blink direction");
-            assert_eq!(*shown, shot.palette[4], "frame {frame}: shown palette is the step before");
+            assert_eq!(
+                *shown, shot.palette[4],
+                "frame {frame}: shown palette is the step before"
+            );
             *shown = ram_c4;
         } else {
             let h = redraw(&rom, &mut st.clone(), ram_c4);
@@ -106,7 +120,10 @@ fn power_on_frames_match_the_game() {
         }
     }
     eprintln!("frames behind the shown page: {lag:?}");
-    assert!(lag.iter().all(|&l| l <= 2), "the shown page is up to two frames behind the state");
+    assert!(
+        lag.iter().all(|&l| l <= 2),
+        "the shown page is up to two frames behind the state"
+    );
 }
 
 /// The garage screens (`tools/oracle/garage_capture.py`: a headless career run through the part shop 0x13, the upgrade
