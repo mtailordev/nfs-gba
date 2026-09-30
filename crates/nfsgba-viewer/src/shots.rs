@@ -154,6 +154,8 @@ pub struct Report {
     /// Interior pixels of the exact frame's geometry (the 5×5 block around it is geometry too) where the GPU view
     /// shows only the sky: gaps and seams.
     pub holes: Vec<usize>,
+    /// The holes that are at most two pixels thin between GPU geometry (a hairline seam), not an edge shifted.
+    pub seams: Vec<usize>,
     pub covered: usize,
     /// The exact frame in RGB.
     pub picture: Vec<Rgb>,
@@ -195,8 +197,8 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
         screen
     };
     let full = draw(false, None, None);
-    let sky: Vec<Rgb> = (0..W * H).map(|p| colour(skies.screen[p], p)).collect();
     let exact: Vec<Rgb> = (0..W * H).map(|p| colour(full[p], p)).collect();
+    let gpu_alpha: Vec<u8> = gpu.chunks(4).map(|c| c[3]).collect();
     let gpu: Vec<Rgb> = gpu.chunks(4).map(|c| [c[0], c[1], c[2]]).collect();
     let around = |p: usize, r: i32| {
         let (x, y) = ((p % W) as i32, (p / W) as i32);
@@ -212,12 +214,23 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
         picture: exact.clone(),
         ..Default::default()
     };
-    let is_geometry = |p: usize| exact[p] != sky[p];
+    // Geometry: the exact frame drew something over the skyline. Row 159 is left out: the game draws it only when a
+    // wall's bottom edge lies within row 158, which a continuous surface does not reproduce (R27).
+    let is_geometry = |p: usize| full[p] != skies.screen[p];
+    let sky_shown = |p: usize| gpu_alpha[p] < 255;
     for p in 0..W * H {
         if is_geometry(p) {
             report.covered += 1;
-            if gpu[p] == sky[p] && around(p, 2).all(is_geometry) {
+            if p / W < H - 1 && sky_shown(p) && around(p, 2).all(is_geometry) {
                 report.holes.push(p);
+                let solid = |dx: i32, dy: i32| {
+                    let (x, y) = ((p % W) as i32 + dx, (p / W) as i32 + dy);
+                    (0..W as i32).contains(&x) && (0..H as i32).contains(&y) && !sky_shown(y as usize * W + x as usize)
+                };
+                let thin = |dx: i32, dy: i32| (solid(-dx, -dy) || solid(-2 * dx, -2 * dy)) && (solid(dx, dy) || solid(2 * dx, 2 * dy));
+                if thin(1, 0) || thin(0, 1) {
+                    report.seams.push(p);
+                }
             }
         }
     }
@@ -241,7 +254,22 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
     for (k, p) in visible.portals.iter().enumerate().filter(|(_, p)| p.flags & 8 == 0) {
         object(format!("sector {} (entry {k})", p.sector), draw(true, None, Some(k)), &world_only, &|p| full[p] == world_only[p]);
     }
+    for &p in report.seams.iter().step_by(4).take(6) {
+        let who = |q: usize| -> Vec<String> {
+            report.objects.iter().filter(|o| o.pixels.contains(&q)).map(|o| o.name.clone()).collect()
+        };
+        eprintln!("      seam ({}, {}) idx {}: {:?}; above {:?}; below {:?}", p % W, p / W, full[p], who(p), who(p - W), who(p + W));
+    }
     report
+}
+
+#[test]
+fn scratch_sector() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let s = &nfsgba_formats::city(&rom)[760];
+    for (k, w) in s.walls.iter().enumerate() {
+        eprintln!("{k}: x {} z {} floor {} ceil {} top {:?} bottom {:?} flags {:x} link {} mat {}", w.x, w.z, w.floor_y, w.ceiling_y, w.top, w.bottom, w.flags, w.link, w.material);
+    }
 }
 
 /// GPU view, exact frame and their difference (holes red, other mismatches grey), side by side at 2×.
@@ -319,14 +347,21 @@ fn gpu_view_matches_the_exact_frame() {
             let r = compare(&rig, &rom, &gpu);
             let worst = r.objects.iter().map(|o| o.present).fold(1.0, f32::min);
             eprintln!(
-                "{name} {k:>3}: exact {:.1}% near {:.1}%, {} objects (worst {:.0}% present), {} holes of {} covered",
+                "{name} {k:>3}: exact {:.1}% near {:.1}%, {} objects (worst {:.0}% present), {} holes ({} seam pixels) of {} covered",
                 100.0 * r.exact,
                 100.0 * r.near,
                 r.objects.len(),
                 100.0 * worst,
                 r.holes.len(),
+                r.seams.len(),
                 r.covered
             );
+            let mut rows = [0; H];
+            r.holes.iter().for_each(|p| rows[p / W] += 1);
+            let heavy: Vec<_> = rows.iter().enumerate().filter(|(_, n)| **n >= 10).collect();
+            if !heavy.is_empty() {
+                eprintln!("    hole rows (row, count): {heavy:?}");
+            }
             for o in r.objects.iter().filter(|o| o.present < 0.8) {
                 eprintln!("    {}: {} px, {:.0}% present", o.name, o.pixels.len(), 100.0 * o.present);
             }

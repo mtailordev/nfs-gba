@@ -455,7 +455,22 @@ fn setup(
             let b = &w[(k + 1) % w.len()];
             let (ax, az, bx, bz) = (a.x as f32, a.z as f32, b.x as f32, b.z as f32);
             let t = &textures[a.material as usize];
-            let uv = a.uv(t.width, t.height).map(Vec2::from);
+            let mut uv = a.uv(t.width, t.height).map(Vec2::from);
+            // The wall's edges sit exactly on texel boundaries, and float error there can push a fragment onto the
+            // wrapped texel on the far side (the first row is often transparent: a hairline of sky at the wall's
+            // foot). Inset the corners by a fraction of a texel. Corners: 0 top start, 1 top end, 2 bottom end,
+            // 3 bottom start.
+            const INSET: f32 = 0.02;
+            let inset = |from: &[usize; 2], to: &[usize; 2], uv: &mut [Vec2; 4], axis: usize| {
+                let toward = (uv[to[0]][axis] + uv[to[1]][axis]) - (uv[from[0]][axis] + uv[from[1]][axis]);
+                let d = INSET * toward.signum() / (if axis == 0 { t.width } else { t.height }) as f32;
+                uv[from[0]][axis] += d;
+                uv[from[1]][axis] += d;
+                uv[to[0]][axis] -= d;
+                uv[to[1]][axis] -= d;
+            };
+            inset(&[0, 1], &[3, 2], &mut uv, 1);
+            inset(&[0, 3], &[1, 2], &mut uv, 0);
             let front = [
                 (world(ax, a.top[0], az), uv[0]),
                 (world(ax, a.bottom[0], az), uv[3]),
@@ -1019,7 +1034,7 @@ fn game_camera(
     };
     *camera.0 = game::frame_transform(&frame, world);
     // The view's focal length and near plane are the game's (the speed effect widens the focal length).
-    let (focal, near) = (frame.view.focal as f32, frame.view.near as f32 * SCALE);
+    let (focal, near) = (frame.view.focal as f32, frame.view.near as f32 * SCALE / 4.0);
     if let Projection::Custom(p) = &mut *camera.1
         && let Some(p) = p.get_mut::<GbaProjection>()
         && (p.focal, p.near) != (focal, near)

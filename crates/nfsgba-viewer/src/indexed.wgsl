@@ -33,6 +33,9 @@ const OPAQUE: u32 = 1u;
 const SCREEN: u32 = 2u;
 const CULL: u32 = 4u;
 const PAIRS: u32 = 8u;
+// The sky layer writes this alpha, everything else 1.0: nothing blends (the window ignores it), and the visual check
+// (`shots.rs`) tells sky from geometry by it.
+const SKY_ALPHA: f32 = 0.98;
 
 fn texel(uv: vec2<f32>) -> u32 {
     let size = vec2<i32>(textureDimensions(indices));
@@ -83,14 +86,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
     }
 #endif
     var index = texel(in.uv);
+    let alpha = select(1.0, SKY_ALPHA, (mode.x & SCREEN) != 0u);
     if (mode.x & SCREEN) != 0u {
         index = textureLoad(indices, gba, 0).r;
     }
     if (mode.x & PAIRS) != 0u && index != 0u {
         // The pair's two pixels at their left edges, on this fragment's row.
         let left = view.viewport.x + f32(gba.x & ~1) * column;
-        let uv = in.uv + du * (left - in.position.x);
-        if texel(uv) == 0u || texel(uv + du * column) == 0u {
+        // Only u steps to the neighbour: the pair shares this fragment's row, and stepping v as well would read
+        // past the wall's foot (a wrapped, often transparent row) along sloping edges.
+        let uv = vec2<f32>(in.uv.x + du.x * (left - in.position.x), in.uv.y);
+        if texel(uv) == 0u || texel(vec2<f32>(uv.x + du.x * column, uv.y)) == 0u {
             discard;
         }
     }
@@ -98,7 +104,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         if (mode.x & OPAQUE) == 0u {
             discard;
         }
-        return vec4<f32>(textureLoad(backdrop, vec2<i32>(gba.y, 0), 0).rgb, 1.0);
+        return vec4<f32>(textureLoad(backdrop, vec2<i32>(gba.y, 0), 0).rgb, alpha);
     }
-    return vec4<f32>(textureLoad(palette, vec2<i32>(i32(index), 0), 0).rgb, 1.0);
+    return vec4<f32>(textureLoad(palette, vec2<i32>(i32(index), 0), 0).rgb, alpha);
 }
