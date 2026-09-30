@@ -316,7 +316,7 @@ Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160
 
   The original-resolution frame is the exact image.
 - **R11:**
-  - the speed effect is not modelled: with driver `+0x4D1` set, focal eases by 4 towards `150 − max(0, (0x800 − g) >> 5)`, where `g = |angle_diff(heading, atan(driver +0x11C >> 8, +0x124 >> 8))|`, the angle between heading and travel;
+  - the speed effect is the game's: `game_camera` sets the projection's focal length and near plane from the frame's view every frame (the near plane is the game's), so the nitro widening is shown;
   - the camera wall push takes the height limit `*0x03005778` (a smoothed `floor_height` `0x0814ca84` at the camera) as passed;
   - the sector search's second fallback `find_sector_far` is not applied;
   - the free camera pitches (a non-game mode).
@@ -328,3 +328,12 @@ Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160
 - **Grid assumptions:**
   - the rand index `0x11` is derived, not traced (the seed `*0x03000044 & 0xFF` = 3 is 14 draws earlier; open);
   - the draw flags are the reference race's (player 0x0D, opponents 0x22).
+
+## Visual check (R27)
+
+`src/shots.rs`, test `gpu_view_matches_the_exact_frame` (data required, about 15 s):
+- **Headless render:** `Rig` is the viewer itself (`add_viewer`: the same `setup` and systems) with no window, the camera aimed at a 240×160 image (`Offscreen`), the game state supplied instead of `NFSGBA_DUMP` (`Start`), and read back with `Screenshot::image` once every pipeline is built and the image stops changing. The HUD layer is removed. One `Rig` per trace (a race's cars are made at startup); each state is a `play::Play` from `game_at(trace, k)`, shown paused (alpha 1).
+- **Exact side:** `draw_world` on the same state, redrawn once per object with that object left out (an entity's material set to 0, a portal entry flagged 8), so an object's pixels are the ones that change.
+- **Measures:** (a) exact-match and within-one-pixel share; (b) per object, the share of its pixels whose colour (tolerance) is in the GPU view within 2 px, failing under 50% (cars and traffic of 20+ px, portal entries of 100+ px); (c) holes: pixels inside the exact frame's geometry (5×5 block, row 159 excluded) where the GPU view shows the sky layer (it writes alpha 0.98, all else 1.0, `SKY_ALPHA` in `indexed.wgsl`), and the seam pixels among them (at most two pixels thin between GPU geometry). Failing over 0.5% holes or 10 seam pixels.
+- **Use:** `SHOTS_TRACE=drive` runs one trace, `SHOTS_DIR=<dir>` saves GPU | exact | difference (holes red) images.
+- **Not covered:** effect sprites (R30), and blended states between game frames.
