@@ -398,8 +398,8 @@ A neighbour with floor 0 is replaced by its `+0x20` alias when that is set. Othe
 ## Not done / NOT 1:1 if used as is
 
 - **Entities:**
-  - the entity handlers (world `+0x78`, Thumb game code) are not reimplemented: `Scene::handler` defaults to doing nothing. No entity in any capture calls one (all have `+0x08` bit 1).
-  - bit 4 (sector) entities, material steps `+0x44`/`+0x46`, negative `+0x64` and textures outside ROM/EWRAM follow the code but appear in no capture.
+  - the entity handlers (world `+0x78`, Thumb game code) are not reimplemented: `Scene::handler` defaults to doing nothing. No drawable entity of a race has `+0x08` bit 0 without bit 1, so none is called (FIDELITY N1).
+  - bit 4 (sector) entities, material steps `+0x44`/`+0x46` and negative `+0x64` follow the code but no race reaches them (FIDELITY N1); textures outside ROM/EWRAM are refused (N1).
   - the matrix slots are inputs: their builders (`draw_vehicle`, `FUN_0814eba0` → `FUN_0814da68`, `FUN_0814ec0c`) are game code, not reimplemented here.
 - The pixel check covers 17 frames from two races: 128-row wall textures, textured floors. Fill-colour flats, ceilings, deferred walls, moving pieces, animated or scrolled materials and transparent textures are reimplemented from the code but not yet exercised against a frame.
 - The focal speed effect's input `g` (`FUN_0815fc38`, `FUN_0815fadc`) is not decoded.
