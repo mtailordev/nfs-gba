@@ -1,3 +1,0 @@
-address,name,kind,comment
-0x0813fdb0,ai_pick_hunt_target,function,hunter races: the racer on the same segment nearest ahead (or beside in another lane) becomes the chase target (driver +0x4F4, timer +0x4F0 = *0x03006198)
-0x0814bf98,wingman_marker_handler,function,entity handler 0xF: the wingman's marker (state 0 above the player; state 1 hovers 0x1000 above the last AI car bobbing sin(time<<9) >> 2, takes a billboard slot)

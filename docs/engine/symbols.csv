@@ -585,3 +585,5 @@ address,name,kind,comment
 0x0812c494,car_stat_bars,function,(car; out base[3]; out with parts[3]) base speed/accel/handling from 0x7F0BD8+0x52 plus the installed parts' weights (0x7E46EC) capped at 100
 0x0812c3e0,garage_rating,function,() the working copy's build rating (100 plus the parts' shares)
 0x08133e74,district_completion_text,function,(buffer; zone) completion percent of a district's events as "N%" (a space before % in French and Italian)
+0x0813fdb0,ai_pick_hunt_target,function,hunter races: the racer on the same segment nearest ahead (or beside in another lane) becomes the chase target (driver +0x4F4, timer +0x4F0 = *0x03006198)
+0x0814bf98,wingman_marker_handler,function,entity handler 0xF: the wingman's marker (state 0 above the player; state 1 hovers 0x1000 above the last AI car bobbing sin(time<<9) >> 2, takes a billboard slot)
