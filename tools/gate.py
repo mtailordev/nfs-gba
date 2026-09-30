@@ -1,7 +1,7 @@
 """The merge gate: everything a branch must pass before it merges into main. Prints one line per step and exits
 non-zero when any step fails.
 
-    .venv/Scripts/python.exe tools/gate.py
+    .venv/Scripts/python.exe tools/gate.py [--update-fixtures]   # the flag rewrites the fixture manifest from this run's own test log
 
 Steps: rustfmt; clippy with warnings as errors; the Rust tests with NFSGBA_REQUIRE_DATA=1 (missing data fails, see
 docs/engine/testkit.md); the Python tool tests; the fixture manifest (every fixture present, unchanged and listed);
@@ -71,6 +71,8 @@ def main() -> int:
                                                        env={"NFSGBA_REQUIRE_DATA": "1",
                                                             "NFSGBA_FIXTURE_LOG": str(log)})),
             ("python tests", lambda: run([py, "-m", "unittest", "discover", "-p", "test_*.py"], cwd=TOOLS)),
+            *([("fixture manifest update", lambda: run([py, "fixtures.py", "build", "--log", str(log)], cwd=TOOLS))]
+              if "--update-fixtures" in sys.argv else []),
             ("fixture manifest", lambda: run([py, "fixtures.py", "check"] + (["--log", str(log)] if log.exists()
                                                                                else []), cwd=TOOLS)),
             ("pending notes", lambda: (True, "none pending") if not (notes := pending_notes()) else

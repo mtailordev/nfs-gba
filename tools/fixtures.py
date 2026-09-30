@@ -2,7 +2,8 @@
 the ROM it was recorded from is the header line, and the tool, command and source state are per top folder
 (`PROVENANCE` below). Paths are relative to $NFSGBA_DATA/work/<sha1-8 of the ROM>/.
 
-    .venv/Scripts/python.exe tools/fixtures.py build              # run the tests, write docs/engine/fixtures.csv
+    .venv/Scripts/python.exe tools/fixtures.py build [--log FILE] # run the tests (or read a test run's log), write
+                                                                  # docs/engine/fixtures.csv
     .venv/Scripts/python.exe tools/fixtures.py check [--log FILE] # every listed file present with its SHA-1; with
                                                                   # --log (NFSGBA_FIXTURE_LOG of a test run), every
                                                                   # fixture the tests read is listed
@@ -117,13 +118,17 @@ def cargo() -> str:
     return shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
 
 
-def build() -> int:
+def build(log: Path | None = None) -> int:
+    """With `log` (NFSGBA_FIXTURE_LOG of a finished test run, e.g. the gate's), no second test run."""
     work, rom_sha1 = work_dir()
-    with tempfile.TemporaryDirectory() as tmp:
-        log = Path(tmp) / "fixtures.log"
-        env = dict(os.environ, NFSGBA_REQUIRE_DATA="1", NFSGBA_FIXTURE_LOG=str(log))
-        subprocess.run([cargo(), "test", "--release", "--workspace", "-q"], cwd=ROOT, env=env, check=True)
+    if log:
         rels = set(log.read_text(encoding="utf-8").split())
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_log = Path(tmp) / "fixtures.log"
+            env = dict(os.environ, NFSGBA_REQUIRE_DATA="1", NFSGBA_FIXTURE_LOG=str(run_log))
+            subprocess.run([cargo(), "test", "--release", "--workspace", "-q"], cwd=ROOT, env=env, check=True)
+            rels = set(run_log.read_text(encoding="utf-8").split())
     rows = rows_for(work, files_of(work, rels))
     changed = write_if_changed(MANIFEST, render(rom_sha1, rows))
     print(f"{len(rows)} fixtures, {sum(r['size'] for r in rows) / 1e6:.0f} MB; "
@@ -156,11 +161,12 @@ def check(log: Path | None) -> int:
 def main(argv) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("build")
+    b = sub.add_parser("build")
+    b.add_argument("--log", type=Path)
     c = sub.add_parser("check")
     c.add_argument("--log", type=Path)
     args = ap.parse_args(argv)
-    return build() if args.cmd == "build" else check(args.log)
+    return build(args.log) if args.cmd == "build" else check(args.log)
 
 
 if __name__ == "__main__":
