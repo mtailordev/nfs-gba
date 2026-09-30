@@ -754,32 +754,33 @@ fn setup(
         })
         .unwrap_or((Vec3::new(center.x, max.y + 480.0, max.z + 640.0), center));
     #[cfg_attr(not(test), allow(unused_variables))]
-    let camera = commands.spawn((
-        Camera3d::default(),
-        // The game's projection: focal 150 on the 240×160 screen, optical centre (120, 79), near plane 64.
-        Projection::custom(GbaProjection {
-            focal: game::FOCAL as f32,
-            near: game::NEAR as f32 * SCALE,
-            unit: SCALE,
-        }),
-        // Palette colours reach the screen unchanged: no tonemapping, dithering or edge blending.
-        Tonemapping::None,
-        DebandDither::Disabled,
-        Msaa::Off,
-        FreeCamera {
-            walk_speed: 120.0,
-            run_speed: 600.0,
-            ..default()
-        },
-        Transform::from_translation(eye).looking_at(target, Vec3::Y),
-        children![(
-            Mesh3d(meshes.add(Rectangle::new(1.0e6, 1.0e6))),
-            MeshMaterial3d(sky_layer),
-            Transform::from_xyz(0.0, 0.0, -20000.0),
-            NotShadowCaster,
-        )],
-    ))
-    .id();
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            // The game's projection: focal 150 on the 240×160 screen, optical centre (120, 79), near plane 64.
+            Projection::custom(GbaProjection {
+                focal: game::FOCAL as f32,
+                near: game::NEAR as f32 * SCALE,
+                unit: SCALE,
+            }),
+            // Palette colours reach the screen unchanged: no tonemapping, dithering or edge blending.
+            Tonemapping::None,
+            DebandDither::Disabled,
+            Msaa::Off,
+            FreeCamera {
+                walk_speed: 120.0,
+                run_speed: 600.0,
+                ..default()
+            },
+            Transform::from_translation(eye).looking_at(target, Vec3::Y),
+            children![(
+                Mesh3d(meshes.add(Rectangle::new(1.0e6, 1.0e6))),
+                MeshMaterial3d(sky_layer),
+                Transform::from_xyz(0.0, 0.0, -20000.0),
+                NotShadowCaster,
+            )],
+        ))
+        .id();
     #[cfg(test)]
     if let Some(o) = offscreen {
         commands
@@ -1047,7 +1048,14 @@ fn game_camera(
     let mut scene = view::scene(&play.game.world);
     scene.entities.iter_mut().for_each(|e| e.flags &= !4);
     let mut scratch = vec![0; render::SCREEN_WIDTH * 160];
-    render::draw_world(&tint.rom, &frame, &tint.rt, &mut scene, &mut visible.clone(), &mut scratch);
+    render::draw_world(
+        &tint.rom,
+        &frame,
+        &tint.rt,
+        &mut scene,
+        &mut visible.clone(),
+        &mut scratch,
+    );
     race.drawn = scene.entities.iter().map(|e| e.flags & 4 != 0).collect();
     (race.frame, race.visible) = (Some((frame, root)), Some(visible));
 }

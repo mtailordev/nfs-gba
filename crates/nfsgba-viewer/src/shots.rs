@@ -11,7 +11,8 @@ use bevy::{
     log::LogPlugin,
     prelude::*,
     render::{
-        RenderApp, pipelined_rendering::PipelinedRenderingPlugin,
+        RenderApp,
+        pipelined_rendering::PipelinedRenderingPlugin,
         render_resource::{CachedPipelineState, PipelineCache, TextureFormat, TextureUsages},
         view::screenshot::{Screenshot, ScreenshotCaptured},
     },
@@ -69,7 +70,11 @@ impl Rig {
         app.cleanup();
         // The startup systems; the HUD layer (the game's sprites) is left out of the comparison.
         app.update();
-        let huds: Vec<Entity> = app.world_mut().query_filtered::<Entity, With<ImageNode>>().iter(app.world()).collect();
+        let huds: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<ImageNode>>()
+            .iter(app.world())
+            .collect();
         for e in huds {
             app.world_mut().despawn(e);
         }
@@ -83,7 +88,12 @@ impl Rig {
 
     /// Every render pipeline requested so far is built (they compile in the background).
     fn pipelines_built(&self) -> bool {
-        let cache = self.app.get_sub_app(RenderApp).unwrap().world().resource::<PipelineCache>();
+        let cache = self
+            .app
+            .get_sub_app(RenderApp)
+            .unwrap()
+            .world()
+            .resource::<PipelineCache>();
         let mut all = cache.pipelines().peekable();
         all.peek().is_some() && all.all(|p| matches!(p.state, CachedPipelineState::Ok(_) | CachedPipelineState::Err(_)))
     }
@@ -103,7 +113,10 @@ impl Rig {
                 .world_mut()
                 .spawn(Screenshot::image(self.target.clone()))
                 .observe(move |c: On<ScreenshotCaptured>| {
-                    shots.lock().unwrap().push(c.image.data.clone().expect("screenshot data"));
+                    shots
+                        .lock()
+                        .unwrap()
+                        .push(c.image.data.clone().expect("screenshot data"));
                 });
             self.app.update();
             std::thread::sleep(std::time::Duration::from_millis(3));
@@ -140,7 +153,7 @@ pub fn game_at(rom: &[u8], trace: &Trace, k: usize) -> Game {
 pub struct Object {
     pub name: String,
     pub pixels: Vec<usize>,
-    /// Share of its pixels whose exact colour shows in the GPU view within one pixel.
+    /// Share of its pixels whose colour (within a small tolerance) shows in the GPU view within two pixels.
     pub present: f32,
 }
 
@@ -185,7 +198,11 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
     // `skies.screen` holds the skyline alone: the GPU view was not the original-resolution one.
     let draw = |empty: bool, leave_out: Option<usize>, skip: Option<usize>| -> Vec<u8> {
         let mut screen = skies.screen.clone();
-        let mut scene = if empty { render::Scene::empty() } else { view::scene(state) };
+        let mut scene = if empty {
+            render::Scene::empty()
+        } else {
+            view::scene(state)
+        };
         if let Some(i) = leave_out {
             scene.entities[i].material = 0;
         }
@@ -202,11 +219,25 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
     let gpu: Vec<Rgb> = gpu.chunks(4).map(|c| [c[0], c[1], c[2]]).collect();
     let around = |p: usize, r: i32| {
         let (x, y) = ((p % W) as i32, (p / W) as i32);
-        (-r..=r).flat_map(move |dy| (-r..=r).map(move |dx| (x + dx, y + dy))).filter_map(|(x, y)| {
-            ((0..W as i32).contains(&x) && (0..H as i32).contains(&y)).then_some(y as usize * W + x as usize)
-        })
+        (-r..=r)
+            .flat_map(move |dy| (-r..=r).map(move |dx| (x + dx, y + dy)))
+            .filter_map(|(x, y)| {
+                ((0..W as i32).contains(&x) && (0..H as i32).contains(&y)).then_some(y as usize * W + x as usize)
+            })
     };
     let seen = |p: usize| around(p, 1).any(|q| gpu[q] == exact[p]);
+    // "Present": a GPU pixel of nearly the exact colour within two pixels (textures are sampled per window pixel here,
+    // affinely per pixel pair there: colours drift, positions do not).
+    let close = |p: usize| {
+        around(p, 2).any(|q| {
+            gpu[q]
+                .iter()
+                .zip(exact[p])
+                .map(|(a, b)| a.abs_diff(b) as u32)
+                .sum::<u32>()
+                <= 90
+        })
+    };
 
     let mut report = Report {
         exact: (0..W * H).filter(|&p| gpu[p] == exact[p]).count() as f32 / (W * H) as f32,
@@ -227,7 +258,9 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
                     let (x, y) = ((p % W) as i32 + dx, (p / W) as i32 + dy);
                     (0..W as i32).contains(&x) && (0..H as i32).contains(&y) && !sky_shown(y as usize * W + x as usize)
                 };
-                let thin = |dx: i32, dy: i32| (solid(-dx, -dy) || solid(-2 * dx, -2 * dy)) && (solid(dx, dy) || solid(2 * dx, 2 * dy));
+                let thin = |dx: i32, dy: i32| {
+                    (solid(-dx, -dy) || solid(-2 * dx, -2 * dy)) && (solid(dx, dy) || solid(2 * dx, 2 * dy))
+                };
                 if thin(1, 0) || thin(0, 1) {
                     report.seams.push(p);
                 }
@@ -237,7 +270,7 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
     let mut object = |name: String, other: Vec<u8>, base: &[u8], keep: &dyn Fn(usize) -> bool| {
         let pixels: Vec<usize> = (0..W * H).filter(|&p| other[p] != base[p] && keep(p)).collect();
         if !pixels.is_empty() {
-            let present = pixels.iter().filter(|&&p| seen(p)).count() as f32 / pixels.len() as f32;
+            let present = pixels.iter().filter(|&&p| close(p)).count() as f32 / pixels.len() as f32;
             report.objects.push(Object { name, pixels, present });
         }
     };
@@ -246,30 +279,29 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
         if e.material == 0 || e.slot == 0xFF {
             continue;
         }
-        let kind = if state.slots[i].block.is_some() { "traffic" } else { "car" };
-        object(format!("{kind} entity {i} (slot {})", e.slot), draw(false, Some(i), None), &full, &|_| true);
+        let kind = if state.slots[i].block.is_some() {
+            "traffic"
+        } else {
+            "car"
+        };
+        object(
+            format!("{kind} entity {i} (slot {})", e.slot),
+            draw(false, Some(i), None),
+            &full,
+            &|_| true,
+        );
     }
     // Portal entries' walls and flats: the world alone, one entry skipped.
     let world_only = draw(true, None, None);
     for (k, p) in visible.portals.iter().enumerate().filter(|(_, p)| p.flags & 8 == 0) {
-        object(format!("sector {} (entry {k})", p.sector), draw(true, None, Some(k)), &world_only, &|p| full[p] == world_only[p]);
-    }
-    for &p in report.seams.iter().step_by(4).take(6) {
-        let who = |q: usize| -> Vec<String> {
-            report.objects.iter().filter(|o| o.pixels.contains(&q)).map(|o| o.name.clone()).collect()
-        };
-        eprintln!("      seam ({}, {}) idx {}: {:?}; above {:?}; below {:?}", p % W, p / W, full[p], who(p), who(p - W), who(p + W));
+        object(
+            format!("sector {} (entry {k})", p.sector),
+            draw(true, None, Some(k)),
+            &world_only,
+            &|p| full[p] == world_only[p],
+        );
     }
     report
-}
-
-#[test]
-fn scratch_sector() {
-    let Some(rom) = nfsgba_testkit::rom() else { return };
-    let s = &nfsgba_formats::city(&rom)[760];
-    for (k, w) in s.walls.iter().enumerate() {
-        eprintln!("{k}: x {} z {} floor {} ceil {} top {:?} bottom {:?} flags {:x} link {} mat {}", w.x, w.z, w.floor_y, w.ceiling_y, w.top, w.bottom, w.flags, w.link, w.material);
-    }
 }
 
 /// GPU view, exact frame and their difference (holes red, other mismatches grey), side by side at 2×.
@@ -321,13 +353,18 @@ const TRACES: [(&str, &str); 8] = [
 ];
 
 /// Game frames shown from each trace, spread evenly (the first and the last included).
-const PER_TRACE: usize = 6;
+const PER_TRACE: usize = 10;
 
+/// R27: over a spread of recorded states (the start grid, turning, traffic, sparks, the speed effect, the bumper view,
+/// the fades) the GPU view has every object the exact frame draws, no seams, and agrees with the frame on at least
+/// the recorded share of pixels. `SHOTS_TRACE=<name>` runs one trace, `SHOTS_DIR=<dir>` saves the comparison images.
 #[test]
 fn gpu_view_matches_the_exact_frame() {
     let Some(rom) = nfsgba_testkit::rom() else { return };
     let only = std::env::var("SHOTS_TRACE").ok();
-    let (mut n, mut exact, mut near) = (0, 0.0, 0.0);
+    let (mut states, mut exact, mut near) = (0, 0.0, 0.0);
+    let (mut worst_car, mut worst_traffic, mut worst_wall) = (1.0f32, 1.0f32, 1.0f32);
+    let (mut worst_holes, mut worst_seams, mut objects) = (0.0f32, 0, 0);
     for (session, name) in TRACES {
         if only.as_deref().is_some_and(|o| o != name) {
             continue;
@@ -340,38 +377,76 @@ fn gpu_view_matches_the_exact_frame() {
         };
         let trace = Trace::load(&dir, name).unwrap();
         let frames = trace.timing.len();
-        let states = |k| play::Play::new(game_at(&rom, &trace, k), Handle::default(), true, None);
-        let mut rig = Rig::new(states(0));
+        let state = |k| play::Play::new(game_at(&rom, &trace, k), Handle::default(), true, None);
+        let mut rig = Rig::new(state(0));
         for k in (0..PER_TRACE).map(|i| i * (frames - 1) / (PER_TRACE - 1)) {
-            let gpu = rig.show(states(k));
+            let gpu = rig.show(state(k));
             let r = compare(&rig, &rom, &gpu);
-            let worst = r.objects.iter().map(|o| o.present).fold(1.0, f32::min);
-            eprintln!(
-                "{name} {k:>3}: exact {:.1}% near {:.1}%, {} objects (worst {:.0}% present), {} holes ({} seam pixels) of {} covered",
-                100.0 * r.exact,
-                100.0 * r.near,
-                r.objects.len(),
-                100.0 * worst,
-                r.holes.len(),
-                r.seams.len(),
-                r.covered
-            );
-            let mut rows = [0; H];
-            r.holes.iter().for_each(|p| rows[p / W] += 1);
-            let heavy: Vec<_> = rows.iter().enumerate().filter(|(_, n)| **n >= 10).collect();
-            if !heavy.is_empty() {
-                eprintln!("    hole rows (row, count): {heavy:?}");
-            }
-            for o in r.objects.iter().filter(|o| o.present < 0.8) {
-                eprintln!("    {}: {} px, {:.0}% present", o.name, o.pixels.len(), 100.0 * o.present);
+            if r.covered == 0 {
+                // The race start's first frame: the world is not drawn yet.
+                continue;
             }
             if let Ok(dir) = std::env::var("SHOTS_DIR") {
                 save(&std::path::Path::new(&dir).join(format!("{name}-{k}.png")), &gpu, &r);
             }
-            n += 1;
-            exact += r.exact;
-            near += r.near;
+            let holes = r.holes.len() as f32 / r.covered as f32;
+            eprintln!(
+                "{name} {k:>3}: exact {:.1}% near {:.1}%, {} objects, {} holes ({} seam pixels) of {} covered",
+                100.0 * r.exact,
+                100.0 * r.near,
+                r.objects.len(),
+                r.holes.len(),
+                r.seams.len(),
+                r.covered
+            );
+            for o in r.objects.iter() {
+                objects += 1;
+                // Small far objects are a handful of pixels whose texels the GPU minifies differently.
+                let (worst, least) = match o.name.split(' ').next().unwrap() {
+                    "car" => (&mut worst_car, 20),
+                    "traffic" => (&mut worst_traffic, 20),
+                    _ => (&mut worst_wall, 100),
+                };
+                if o.pixels.len() >= least {
+                    *worst = worst.min(o.present);
+                    if o.present < 0.5 {
+                        eprintln!(
+                            "    MISSING {}: {} px, {:.0}% present",
+                            o.name,
+                            o.pixels.len(),
+                            100.0 * o.present
+                        );
+                    }
+                }
+            }
+            states += 1;
+            (exact, near) = (exact + r.exact, near + r.near);
+            worst_holes = worst_holes.max(holes);
+            worst_seams = worst_seams.max(r.seams.len());
         }
     }
-    eprintln!("{n} states: mean exact {:.1}%, near {:.1}%", 100.0 * exact / n as f32, 100.0 * near / n as f32);
+    let (exact, near) = (exact / states as f32, near / states as f32);
+    eprintln!(
+        "{states} states, {objects} objects: exact {:.1}%, within a pixel {:.1}%; least present: car {:.0}%, traffic {:.0}%, \
+         walls {:.0}%; worst holes {:.2}% of the geometry, worst {worst_seams} seam pixels",
+        100.0 * exact,
+        100.0 * near,
+        100.0 * worst_car,
+        100.0 * worst_traffic,
+        100.0 * worst_wall,
+        100.0 * worst_holes
+    );
+    if only.is_some() {
+        return;
+    }
+    assert!(states >= 60, "{states} states");
+    // Non-regression floors for the agreement (by design about half the pixels differ: R27).
+    assert!(exact > 0.48 && near > 0.79, "exact {exact}, near {near}");
+    // Every object the exact frame draws is in the GPU view.
+    assert!(worst_car >= 0.5 && worst_traffic >= 0.5 && worst_wall >= 0.5);
+    // No gaps in the geometry.
+    assert!(
+        worst_holes < 0.005 && worst_seams <= 10,
+        "holes {worst_holes}, seams {worst_seams}"
+    );
 }
