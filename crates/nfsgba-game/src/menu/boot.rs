@@ -3,6 +3,15 @@
 //! dropped (FIDELITY U7), so it runs the menu logic of the language, health, logo, title and name screens and the
 //! main menu on its own. A power-on run in headless mGBA (`tools/boot_trace.py`) checks the screen numbers, the
 //! profile and the language frame by frame.
+//!
+//! The four boot-only functions, on typed state (nothing is emulated; each is an initialisation):
+//! - `0x0816208C` `boot_hw_reset` (clears EWRAM, IWRAM, VRAM, OAM, palette; waits for VBlank): `MenuState::default()`
+//!   (all zero: the IWRAM/EWRAM globals and the profile) in [`init`] and `Screen::default()` (zeroed pages, palettes,
+//!   OAM) in `TypedHost::new`; there is no RAM image, so nothing else needs clearing. The IWRAM overlay copy it makes
+//!   is the code the typed renderer replaces.
+//! - `0x080000C0` `rom_entry_loop` (sets the IRQ vector word, loops `game_main`): the loop is the caller's
+//!   `Session::frame` per video frame; the IRQ vector is that frame's VBlank (`Session::menu_frame`, `Game::frame`).
+//! - `0x081621DC` `boot_hook` and `0x08165130` `nop_return` (empty): nothing to do.
 
 use nfsgba_sim::state::MenuState;
 

@@ -637,7 +637,7 @@ address,name,kind,comment
 0x08160da8,gfx_alloc_slot,function,GBA library: finds a free block in the tile allocator at 0x030064CC
 0x08161420,oam_slot_set,function,GBA library: fills one of 32 sprite slots at 0x030064F0 (0x20 bytes each)
 0x081614b8,oam_slot_set_frame,function,GBA library: sets frame and clears counters of a sprite slot
-0x0816208c,boot_hw_reset,function,"boot: sets 0x04000204, waits for VBlank, clears EWRAM/IWRAM/VRAM/OAM/palette, copies the IWRAM overlay; runs only at reset"
+0x0816208c,boot_hw_reset,function,"boot: sets 0x04000204, waits for VBlank, clears EWRAM/IWRAM/VRAM/OAM/palette, copies the IWRAM overlay; runs only at reset; typed: MenuState::default() + Screen::default() (menu/boot.rs docs)"
 0x081621dc,boot_hook,function,boot: calls the empty FUN_08165130
 0x08165130,nop_return,function,empty function (return)
 0x08165218,raster_wall_columns_rom,function,ROM copy of the IWRAM function 0x03000304; the race runs the IWRAM copy

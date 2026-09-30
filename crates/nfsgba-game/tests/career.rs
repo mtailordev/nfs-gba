@@ -92,12 +92,12 @@ fn diffs(a: &[u8], b: &[u8]) -> String {
 }
 
 /// Runs `name` (a script in `tools/career/`, its trace in `career/`) and compares every settled menu visit.
-fn compare(name: &str) {
+fn compare(name: &str) -> Vec<i64> {
     let (Some(rom), Some(text)) = (
         nfsgba_testkit::rom(),
         nfsgba_testkit::read_to_string(&format!("career/{name}.json")),
     ) else {
-        return;
+        return vec![];
     };
     let t: Value = serde_json::from_str(&text).unwrap();
     let cfg = &t["cfg"];
@@ -233,12 +233,19 @@ fn compare(name: &str) {
             if matches!(g.screen, 0x19 | 0x30 | 0x17) {
                 p.fill(0);
             }
+            // The last story page: its A press saves (60 VBlank waits) with the page still shown, so the game's hint
+            // count is already one up there (ours a press later); the return to screen 3 compares it.
+            if g.screen == 0x26 && game.get(i + 1).is_some_and(|n| n.screen == 3) {
+                p[5] = 0;
+            }
         }
         if op != gp {
             bad.push(format!(
-                "visit {i} screen {:#x}: profile {}",
+                "visit {i} screen {:#x}: profile {} ours {:x?} game {:x?}",
                 g.screen,
-                diffs(&o.profile, &g.profile)
+                diffs(&o.profile, &g.profile),
+                &o.profile[..12],
+                &g.profile[..12]
             ));
         }
         // Blinking cursors and PRESS START follow the tick count (T1): the boot screens' phase differs. The standings'
@@ -254,6 +261,7 @@ fn compare(name: &str) {
         }
     }
     assert!(bad.is_empty(), "{name}:\n{}", bad.join("\n"));
+    seq(&ours)
 }
 
 #[test]
@@ -289,4 +297,19 @@ fn career_late_boss() {
 #[test]
 fn career_gauntlet_ending() {
     compare("gauntlet");
+}
+
+/// The whole ending: after the Gauntlet the 20 story pages (0x26) and the return to screen 3.
+#[test]
+fn career_ending_twenty_pages() {
+    let seq = compare("ending20");
+    if seq.is_empty() {
+        return; // no data (skipped)
+    }
+    assert_eq!(
+        seq.iter().filter(|&&s| s == 0x26).count(),
+        20,
+        "the 20 story pages: {seq:x?}"
+    );
+    assert_eq!(seq.last(), Some(&3), "back to the Crew House (screen 3)");
 }
