@@ -94,6 +94,9 @@ pub struct Session<'a> {
     paused: bool,
     held: u16,
     frames: u32,
+    /// The original's counters for the next menu frame, `(tick counter, VBlank counter)`, instead of the frame count
+    /// (T1): a test replays a recorded power-on run's `main_frame` entries with them (`tests/traces2.rs`).
+    pub clock: Option<(u32, u32)>,
 }
 
 /// The calls the race start and the pause resume make (`game_state_step` states 4 and 5): the session runs them.
@@ -135,6 +138,7 @@ impl<'a> Session<'a> {
             paused: false,
             held: 0,
             frames: 0,
+            clock: None,
         }
     }
 
@@ -199,8 +203,9 @@ impl<'a> Session<'a> {
         let rom = Rom(self.rom);
         self.menu_sound = self.engine().vblank(rom);
         let st = &mut self.st;
-        (st.g.keys, st.g.keys_held, st.g.ticks) = (edge, held, self.frames as i32);
-        st.g.flash = self.frames; // the VBlank counter: one per video frame
+        let (ticks, vblanks) = self.clock.unwrap_or((self.frames, self.frames)); // one VBlank per video frame
+        (st.g.keys, st.g.keys_held, st.g.ticks) = (edge, held, ticks as i32);
+        st.g.flash = vblanks;
         self.host.language = st.g.language;
         self.host.screen.dispcnt = self.host.screen.dispcnt & !0x10 | ((st.g.frame_counter as u16 & 1) << 4);
         flow::main_frame(st, &mut self.host);
@@ -227,7 +232,8 @@ impl<'a> Session<'a> {
     fn start_race(&mut self) -> Result<()> {
         let audio = self.audio.clone().expect("the engine is with the menus");
         let records = &self.st.profile.car_records;
-        let mut setup = Setup::menus(self.rom, audio, self.frames, self.held, records, self.previous.as_ref());
+        let ticks = self.clock.map_or(self.frames, |c| c.0);
+        let mut setup = Setup::menus(self.rom, audio, ticks, self.held, records, self.previous.as_ref());
         let display = Display::from_screen(&self.host.screen);
         apply_choice(&mut setup, &self.st);
         let mut game = race_init::start(self.rom.to_vec(), &setup, display, SEED_VBLANKS)?;

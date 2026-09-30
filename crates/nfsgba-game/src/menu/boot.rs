@@ -27,6 +27,8 @@ pub fn init(st: &mut MenuState, rom: &[u8], eeprom: &[u8]) {
     st.g.back_top = -1;
     st.g.message_box = -1;
     st.profile.u_494 = 0;
+    // game_main's `rand_table()` call (its number unused) before the profile setup: the traced index at the first main_frame.
+    nfsgba_fixed::rand_table(rom, &mut st.g.rand_index);
     save::profile_reset(st, rom);
     st.g.save_buffer = 0;
     st.profile.profile_exists = 0;

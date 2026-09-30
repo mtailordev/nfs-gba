@@ -24,6 +24,7 @@ SESSION = "game-loop"
 
 STATE = 0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400
 AUTOPILOT = [f"lua {Path(__file__).with_name('autopilot.lua').as_posix()}", "luax AUTOPILOT.reset()"]
+TRACES2 = [f"lua {Path(__file__).with_name('traces2.lua').as_posix()}"]
 SCENARIOS = {
     # name: (savestate, arming, game frames, keys[, commands before recording, e.g. RAM pokes]).
     # From the reference race (race.ss): accelerate, steer both ways, brake, accelerate again.
@@ -88,6 +89,11 @@ SCENARIOS = {
     # does), then the race end, the state-5 exit and the hand-over to the results screen.
     "overhunter": ("hunter-race", "", 16, ["wait 2", "hold A 400"], [f"lua {Path(__file__).with_name('finish.lua')}"]),
     "overcareer": ("career-race", "", 16, ["wait 2", "hold A 400"], [f"lua {Path(__file__).with_name('finish.lua')}"]),
+    # Race starts from the menus (tools/traces2.py states: the Quick Play setup screen of a circuit and of a circuit with a
+    # wingman, made headless from power-on): A starts the race; recorded like `start`, with the rand-draw log
+    # (traces2.lua, written to NAME.log in the session folder).
+    "start-circuit": ("circuitinfo", "start", 90, ["hold A 10", "wait 500"], TRACES2 + ['luax TR2NAME="start-circuit"']),
+    "start-wingman": ("wingmaninfo", "start", 90, ["hold A 10", "wait 500"], TRACES2 + ['luax TR2NAME="start-wingman"']),
     "fadein": ("race", "", 14,["hold A 400"], [f"lua {Path(__file__).with_name('fadein.lua')}"]),
 }
 
