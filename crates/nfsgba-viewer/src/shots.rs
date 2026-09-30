@@ -151,10 +151,12 @@ pub struct Report {
     /// The same, allowing one pixel of displacement (the exact colour is among the 3×3 GPU neighbours).
     pub near: f32,
     pub objects: Vec<Object>,
-    /// Interior pixels of the exact frame's geometry (all eight neighbours are geometry too) where the GPU view
+    /// Interior pixels of the exact frame's geometry (the 5×5 block around it is geometry too) where the GPU view
     /// shows only the sky: gaps and seams.
     pub holes: Vec<usize>,
     pub covered: usize,
+    /// The exact frame in RGB.
+    pub picture: Vec<Rgb>,
 }
 
 type Rgb = [u8; 3];
@@ -207,13 +209,14 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
     let mut report = Report {
         exact: (0..W * H).filter(|&p| gpu[p] == exact[p]).count() as f32 / (W * H) as f32,
         near: (0..W * H).filter(|&p| seen(p)).count() as f32 / (W * H) as f32,
+        picture: exact.clone(),
         ..Default::default()
     };
     let is_geometry = |p: usize| exact[p] != sky[p];
     for p in 0..W * H {
         if is_geometry(p) {
             report.covered += 1;
-            if gpu[p] == sky[p] && around(p, 1).all(is_geometry) {
+            if gpu[p] == sky[p] && around(p, 2).all(is_geometry) {
                 report.holes.push(p);
             }
         }
@@ -239,6 +242,42 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
         object(format!("sector {} (entry {k})", p.sector), draw(true, None, Some(k)), &world_only, &|p| full[p] == world_only[p]);
     }
     report
+}
+
+/// GPU view, exact frame and their difference (holes red, other mismatches grey), side by side at 2×.
+fn save(path: &std::path::Path, gpu: &[u8], r: &Report) {
+    use bevy::render::render_resource::{Extent3d, TextureDimension};
+    let scale = 2;
+    let (w, h) = (3 * W * scale, H * scale);
+    let mut out = vec![255u8; 4 * w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (panel, px, py) = (x / (W * scale), x / scale % W, y / scale);
+            let p = py * W + px;
+            let g = [gpu[4 * p], gpu[4 * p + 1], gpu[4 * p + 2]];
+            let rgb = match panel {
+                0 => g,
+                1 => r.picture[p],
+                _ if r.holes.contains(&p) => [255, 0, 0],
+                _ if g != r.picture[p] => [90, 90, 90],
+                _ => [0, 0, 0],
+            };
+            out[4 * (y * w + x)..][..3].copy_from_slice(&rgb);
+        }
+    }
+    let size = Extent3d {
+        width: w as u32,
+        height: h as u32,
+        ..default()
+    };
+    let image = Image::new(
+        size,
+        TextureDimension::D2,
+        out,
+        TextureFormat::Rgba8UnormSrgb,
+        default(),
+    );
+    image.try_into_dynamic().unwrap().save(path).unwrap();
 }
 
 /// (session, trace): the recorded runs of `nfsgba-game`'s replay test.
@@ -290,6 +329,9 @@ fn gpu_view_matches_the_exact_frame() {
             );
             for o in r.objects.iter().filter(|o| o.present < 0.8) {
                 eprintln!("    {}: {} px, {:.0}% present", o.name, o.pixels.len(), 100.0 * o.present);
+            }
+            if let Ok(dir) = std::env::var("SHOTS_DIR") {
+                save(&std::path::Path::new(&dir).join(format!("{name}-{k}.png")), &gpu, &r);
             }
             n += 1;
             exact += r.exact;

@@ -691,6 +691,7 @@ fn setup(
         original: active && std::env::var("NFSGBA_ORIGINAL").is_ok(),
         frame: None,
         visible: None,
+        drawn: Vec::new(),
         setup,
         portals: portals.clone(),
     });
@@ -799,6 +800,8 @@ struct Race {
     frame: Option<(render::Frame, render::Portal)>,
     /// The visible-sector list of `frame` (unfiltered, as `draw_world` takes it).
     visible: Option<render::Visibility>,
+    /// Per entity slot: the game's draw reaches it this frame (`game_camera`); empty without the game camera.
+    drawn: Vec<bool>,
     /// The game's racers, cars and route (`play::play` reads them back every frame).
     setup: view::RaceView,
     /// The portal texture every city material reads.
@@ -1000,10 +1003,11 @@ fn game_camera(
     tint: Res<Tint>,
     play: Res<play::Play>,
     smooth: Res<Smooth>,
-    mut camera: Single<&mut Transform, With<Camera3d>>,
+    mut camera: Single<(&mut Transform, &mut Projection), With<Camera3d>>,
 ) {
     if !race.game_camera {
         (race.frame, race.visible) = (None, None);
+        race.drawn.clear();
         return;
     }
     let root = view::root(&play.game.world);
@@ -1013,14 +1017,29 @@ fn game_camera(
         (Some(a), Some(b)) => blend_frame(a, b, alpha),
         _ => view::frame(&play.game.world),
     };
-    **camera = game::frame_transform(&frame, world);
+    *camera.0 = game::frame_transform(&frame, world);
+    // The view's focal length and near plane are the game's (the speed effect widens the focal length).
+    let (focal, near) = (frame.view.focal as f32, frame.view.near as f32 * SCALE);
+    if let Projection::Custom(p) = &mut *camera.1
+        && let Some(p) = p.get_mut::<GbaProjection>()
+        && (p.focal, p.near) != (focal, near)
+    {
+        (p.focal, p.near) = (focal, near);
+    }
     let visible = render::visible_sectors(&tint.rom, &frame, root);
+    // Which entities the game's draw reaches (bit 2, set once an entity passes the depth and screen culls): run
+    // the draw on a scratch screen.
+    let mut scene = view::scene(&play.game.world);
+    scene.entities.iter_mut().for_each(|e| e.flags &= !4);
+    let mut scratch = vec![0; render::SCREEN_WIDTH * 160];
+    render::draw_world(&tint.rom, &frame, &tint.rt, &mut scene, &mut visible.clone(), &mut scratch);
+    race.drawn = scene.entities.iter().map(|e| e.flags & 4 != 0).collect();
     (race.frame, race.visible) = (Some((frame, root)), Some(visible));
 }
 
 /// What is drawn: in game-camera mode the city through the game's visible list (the entries whose sector
 /// `draw_sector` draws: `transform_walls` finds no corner deeper than 0x5FFF), each clipped to its screen span in
-/// the shader; the racers whose sector is listed, each with the models `draw_sector_entities` picks at its camera
+/// the shader; the entities the game's draw reaches (`Race::drawn`), each with the models `draw_sector_entities` picks at its camera
 /// depth (`Racer::models_at`). The racers stand as the game's vehicle matrix slots put them (pitch and roll
 /// included), seen from the game's camera whichever camera is shown.
 /// NOT 1:1 (R10): hidden surfaces come from the depth buffer; the game overdraws in list order (painter's).
@@ -1082,9 +1101,7 @@ fn visibility(
             let (x, z) = (m[9].wrapping_add(r.pos[0] >> 8), m[11].wrapping_add(r.pos[2] >> 8));
             m[2].wrapping_mul(x).wrapping_add(m[8].wrapping_mul(z)) >> 14
         };
-        let listed = drawn
-            .as_ref()
-            .is_none_or(|d| d.iter().any(|(p, _)| p.sector == r.sector));
+        let listed = race.drawn.get(ent).copied().unwrap_or(true);
         let drawn_model = r.models_at(depth).contains(&car.model);
         v.set_if_neq(shown(race.active && !race.original && listed && drawn_model));
     }
@@ -1139,11 +1156,6 @@ fn traffic(
     let (models, textures) = bank.get_or_insert_with(|| (rom::models(&tint.rom), rom::vehicle_textures(&tint.rom)));
     let game_frame = view::frame(mem);
     let alpha = if race.original { 1.0 } else { play.alpha() };
-    let listed = |sector: u16| {
-        race.visible
-            .as_ref()
-            .is_none_or(|v| v.portals.iter().any(|p| p.flags & 8 == 0 && p.sector == sector))
-    };
     let mut wanted = Vec::new();
     for (i, slot) in mem.slots.iter().enumerate().filter(|(_, s)| s.block.is_some()) {
         let e = &slot.e;
@@ -1163,7 +1175,7 @@ fn traffic(
         let m = &game_frame.camera;
         let (x, z) = (m[9].wrapping_add(e.pos[0] >> 8), m[11].wrapping_add(e.pos[2] >> 8));
         let depth = m[2].wrapping_mul(x).wrapping_add(m[8].wrapping_mul(z)) >> 14;
-        if listed(e.sector) && race.active && !race.original {
+        if race.drawn.get(i).copied().unwrap_or(true) && race.active && !race.original {
             wanted.extend(racer.models_at(depth).into_iter().map(|model| (i, model, material)));
         }
     }
