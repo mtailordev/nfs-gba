@@ -29,6 +29,7 @@
 //! the keyboard drives the race, the HUD is the game's OAM, and O shows the GBA screen as the game composes it.
 //! The dump must be taken at `main_frame`'s entry with palette, VRAM and OAM (e.g. a `tools/game_trace.py` state).
 
+mod composite;
 mod game;
 mod play;
 #[cfg(test)]
@@ -356,7 +357,7 @@ fn add_viewer(app: &mut App) {
         brightness: 500.0,
         ..default()
     })
-    .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default()))
+    .add_plugins((FreeCameraPlugin, MaterialPlugin::<Indexed>::default(), composite::plugin))
     .init_resource::<Smooth>()
     .add_systems(Startup, setup)
     .add_systems(
@@ -382,6 +383,7 @@ fn add_viewer(app: &mut App) {
         ),
     );
     embedded_asset!(app, "indexed.wgsl");
+    embedded_asset!(app, "composite.wgsl");
 }
 
 fn setup(
@@ -389,6 +391,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut indexed: ResMut<Assets<Indexed>>,
+    mut composites: ResMut<Assets<composite::Composite>>,
     mut images: ResMut<Assets<Image>>,
     #[cfg(test)] start: Option<ResMut<Start>>,
     #[cfg(test)] offscreen: Option<Res<Offscreen>>,
@@ -581,18 +584,18 @@ fn setup(
         .collect();
     let routes = rom::routes(&data);
     // The HUD layer: the game's OAM over the window (empty until the game draws sprites).
-    let hud = images.add(play::hud_image());
+    // It is mixed into the scene by the last pass (`composite`), whose camera also draws the UI.
+    let hud = images.add(play::hud_image(TextureFormat::Rgba8Unorm));
+    #[cfg(test)]
+    let target = offscreen.as_ref().map(|o| o.0.clone());
+    #[cfg(not(test))]
+    let target = None;
+    let (scene_target, ui_camera) =
+        composite::spawn(&mut commands, &mut meshes, &mut composites, &mut images, hud.clone(), target);
+    let ui_camera = UiTargetCamera(ui_camera);
+    play::spawn_menu(&mut commands, &mut images, ui_camera.clone());
     commands.spawn((
-        ImageNode::new(hud.clone()),
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        },
-    ));
-    play::spawn_menu(&mut commands, &mut images);
-    commands.spawn((
+        ui_camera,
         Banner,
         Text::new(""),
         TextFont {
@@ -765,7 +768,6 @@ fn setup(
             (v.len() == 6).then(|| (Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
         })
         .unwrap_or((Vec3::new(center.x, max.y + 480.0, max.z + 640.0), center));
-    #[cfg_attr(not(test), allow(unused_variables))]
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -793,12 +795,9 @@ fn setup(
             )],
         ))
         .id();
-    #[cfg(test)]
-    if let Some(o) = offscreen {
-        commands
-            .entity(camera)
-            .insert(bevy::camera::RenderTarget::Image(o.0.clone().into()));
-    }
+    commands
+        .entity(camera)
+        .insert(bevy::camera::RenderTarget::Image(scene_target.into()));
     info!(
         "city bounds {min:.0} .. {max:.0} m; play a race: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>; keys: R next route, \
          G game/free camera, O original frame, T racing line, K sky; \

@@ -31,6 +31,7 @@ use bevy::{
     asset::RenderAssetUsages,
     audio::{ChannelCount, Decodable, Sample, SampleRate, Source},
     image::ImageSampler,
+    render::render_resource::TextureFormat,
     prelude::*,
 };
 use nfsgba_formats as rom;
@@ -65,6 +66,9 @@ pub struct Play {
     pub banner: Option<String>,
     script: Option<Vec<u16>>,
     pub hud: Handle<Image>,
+    /// `BLDALPHA` in the race: the dump's register, else what the race start sets ([`RACE_BLDALPHA`]; the game crate
+    /// does not keep the IO registers).
+    pub bldalpha: u16,
     /// The samples the game's sound hardware played, waiting for the audio device.
     pub sound: Arc<Mutex<VecDeque<Sample>>>,
     /// The full game (`NFSGBA_GAME`): the session that owns the race while it is not lent to `game`.
@@ -157,12 +161,11 @@ impl Play {
     /// A race dump (`prefix` under `$NFSGBA_DATA/work/e5298b24/`), running or paused.
     pub fn load(rom_bytes: Vec<u8>, prefix: &str, hud: Handle<Image>, running: bool) -> io::Result<Play> {
         let path = rom::data_dir().join("work/e5298b24").join(prefix);
-        Ok(Play::new(
-            Game::new(Machine::load_dump(rom_bytes, &path)?),
-            hud,
-            !running,
-            None,
-        ))
+        let mut play = Play::new(Game::new(Machine::load_dump(rom_bytes, &path)?), hud, !running, None);
+        if let Some(io) = rom::Dump::load(&path).ok().and_then(|d| d.io.get(0x52..0x54).map(<[u8]>::to_vec)) {
+            play.bldalpha = u16::from_le_bytes([io[0], io[1]]);
+        }
+        Ok(play)
     }
 
     /// A Quick Play race start on `route` in environment `env` (`race_init::start`), paused or, with `running`,
@@ -207,6 +210,7 @@ impl Play {
             banner: None,
             script,
             hud,
+            bldalpha: RACE_BLDALPHA,
             sound: Arc::default(),
             full: None,
         }
@@ -293,13 +297,9 @@ fn banner(h: &nfsgba_game::Handover) -> String {
     }
 }
 
-pub fn hud_image() -> Image {
-    let mut image = texture_2d(
-        240,
-        160,
-        vec![0; 240 * 160 * 4],
-        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-    );
+/// A 240×160 RGBA8 layer: the HUD (raw bytes, read by `composite.wgsl`) or the menus' screen (sRGB, shown by the UI).
+pub fn hud_image(format: TextureFormat) -> Image {
+    let mut image = texture_2d(240, 160, vec![0; 240 * 160 * 4], format);
     image.sampler = ImageSampler::nearest();
     image.asset_usage = RenderAssetUsages::all();
     image
@@ -403,29 +403,74 @@ pub fn frame(play: &Play, rom_bytes: &[u8]) -> (rom::render::Frame, rom::render:
     (view::frame(m), view::root(m), view::visible(rom_bytes, m))
 }
 
-/// `BLDALPHA` in the race (`0x0D0F`: EVA 15/16, EVB 13/16; `BLDCNT` `0x3F3F`, every layer a second target), read
-/// from `mgba/race.io.bin`. The machine state does not carry the IO registers; the race sets them once.
-const BLEND: (u32, u32) = (15, 13);
+/// `BLDALPHA` the race start sets (`race_init::start`: `0x0D0F`, EVA 15/16, EVB 13/16; `BLDCNT` `0x3F3F`, every layer
+/// a second target, so every semi-transparent sprite pixel blends with what is under it).
+const RACE_BLDALPHA: u16 = 0x0D0F;
+
+/// (EVA, EVB) of a `BLDALPHA` value: each field's 5 bits, at most 16.
+fn blend_of(bldalpha: u16) -> (u32, u32) {
+    (u32::from(bldalpha & 0x1F).min(16), u32::from(bldalpha >> 8 & 0x1F).min(16))
+}
+
+/// The game's alpha blend of a semi-transparent sprite colour over what is under it, both BGR555:
+/// `min(31, (obj·EVA + bg·EVB) >> 4)` per 5-bit channel.
+pub fn blend_555(obj: u16, under: u16, (eva, evb): (u32, u32)) -> u16 {
+    let ch = |s: u16| {
+        let (a, b) = (((obj >> s) & 31) as u32, ((under >> s) & 31) as u32);
+        ((a * eva + b * evb) >> 4).min(31) as u16
+    };
+    ch(0) | ch(5) << 5 | ch(10) << 10
+}
+
+/// Tests: the HUD layer is left empty (the R27 check compares the world alone).
+#[cfg(test)]
+#[derive(Resource)]
+pub struct NoHud;
+
+/// The sprites of the game's OAM as they are drawn now (the effect sprites follow their cars between game frames).
+pub fn hud_objects(play: &Play, race: &Race, smooth: &crate::Smooth) -> Vec<Option<(u16, bool)>> {
+    let g = &play.game;
+    let obj_palette: Vec<u16> = (0..256)
+        .map(|i| u16::from_le_bytes([g.palette[0x200 + 2 * i], g.palette[0x201 + 2 * i]]))
+        .collect();
+    let mut oam = g.oam.clone();
+    if !race.original && !play.paused {
+        lock_effects(&mut oam, play, race, smooth);
+    }
+    draw_objects(&oam, &g.vram[0x1_0000..], &obj_palette)
+}
 
 /// The GBA screen of play mode. Original frame: the whole screen composed as the GBA does, the mode-4 page through
 /// the BG palette (index 0: the line's backdrop colour), then the top sprite pixel over it, semi-transparent sprites
-/// (OBJ mode 1) blended `min(31, (obj·EVA + bg·EVB) >> 4)` per channel. High-resolution view: the sprites alone over
-/// the GPU image.
-/// NOT 1:1 (G2, high-resolution view only): semi-transparent sprites are drawn at 50% alpha (the blend brightens the
-/// GPU image, which the 2D layer cannot read). OBJ priority against the background is not modelled (the HUD is
-/// always in front).
-pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, mut images: ResMut<Assets<Image>>) {
+/// (OBJ mode 1) blended `min(31, (obj·EVA + bg·EVB) >> 4)` per channel. High-resolution view: the sprites alone,
+/// mixed into the GPU image by the last pass (`composite.wgsl`), which does the same blend on the window's pixels
+/// (EVA and EVB from [`Play::bldalpha`]).
+pub fn hud_layer(
+    play: Res<Play>,
+    race: Res<Race>,
+    smooth: Res<crate::Smooth>,
+    fin: Res<crate::composite::Final>,
+    mut composites: ResMut<Assets<crate::composite::Composite>>,
+    mut images: ResMut<Assets<Image>>,
+    #[cfg(test)] no_hud: Option<Res<NoHud>>,
+) {
+    #[cfg(test)]
+    if no_hud.is_some() {
+        return;
+    }
     if !play.in_race() {
         return;
     }
     let g = &play.game;
-    let colour = |pal: &[u8], i: usize| u16::from_le_bytes([pal[2 * i], pal[2 * i + 1]]);
-    let obj_palette: Vec<u16> = (0..256).map(|i| colour(&g.palette[0x200..], i)).collect();
-    let mut oam = g.oam.clone();
-    if !race.original && !play.paused {
-        lock_effects(&mut oam, &play, &race, &smooth);
+    let (eva, evb) = blend_of(play.bldalpha);
+    let want = UVec4::new(eva, evb, 0, 0);
+    if composites.get(&fin.material).is_some_and(|m| m.blend != want)
+        && let Some(mut m) = composites.get_mut(&fin.material)
+    {
+        m.blend = want;
     }
-    let objects = draw_objects(&oam, &g.vram[0x1_0000..], &obj_palette);
+    let colour = |pal: &[u8], i: usize| u16::from_le_bytes([pal[2 * i], pal[2 * i + 1]]);
+    let objects = hud_objects(&play, &race, &smooth);
     let backdrop = g.backdrop();
     let bg: Vec<u16> = (0..256).map(|i| colour(&g.palette, i)).collect();
     let out = compose(
@@ -433,7 +478,7 @@ pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, m
         &bg,
         |line| backdrop[line],
         objects,
-        BLEND,
+        (eva, evb),
         race.original && !play.paused,
     );
     if let Some(mut image) = images.get_mut(&play.hud) {
@@ -464,11 +509,7 @@ fn compose(
         };
         let px: Option<[u8; 4]> = match (o, exact) {
             (Some((c, true)), true) => {
-                let ch = |s: u16| {
-                    let (a, b) = (((c >> s) & 31) as u32, ((back >> s) & 31) as u32);
-                    ((a * blend.0 + b * blend.1) >> 4).min(31) as u16
-                };
-                let [r, g, b] = rgb(ch(0) | ch(5) << 5 | ch(10) << 10);
+                let [r, g, b] = rgb(blend_555(c, back, blend));
                 Some([r, g, b, 255])
             }
             (Some((c, _)), true) => {
@@ -501,11 +542,11 @@ pub struct MenuLayer;
 #[derive(Component)]
 pub struct MenuScreen(Handle<Image>);
 
-pub fn spawn_menu(commands: &mut Commands, images: &mut Assets<Image>) {
-    let image = images.add(hud_image());
+pub fn spawn_menu(commands: &mut Commands, images: &mut Assets<Image>, camera: UiTargetCamera) {
+    let image = images.add(hud_image(TextureFormat::Rgba8UnormSrgb));
     commands
         .spawn((
-            MenuLayer,
+            (MenuLayer, camera),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
@@ -547,7 +588,7 @@ pub fn menu_layer(
         &v.palette[..256],
         |_| v.palette[0],
         objects,
-        (u32::from(a & 0x1F), u32::from(a >> 8 & 0x1F)),
+        blend_of(a),
         true,
     );
     if let Some(mut image) = images.get_mut(&screen.0.0) {

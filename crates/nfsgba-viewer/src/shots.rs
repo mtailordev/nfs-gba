@@ -71,16 +71,9 @@ impl Rig {
         add_viewer(&mut app);
         app.finish();
         app.cleanup();
-        // The startup systems; the HUD layer (the game's sprites) is left out of the comparison.
+        // The startup systems. The HUD layer (the game's sprites) is left out until `hud(true)`.
+        app.insert_resource(play::NoHud);
         app.update();
-        let huds: Vec<Entity> = app
-            .world_mut()
-            .query_filtered::<Entity, With<ImageNode>>()
-            .iter(app.world())
-            .collect();
-        for e in huds {
-            app.world_mut().despawn(e);
-        }
         Rig {
             app,
             shots: Arc::default(),
@@ -88,6 +81,19 @@ impl Rig {
             target,
             pipelines_seen: 0,
             stable_pipelines: 0,
+        }
+    }
+
+    /// The game's sprites are mixed into the view (G2) or left out.
+    pub fn hud(&mut self, on: bool) {
+        if on {
+            self.app.world_mut().remove_resource::<play::NoHud>();
+        } else {
+            let hud = self.app.world().resource::<Race>().hud.clone();
+            if let Some(mut image) = self.app.world_mut().resource_mut::<Assets<Image>>().get_mut(&hud) {
+                image.data = Some(vec![0; W * H * 4]);
+            }
+            self.app.world_mut().insert_resource(play::NoHud);
         }
     }
 
@@ -494,4 +500,96 @@ fn gpu_view_matches_the_exact_frame() {
         worst_holes < 0.005 && worst_seams <= 10,
         "holes {worst_holes}, seams {worst_seams}"
     );
+}
+
+/// G2: the HUD blend in the high-resolution view. At 240×160 the GPU view with the game's sprites mixed in equals, on
+/// every pixel, the game's integer blend (`min(31, (obj·EVA + bg·EVB) >> 4)` per 5-bit channel) of the sprite over the
+/// GPU view without them (in the recorded races every HUD sprite is semi-transparent); and where the GPU view has the exact frame's colour (`render::draw_world`), the pixel is the
+/// exact frame's with the HUD over it, which is what the game shows. Opaque sprite pixels equal the exact frame's
+/// everywhere.
+#[test]
+fn hud_blend_is_the_games_blend() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    if let Some(path) = nfsgba_testkit::dump("mgba/race") {
+        let io = nfsgba_formats::Dump::load(&path).unwrap().io;
+        assert_eq!(io[0x0C] & 3, 0, "BG2CNT priority");
+    }
+    let rgb8 = |c: u16| {
+        let [r, g, b, _] = nfsgba_formats::bgr555(c);
+        [r, g, b]
+    };
+    let bgr555 = |p: [u8; 3]| u16::from(p[0] >> 3) | u16::from(p[1] >> 3) << 5 | u16::from(p[2] >> 3) << 10;
+    let (mut states, mut semi, mut opaque, mut agree, mut exact_blend) = (0, 0, 0, 0, 0);
+    for (session, name) in TRACES {
+        let (Some(dir), Some(_)) = (
+            nfsgba_testkit::fixture(session),
+            nfsgba_testkit::fixture(&format!("{session}/{name}.base.bin")),
+        ) else {
+            continue;
+        };
+        let trace = Trace::load(&dir, name).unwrap();
+        let frames = trace.timing.len();
+        let state = |k| play::Play::new(game_at(&rom, &trace, k), Handle::default(), true, None);
+        let mut rig = Rig::new(state(0));
+        for k in (0..4).map(|i| i * (frames - 1) / 3) {
+            rig.hud(false);
+            let base = rig.show(state(k));
+            rig.hud(true);
+            let shot = rig.show(state(k));
+            let r = compare(&rig, &rom, &base);
+            if r.covered == 0 {
+                continue;
+            }
+            let world = rig.app.world();
+            let (play, race, smooth) = (
+                world.resource::<play::Play>(),
+                world.resource::<Race>(),
+                world.resource::<crate::Smooth>(),
+            );
+            let blend = (
+                u32::from(play.bldalpha & 0x1F).min(16),
+                u32::from(play.bldalpha >> 8 & 0x1F).min(16),
+            );
+            let objects = play::hud_objects(play, race, smooth);
+            // OBJ priority against BG2 (G2): the race sets BG2CNT's priority to 0 (`mgba/race.io.bin`: DISPCNT 0x1F44,
+            // BG2CNT 0) and every sprite that is drawn has priority 0, and on a tie the OBJ wins, so the sprites are
+            // always in front of the bitmap and the model of "HUD over the scene" is the hardware's.
+            for e in play.game.oam.chunks(8) {
+                let (a0, a2) = (u16::from_le_bytes([e[0], e[1]]), u16::from_le_bytes([e[4], e[5]]));
+                if (a0 >> 8) & 3 != 2 && a0 >> 14 != 3 && a0 & 0xFF != 0xA0 {
+                    assert_eq!(a2 >> 10 & 3, 0, "{name} {k}: a sprite with priority {}", a2 >> 10 & 3);
+                }
+            }
+            for (p, o) in objects.into_iter().enumerate() {
+                let got = [shot[4 * p], shot[4 * p + 1], shot[4 * p + 2]];
+                let under = [base[4 * p], base[4 * p + 1], base[4 * p + 2]];
+                let (want, want_exact) = match o {
+                    None => (under, r.picture[p]),
+                    Some((c, false)) => {
+                        opaque += 1;
+                        assert_eq!(got, rgb8(c), "{name} {k} opaque sprite pixel {p}");
+                        (rgb8(c), rgb8(c))
+                    }
+                    Some((c, true)) => {
+                        semi += 1;
+                        let mix = |back: [u8; 3]| rgb8(play::blend_555(c, bgr555(back), blend));
+                        (mix(under), mix(r.picture[p]))
+                    }
+                };
+                assert_eq!(got, want, "{name} {k} pixel {p} ({}, {})", p % W, p / W);
+                if under == r.picture[p] {
+                    agree += 1;
+                    assert_eq!(got, want_exact, "{name} {k} pixel {p}: not the exact frame with the HUD");
+                    exact_blend += o.is_some_and(|(_, s)| s) as usize;
+                }
+            }
+            states += 1;
+        }
+    }
+    eprintln!(
+        "{states} states: {opaque} opaque and {semi} semi-transparent sprite pixels exact; {agree} pixels where the view \
+         is the exact frame's, {exact_blend} of them semi-transparent, all equal to the exact frame with the HUD"
+    );
+    assert!(states >= 20, "{states} states");
+    assert!(semi > 100_000, "{semi} semi-transparent pixels: the blend is not exercised");
 }
