@@ -497,12 +497,12 @@ Renderer fields confirmed from the code and 17 captured frames (engine/renderer.
 | `+0x30` / `+0x32` | angles for `build_entity_matrix`'s two rotations (axes not checked); traffic: pitch / shown heading |
 | `+0x36` | **far model** (depth ≥ 0x200); near = `+0x36 − 1`. Cars: the low model, so races draw medium near and low far, never high. Bit 4: a sector index |
 | `+0x38` | traffic: heading wobble (4) |
-| `+0x44` (high byte) / `+0x46` | material steps added to `+0x48` (0 in every capture) |
+| `+0x44` (high byte) / `+0x46` | material steps added to `+0x48`; zero on every drawable entity (sparks step `+0x44` but have no material; FIDELITY N1, `reach::entity_records`) |
 | `+0x48` | vehicle material (the atlas); player = car table `+0x0C` + record `[3]`; opponents from `0x7EEA44`; 0 = not drawn |
 | `+0x4E` | handler index (`0x7F38B8`): 0 player, 0x29 opponents, 0xE empty slots, 0x36 AI/traffic |
 | `+0x52` | traffic: speed-up counter (2) |
 | `+0x56` | traffic: knocked-away timer (2) |
-| `+0x64` | second model on matrix slot `+0x88 + 1` (spoiler: 12 Cobalt, 4 car 0; from `0x7F0636[car·0x10 + rec[0]]`, clamped at 0); negative: drawn before as model `−n` |
+| `+0x64` | second model on matrix slot `+0x88 + 1` (spoiler: 12 Cobalt, 4 car 0; from `0x7F0636[car·0x10 + rec[0]]`, clamped at 0 by `setup_race_cars` and `setup_player_car`, so never negative in a race); negative: drawn before as model `−n` |
 | `+0x70` | 0x640 at setup |
 | `+0x74` / `+0x78` | start sector (template entities; the viewer reads `+0x78`) |
 | `+0x7C` | traffic: type (0x7F546C) (2) |

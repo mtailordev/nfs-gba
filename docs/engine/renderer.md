@@ -298,7 +298,7 @@ Reimplemented exactly in `render/entities.rs` (`draw_entities`, `project_model`,
 | `+0x0C/+0x10/+0x14` | position, 8.8 fixed point |
 | `+0x28` | sort key `(x'² + d²) >> 8`, camera space (written) |
 | `+0x36` | **far model** (drawn at depth ≥ 0x200); the near model is `+0x36 − 1`. For cars it is the car's low-detail model, so the race draws the medium model near and the low one far; the high-detail model is never drawn in a race. Bit 4 entities: a sector index |
-| `+0x44` (high byte), `+0x46` | material steps added to `+0x48` (0 in every capture) |
+| `+0x44` (high byte), `+0x46` | material steps added to `+0x48` (zero on every drawable entity: FIDELITY N1) |
 | `+0x48` | vehicle material (the atlas: its size, log2 width `+0x1E`, height `+0x0E` and, for ROM textures, texels `+0x08`); 0 = not drawn |
 | `+0x4E` | handler index (world `+0x78` = the Thumb table `0x7F38B8`, which answers OPEN-QUESTIONS 11) |
 | `+0x64` | second model on matrix slot `+0x88 + 1`: after the first model when positive (the player's spoiler: 12 for the Cobalt, 4 for car 0), before it as model `−n` when negative |

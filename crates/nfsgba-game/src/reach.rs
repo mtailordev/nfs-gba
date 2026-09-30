@@ -404,3 +404,33 @@ fn renderer_runtime_tables_never_change() {
         ]
     );
 }
+
+/// FIDELITY N1 (was R26), the ROM side of `tests/coverage.rs` `entity_draw_path`: the entity records a race starts
+/// from (at most 4 route templates per record, which `race_spawn_template_entities` copies and `setup_race_cars` rewrites)
+/// have state 0x100F (bits 0 and 1), no flag bit 4, zero material steps and no negative second model. The second
+/// model's writers in a race, `setup_race_cars` and `setup_player_car`, read the spoiler table and store 0 for a
+/// negative entry (the third reference is the garage's). From the decompile: the spawners store state 7 and zero
+/// steps (`spawn_wingman_marker` after a transient 1, `spawn_spark` with material 0, `traffic_spawn`); later state
+/// stores only clear bit 0 or 2 (`traffic_handler`, `FUN_0814a6c0`, `FUN_0814a818`, `lap_crossing`), toggle bit 2
+/// (`car_racing_step`) or store 0; `effect_handler` steps `+0x44` only on sparks, which have no material.
+#[test]
+fn entity_records() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    for index in 0..ROUTE_COUNT {
+        let (templates, n) = route_templates(&rom, index);
+        assert!(n <= 4, "route record {index}"); // record 0, the menu scene, has one
+        for k in 0..n {
+            let e = templates + 0xA4 * k;
+            let (state, flags) = (u16_at(&rom, e + 8), u16_at(&rom, e + 0xA));
+            let (steps, second) = (
+                (u16_at(&rom, e + 0x44), u16_at(&rom, e + 0x46)),
+                u16_at(&rom, e + 0x64) as i16,
+            );
+            assert!(
+                state == 0x100F && flags & 0x10 == 0 && steps == (0, 0) && second >= 0,
+                "route record {index} template {k}"
+            );
+        }
+    }
+    assert_eq!(words(&rom, 0x087F_0636), [0x12BF44, 0x13BB18, 0x13BD4C]);
+}

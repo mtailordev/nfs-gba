@@ -81,7 +81,8 @@ pub struct Scene<'a> {
     /// EWRAM (`0x02000000`, 256 KiB), where the game unpacks the atlases (entity `+0x84`).
     pub ram: &'a [u8],
     /// The entity handler `world+0x78[+0x4E]` (Thumb game code), which the sort calls for entities with state
-    /// bit 0 and not bit 1. NOT 1:1 (R26) by default: the handlers are not reimplemented; the default does nothing.
+    /// bit 0 and not bit 1. No drawable entity of a Carbon race has that state (FIDELITY N1), so the default does
+    /// nothing.
     pub handler: Box<dyn FnMut(&mut Entity) + 'a>,
     /// Spans left to draw: the rasteriser stops after this many (to match a RAM dump taken mid-frame).
     pub spans: usize,

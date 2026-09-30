@@ -48,6 +48,9 @@ fn run(rom: &[u8], env: u32, route: u32, mode: u32, car: u8, hard: bool) -> Resu
             Ok(_) => return Err(format!("frame {k}: the race handed over")),
             Err(e) => return Err(format!("frame {k}: {e}")),
         }
+        if let Some(e) = entity_draw_path(&g) {
+            return Err(format!("frame {k}: {e}"));
+        }
         best = best.max(g.world.slots[0].c.progress);
     }
     let (c, end) = (&g.world.slots[0].c, g.world.slots[0].e.pos);
@@ -58,6 +61,23 @@ fn run(rom: &[u8], env: u32, route: u32, mode: u32, car: u8, hard: bool) -> Resu
     );
     let (dx, dz) = (i64::from(end[0] - start[0]), i64::from(end[2] - start[2]));
     Ok(((dx as f64).hypot(dz as f64) as i64, best))
+}
+
+/// FIDELITY N1 (was R26): the entity draw paths no race reaches. A drawable entity (material `+0x48` != 0) never
+/// has state bit 0 without bit 1 (the sort would call its handler), flag bit 4 (drawn as a sector), a material
+/// step (`+0x44` high byte, `+0x46`) or a negative second model (`+0x64`). The ROM side: `reach::entity_records`.
+fn entity_draw_path(g: &Game) -> Option<String> {
+    g.world.slots.iter().map(|s| &s.e).find_map(|e| {
+        let odd = e.material != 0
+            && (e.state & 3 == 1 || e.flags & 0x10 != 0 || e.material_step >> 8 != 0 || e.material_offset != 0)
+            || e.extra_model < 0;
+        odd.then(|| {
+            format!(
+                "entity {}: state {:#x} flags {:#x} material {:#x} steps {:#x}/{:#x} second model {}",
+                e.index, e.state, e.flags, e.material, e.material_step, e.material_offset, e.extra_model
+            )
+        })
+    })
 }
 
 /// The route numbers with a name in the ROM's table (1..=42) and what they are.
