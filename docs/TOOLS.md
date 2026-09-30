@@ -1,6 +1,6 @@
 # Tools
 
-Installed 2026-09-29. `~` = `C:\Users\cyntrex`. Everything under `ext\` is gitignored and never vendored.
+Installed 2026-09-29. `~` = `%UserProfile%`. Everything under `ext\` is gitignored and never vendored.
 `ext\_selftest\` holds a synthetic 256 KiB test image (`test.gba`, made-up header + 6 instructions, no game data) and `luatest.lua`, used for the checks below.
 
 | Tool | Version | Install / location | License | Verified with | Notes |
@@ -94,7 +94,7 @@ $env:GHIDRA_INSTALL_DIR = (Resolve-Path "$env:USERPROFILE\scoop\apps\ghidra\curr
 
 ```powershell
 E:\Games\rewrites\nfs_gba\.venv\Scripts\python.exe tools\<script>.py
-# recreate: uv venv .venv --python C:\Users\cyntrex\.pyenv\pyenv-win\versions\3.14.7\python.exe
+# recreate: uv venv .venv --python %UserProfile%\.pyenv\pyenv-win\versions\3.14.7\python.exe
 #           uv pip install --python .venv\Scripts\python.exe -r tools\requirements.txt
 ```
 
