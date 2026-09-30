@@ -11,7 +11,7 @@ What exists (evidence in `docs/FIDELITY.md` "Closed"):
 - **Crates:** `nfsgba-fixed` (the game's integer maths, once), `nfsgba-formats` (parsers, the exact 240×160 renderer, HUD, menus data, career rules), `nfsgba-audio` (the LS_Play engine, bit-exact), `nfsgba-sim` (player car, opponents, wingman, traffic), `nfsgba-game` (typed `World`, race start, race frame, typed menus, `Session` = the whole game with one frame API), `nfsgba-viewer` (Bevy 0.19.1: the full game, high resolution with framerate interpolation and the 240×160 reference mode), `nfsgba-testkit` (dev only).
 - **Checks:** per-function oracle sets on the game's own code, whole-frame replay traces, headless power-on runs through the menus, races of every mode to their results, the visual check of the high-resolution view against the exact frame (R27), the exact HUD blend (G2).
 - **Reachability:** every `Unported` stop left in the code is proven unreachable with Carbon's data by a test (`nfsgba-game` `src/reach.rs`, FIDELITY N1). Coverage (`docs/engine/coverage.md`): 12 scenarios reach 510 of 885 functions; none still needs porting.
-- **The ledger** (`docs/FIDELITY.md`) groups what is not exact by why: **Open** (the last residuals), then **accepted** by the contract: hardware timing (no cycle-accurate CPU), unreachable paths, high-resolution presentation, invisible internals and oracle scaffolding.
+- **The ledger** (`docs/FIDELITY.md`) groups what is not exact by why: **Open** is empty; everything else is **accepted** by the contract: hardware timing (no cycle-accurate CPU), unreachable paths, high-resolution presentation, invisible internals and oracle scaffolding.
 
 ## Working rules (from the user)
 
@@ -23,7 +23,7 @@ What exists (evidence in `docs/FIDELITY.md` "Closed"):
 
 ## Start here (next session)
 
-1. Read `docs/FIDELITY.md` "Open": anything still there is the only remaining deviation work. Everything under "Accepted" is settled by the contract; don't re-open it without a new reason (a path becoming reachable, a decision to model CPU timing).
+1. `docs/FIDELITY.md` "Open" is empty (2026-09-30); a new deviation found later goes there. Everything under "Accepted" is settled by the contract; don't re-open it without a new reason (a path becoming reachable, a decision to model CPU timing).
 2. **Extras (the roadmap's milestone 5), none started:**
    - **Other platforms.** The engine crates depend only on `std` and `serde_json`, so they build for any Rust target; Bevy covers Windows, macOS, Linux, the web (WebGPU, WebGL2 fallback), Android and iOS. The viewer needs a thin platform layer: the ROM from a file picker instead of `NFSGBA_DATA`/`.env`, the save in browser storage or the app's folder instead of `std::fs`, the `NFSGBA_*` environment switches as flags or an options menu, gamepad and touch input. First step: `cargo check --target wasm32-unknown-unknown` on the engine crates, then add it to the gate.
    - A high-rate mode (read how `mstan/MarioKartSuperCircuitRecomp` does 60 fps; licence unclear, read only), widescreen, free roam.
