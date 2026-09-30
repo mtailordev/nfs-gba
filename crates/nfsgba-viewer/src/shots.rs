@@ -325,7 +325,11 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
             "car"
         };
         object(
-            format!("{kind} entity {i} (slot {})", e.slot),
+            format!(
+                "{kind} entity {i} (slot {}){}",
+                e.slot,
+                if e.flags & 8 != 0 { " RAM atlas" } else { "" }
+            ),
             draw(false, Some(i), None),
             &full,
             &|_| true,
@@ -405,6 +409,8 @@ fn gpu_view_matches_the_exact_frame() {
     let (mut states, mut exact, mut near, mut clipped_states) = (0, 0.0, 0.0, 0);
     let (mut worst_car, mut worst_traffic, mut worst_wall) = (1.0f32, 1.0f32, 1.0f32);
     let (mut worst_holes, mut worst_seams, mut objects) = (0.0f32, 0, 0);
+    // Traffic cars whose atlas the game keeps in RAM (R29): how many objects, and the least share present.
+    let (mut ram_objects, mut worst_ram) = (0, 1.0f32);
     for (session, name) in TRACES {
         if only.as_deref().is_some_and(|o| o != name) {
             continue;
@@ -453,6 +459,10 @@ fn gpu_view_matches_the_exact_frame() {
                     "traffic" => (&mut worst_traffic, 20),
                     _ => (&mut worst_wall, 100),
                 };
+                if o.name.starts_with("traffic") && o.name.contains("RAM atlas") {
+                    ram_objects += 1;
+                    worst_ram = worst_ram.min(o.present);
+                }
                 if o.pixels.len() >= least {
                     *worst = worst.min(o.present);
                     if o.present < 0.5 {
@@ -474,13 +484,14 @@ fn gpu_view_matches_the_exact_frame() {
     let (exact, near) = (exact / states as f32, near / states as f32);
     eprintln!(
         "{states} states, {objects} objects: exact {:.1}%, within a pixel {:.1}%; least present: car {:.0}%, traffic {:.0}%, \
-         walls {:.0}%; worst holes {:.2}% of the geometry, worst {worst_seams} seam pixels",
+         walls {:.0}%; worst holes {:.2}% of the geometry, worst {worst_seams} seam pixels; {ram_objects} RAM-atlas traffic \n         objects, least present {:.0}%",
         100.0 * exact,
         100.0 * near,
         100.0 * worst_car,
         100.0 * worst_traffic,
         100.0 * worst_wall,
-        100.0 * worst_holes
+        100.0 * worst_holes,
+        100.0 * worst_ram
     );
     if only.is_some() {
         return;
@@ -592,4 +603,61 @@ fn hud_blend_is_the_games_blend() {
     );
     assert!(states >= 20, "{states} states");
     assert!(semi > 100_000, "{semi} semi-transparent pixels: the blend is not exercised");
+}
+
+/// R29: traffic whose atlas the game keeps in RAM (entity flag bit 3) is drawn. No recorded state has one, so each
+/// traffic car of a recorded state gets its ROM atlas copied into free EWRAM and its flag bit 3 set; the GPU view is
+/// then the very same picture as with the ROM atlas (and `compare`'s exact frame reads the RAM atlas too).
+#[test]
+fn traffic_with_a_ram_atlas_is_drawn() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let textures = nfsgba_formats::vehicle_textures(&rom);
+    let mut moved = 0;
+    for (session, name) in [("live-race", "live"), ("live-race", "trail"), ("game-loop", "drive")] {
+        let (Some(dir), Some(_)) = (
+            nfsgba_testkit::fixture(session),
+            nfsgba_testkit::fixture(&format!("{session}/{name}.base.bin")),
+        ) else {
+            continue;
+        };
+        let trace = Trace::load(&dir, name).unwrap();
+        let frames = trace.timing.len();
+        let state = |k, ram: bool| {
+            let mut game = game_at(&rom, &trace, k);
+            let mut n = 0;
+            let traffic: Vec<usize> = (0..game.world.slots.len())
+                .filter(|&i| ram && game.world.slots[i].block.is_some())
+                .collect();
+            for i in traffic {
+                let e = game.world.slots[i].e.clone();
+                let Some(info) = game.world.material_info.get(e.material as usize) else {
+                    continue;
+                };
+                let (size, texture) = (info.width as usize * info.height as usize, textures.get(e.material as usize));
+                let free = game.world.heap.windows(size).position(|w| w.iter().all(|&b| b == 0));
+                let (Some(texture), Some(at), true) = (texture, free, e.slot != 0xFF && e.flags & 0x10 == 0) else {
+                    continue;
+                };
+                if e.material_offset != 0 || e.material_step >> 8 != 0 || e.flags & 8 != 0 || texture.pixels.len() != size {
+                    continue;
+                }
+                game.world.heap[at..at + size].copy_from_slice(&texture.pixels);
+                let e = &mut game.world.slots[i].e;
+                (e.atlas, e.flags) = (0x0200_0000 | at as u32, e.flags | 8);
+                n += 1;
+            }
+            (play::Play::new(game, Handle::default(), true, None), n)
+        };
+        let mut rig = Rig::new(state(0, false).0);
+        for k in (0..6).map(|i| i * (frames - 1) / 5) {
+            let rom_view = rig.show(state(k, false).0);
+            let (ram_play, n) = state(k, true);
+            let ram_view = rig.show(ram_play);
+            moved += n;
+            let differ = (0..W * H).filter(|&p| rom_view[4 * p..4 * p + 4] != ram_view[4 * p..4 * p + 4]).count();
+            eprintln!("{name} {k:>3}: {n} traffic cars with a RAM atlas, {differ} pixels differ from the ROM atlas's view");
+            assert_eq!(differ, 0, "{name} {k}");
+        }
+    }
+    assert!(moved >= 5, "{moved} traffic cars moved to RAM atlases");
 }

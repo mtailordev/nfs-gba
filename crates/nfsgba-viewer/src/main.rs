@@ -1284,7 +1284,6 @@ struct TrafficCar {
 /// The game's traffic cars (`Slot::block`; the racers and the effect entities are other slots), drawn like the
 /// racers: the models `draw_sector_entities` picks at the car's depth, on the pose of its vehicle matrix slot,
 /// blended between game frames. Parts are made the first time an entity shows them.
-/// NOT 1:1 (R29): a traffic atlas kept in RAM (flag bit 3) is not drawn.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn traffic(
     mut commands: Commands,
@@ -1317,8 +1316,14 @@ fn traffic(
     let mut wanted = Vec::new();
     for (i, slot) in mem.slots.iter().enumerate().filter(|(_, s)| s.block.is_some()) {
         let e = &slot.e;
-        let material = e.material as usize + e.material_offset as usize + (e.material_step >> 8) as usize;
-        if e.slot == 0xFF || e.material == 0 || e.flags & 0x18 != 0 || material >= textures.len() {
+        let ram = e.flags & 8 != 0;
+        // The ROM material the entity is at, or (RAM atlas) its own material's size record.
+        let material = if ram {
+            e.material as usize
+        } else {
+            e.material as usize + e.material_offset as usize + (e.material_step >> 8) as usize
+        };
+        if e.slot == 0xFF || e.material == 0 || e.flags & 0x10 != 0 || (!ram && material >= textures.len()) {
             continue;
         }
         let racer = view::Racer {
@@ -1340,6 +1345,12 @@ fn traffic(
     let mut have = Vec::new();
     for (entity, part, look, mut t, mut v) in &mut parts {
         clip_material(&mut indexed, look, race.clip.get(part.ent).copied().flatten());
+        if let (Some(px), Some(handle)) = (mem.atlas(part.ent), indexed.get(&look.0).map(|m| m.indices.clone())) {
+            // A traffic atlas kept in RAM (flag bit 3) is the game's own buffer: what it holds now.
+            if images.get(&handle).is_some_and(|i| i.data.as_deref() != Some(px)) && let Some(mut i) = images.get_mut(&handle) {
+                i.data = Some(px.to_vec());
+            }
+        }
         let show = wanted.contains(&(part.ent, part.model, part.material));
         if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(part.ent), smooth.curr.ents.get(part.ent)) {
             t.set_if_neq(blend(a, b, alpha));
@@ -1355,7 +1366,14 @@ fn traffic(
         have.push((part.ent, part.model, part.material));
     }
     for &(ent, model, material) in wanted.iter().filter(|w| !have.contains(w)) {
-        let atlas = &textures[material];
+        // The atlas: the ROM's material, or (flag bit 3) the unpacked buffer in RAM, which the game keeps current.
+        let info = mem.material_info.get(material);
+        let ram_atlas = mem.atlas(ent).zip(info).map(|(px, i)| rom::Texture {
+            width: i.width as usize,
+            height: i.height as usize,
+            pixels: px.to_vec(),
+        });
+        let atlas = ram_atlas.as_ref().unwrap_or_else(|| &textures[material]);
         let mesh = made
             .entry((model, material))
             .or_insert_with(|| meshes.add(model_tris(&models[model], Some(atlas), Color::WHITE).mesh()))
@@ -1501,6 +1519,8 @@ fn tint(
 
     // A paused race: the game's base palette (city and car ramps) with the light tint applied here; a race the game
     // steps is tinted by the game (above).
+    // NOT 1:1 (R29): `Game::tint` is private to `nfsgba-game` and runs only in the race frame's tail, which a paused
+    // start never reaches, so the viewer applies the tint itself.
     // NOT 1:1 (R17): for 1–7 scanlines per game frame the game shows the tinted glass instead.
     let base = if race.active {
         let setup = &race.setup;
