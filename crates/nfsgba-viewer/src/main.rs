@@ -1035,7 +1035,7 @@ fn game_camera(
     };
     *camera.0 = game::frame_transform(&frame, world);
     // The view's focal length and near plane are the game's (the speed effect widens the focal length).
-    let (focal, near) = (frame.view.focal as f32, frame.view.near as f32 * SCALE / 4.0);
+    let (focal, near) = (frame.view.focal as f32, frame.view.near as f32 * SCALE);
     if let Projection::Custom(p) = &mut *camera.1
         && let Some(p) = p.get_mut::<GbaProjection>()
         && (p.focal, p.near) != (focal, near)
