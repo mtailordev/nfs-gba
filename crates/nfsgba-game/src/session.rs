@@ -97,6 +97,9 @@ pub struct Session<'a> {
     /// The original's counters for the next menu frame, `(tick counter, VBlank counter)`, instead of the frame count
     /// (T1): a test replays a recorded power-on run's `main_frame` entries with them (`tests/traces2.rs`).
     pub clock: Option<(u32, u32)>,
+    /// The VBlank waits left of the pause menu's resume (`goto_screen(0x82)` waits 15, U8): the race and the menu
+    /// page stand still and the sound engine runs.
+    resume_wait: u32,
 }
 
 /// The calls the race start and the pause resume make (`game_state_step` states 4 and 5): the session runs them.
@@ -139,6 +142,7 @@ impl<'a> Session<'a> {
             held: 0,
             frames: 0,
             clock: None,
+            resume_wait: 0,
         }
     }
 
@@ -189,6 +193,16 @@ impl<'a> Session<'a> {
         let edge = keys & !self.held;
         self.held = keys;
         self.frames += 1;
+        if self.resume_wait > 0 {
+            // goto_screen(0x82)'s VBlankIntrWait calls, inside the main_frame of the press: nothing but the VBlank.
+            let rom = Rom(self.rom);
+            self.menu_sound = self.engine().vblank(rom);
+            self.resume_wait -= 1;
+            if self.resume_wait == 0 {
+                self.finish_resume();
+            }
+            return Ok(());
+        }
         if let (Some(game), false) = (&mut self.race, self.paused) {
             return match game.frame(keys, &Timing::steady())? {
                 Flow::Racing => Ok(()),
@@ -202,6 +216,8 @@ impl<'a> Session<'a> {
         // The VBlank comes first, as in the original (`main_frame` waits for it): it mixes what the last frame asked.
         let rom = Rom(self.rom);
         self.menu_sound = self.engine().vblank(rom);
+        // The menu page's background palette (the resume blacks it after its waits, not before).
+        let menu_bg = self.paused.then(|| self.host.screen.palette[..256].to_vec());
         let st = &mut self.st;
         let (ticks, vblanks) = self.clock.unwrap_or((self.frames, self.frames)); // one VBlank per video frame
         (st.g.keys, st.g.keys_held, st.g.ticks) = (edge, held, ticks as i32);
@@ -223,7 +239,7 @@ impl<'a> Session<'a> {
         }
         match (self.st.g.game_state, self.paused) {
             (4, false) => self.start_race(),
-            (5, true) => self.resume(),
+            (5, true) => self.resume(menu_bg.as_deref()),
             _ => Ok(()),
         }
     }
@@ -284,23 +300,36 @@ impl<'a> Session<'a> {
         self.audio = Some(game.world.audio);
     }
 
-    /// The pause menu left the menus (`game_state` 5): resume the race, or quit (`race_outcome` 5).
-    fn resume(&mut self) -> Result<()> {
+    /// The pause menu left the menus (`game_state` 5): quit (`race_outcome` 5), or resume the race, which first waits
+    /// 15 VBlanks inside `goto_screen(0x82)` (U8): this frame was the first; the race and the menu page stand still
+    /// (`menu_bg`: the page's background palette as the press found it) for 14 more ([`Session::frame`]).
+    fn resume(&mut self, menu_bg: Option<&[u16]>) -> Result<()> {
+        if self.st.g.race_outcome != 5 {
+            if let Some(bg) = menu_bg {
+                self.host.screen.palette[..256].copy_from_slice(bg);
+            }
+            self.resume_wait = 14;
+            return Ok(());
+        }
         self.paused = false;
-        if self.st.g.race_outcome == 5 {
-            let mut game = self.race.take().expect("a paused race");
-            game.snd_stop_all();
-            self.st.g.music_id = game.world.lp.music_id as u32;
-            self.end_race(game);
-            self.st.g.game_state = 1;
-            self.st.g.menu_exit = 0;
-            self.st.g.screen_entered = 0;
-            flow::menu_back(&mut self.st, &mut self.host);
-        } else if let Some(game) = &mut self.race {
+        let mut game = self.race.take().expect("a paused race");
+        game.snd_stop_all();
+        self.st.g.music_id = game.world.lp.music_id as u32;
+        self.end_race(game);
+        self.st.g.game_state = 1;
+        self.st.g.menu_exit = 0;
+        self.st.g.screen_entered = 0;
+        flow::menu_back(&mut self.st, &mut self.host);
+        Ok(())
+    }
+
+    /// The rest of `goto_screen(0x82)` after its waits: the race palettes, the HUD, the engine loop and the music.
+    fn finish_resume(&mut self) {
+        self.paused = false;
+        if let Some(game) = &mut self.race {
             game.world.lp.music_id = self.st.g.music_id as i32;
             game.resume(self.st.g.hud_on != 0, i32::from(self.st.profile.music));
         }
-        Ok(())
     }
 
     /// A race is running (not paused): [`Session::race`] is the game shown and stepped.

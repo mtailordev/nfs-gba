@@ -8,6 +8,9 @@
 --   PICK opp=N wingman=W / PICKED cars=.. paints=..    pick_opponent_cars (0x0813B634) entry / return
 --   M screen=S state=G tick=T vb=V keys=K   entry of main_frame (0x0812AE64): the screen and game state it runs, the tick
 --                                and VBlank counters, the keys held (bit = KEYINPUT layout: A=1, B=2, ... as emu:getKeys)
+--   G arg=A vb=V / W vb=V / X vb=V / MP id=I vb=V / MS vb=V   goto_screen (0x0812BB5C, screen A; 0x82 = resume a paused race),
+--                                vblank_intr_wait (0x08151454), restart_engine_sound (0x08139E10), carbon_play_music
+--                                (0x08136054), music_stop (0x0813609C), each with the VBlank counter 0x030053B4
 --   (other)                      TR2MARK("text") logs a line (the scenario's marks, e.g. POKE)
 --   E fn=F n=K player=P phase=H view=V heading=X yaw=Y   entry of FUN_0814A2A0 / FUN_0814B168 (entity K, its +0x2C heading,
 --                                *0x03005F9C); V a=A b=B ret=R    rim_side_visible (0x0814F9D0); D lr=L    draw_decal_on_atlas
@@ -91,6 +94,13 @@ end, 0x0814F9D0)
 emu:setBreakpoint(function()
   log(string.format("D lr=%d", emu:readRegister("lr") & 0xFFFFFFFE))
 end, 0x0813BD90)
+
+local VB = 0x030053B4
+emu:setBreakpoint(function() log(string.format("G arg=%d vb=%d", emu:readRegister("r0"), emu:read32(VB))) end, 0x0812BB5C)
+emu:setBreakpoint(function() log(string.format("W vb=%d", emu:read32(VB))) end, 0x08151454)
+emu:setBreakpoint(function() log(string.format("X vb=%d", emu:read32(VB))) end, 0x08139E10)
+emu:setBreakpoint(function() log(string.format("MP id=%d vb=%d", emu:readRegister("r0"), emu:read32(VB))) end, 0x08136054)
+emu:setBreakpoint(function() log(string.format("MS vb=%d", emu:read32(VB))) end, 0x0813609C)
 
 emu:setBreakpoint(function()
   log(string.format("M screen=%d state=%d tick=%d vb=%d keys=%d", emu:read32(0x03005944), emu:read32(0x03005808),

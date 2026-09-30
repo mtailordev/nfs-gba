@@ -183,17 +183,15 @@ fn the_grid_deal_follows_the_menu_draws() {
             s.frame(f.keys)
                 .unwrap_or_else(|e| panic!("{name}: main_frame {k}: {e}"));
             menu_frames += 1;
-            if let Some(n) = frames
+            let same = frames
                 .get(k + 1)
-                .filter(|n| n.state == 1 && n.screen == f.screen && f.screen == screen)
-            {
-                if s.st.g.screen == screen && s.race.is_none() {
-                    assert_eq!(
-                        s.st.g.rand_index, n.rand,
-                        "{name}: main_frame {k}: the frame's draws (screen {screen})"
-                    );
-                    compared += 1;
-                }
+                .filter(|n| n.state == 1 && n.screen == f.screen && f.screen == screen);
+            if let (Some(n), true) = (same, s.st.g.screen == screen && s.race.is_none()) {
+                assert_eq!(
+                    s.st.g.rand_index, n.rand,
+                    "{name}: main_frame {k}: the frame's draws (screen {screen})"
+                );
+                compared += 1;
             }
         }
         assert!(
@@ -213,7 +211,7 @@ fn the_grid_deal_follows_the_menu_draws() {
         );
 
         // The session's race start on the game's index and tick: the same opponents, the same index afterwards.
-        let records = s.st.profile.car_records.clone();
+        let records = s.st.profile.car_records;
         let mut st = s.st.clone();
         (st.g.rand_index, st.g.race_car) = (start.rand, start.cars[0] as u8);
         let mut setup = Setup::menus(&rom, Engine::new(Rom(&rom), 16, 16), start.tick, 0, &records, None);
@@ -310,4 +308,163 @@ fn the_rim_redraw_rule_matches_a_full_turn() {
         "both hidden bands and the visible range were met: {classes:?}"
     );
     assert!(redrawn > 100 && redrawn < calls as u32, "{redrawn} redraws");
+}
+
+const KEYS: [&str; 10] = ["A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L"];
+
+/// The key script of `session/quickplay.json` (power-on to a Quick Play race) per video frame, and the choice the
+/// game's run made on the race setup screen, to be set at `sync_at` (see `tests/session.rs`).
+fn quickplay() -> Option<(Vec<u16>, usize, serde_json::Value)> {
+    let t: serde_json::Value = serde_json::from_str(&nfsgba_testkit::read_to_string("session/quickplay.json")?).ok()?;
+    let mut held = vec![0u16; 2900];
+    for press in t["script"].as_array()? {
+        let key = KEYS.iter().position(|k| *k == press[2].as_str().unwrap()).unwrap();
+        let first = press[0].as_u64().unwrap() as usize;
+        held[first..first + press[1].as_u64().unwrap() as usize]
+            .iter_mut()
+            .for_each(|h| *h |= 1 << key);
+    }
+    let sync_at = t["sync_at"].as_u64()? as usize;
+    Some((held, sync_at, t["frames"][sync_at].clone()))
+}
+
+/// The race choice on the setup screen, as `tests/session.rs` sets it, with the race mode `mode`.
+fn choose(s: &mut Session, row: &serde_json::Value, mode: u32) {
+    let n = |k: &str| row[k].as_u64().unwrap() as u32;
+    let g = &mut s.st.g;
+    (g.race_mode, g.route, g.reverse, g.laps, g.opponents) =
+        (mode, n("route"), n("reverse"), n("laps"), n("opponents"));
+    (g.difficulty, g.traffic) = (n("difficulty"), n("traffic"));
+    s.st.profile.settings[..5].copy_from_slice(&[
+        n("reverse"),
+        n("laps"),
+        n("difficulty"),
+        n("opponents"),
+        n("traffic"),
+    ]);
+    s.st.profile.car = n("car") as i8;
+    s.st.profile.wingman = u32::from(n("opponents") != 3);
+}
+
+/// G1: a hunter race (mode 2) and an elimination race (mode 1) through `Session`, from power-on through the menus,
+/// the intro and the countdown, to their results screen (the player's car marked finished, as `tools/session_trace.py`
+/// does for the circuit), with no `Unported` on the way. The reach audit (`src/reach.rs`) shows every race path is
+/// ported or unreachable; this plays the two modes whose races `session_matches_the_game` (a circuit) does not.
+#[test]
+fn hunter_and_elimination_races_reach_their_results() {
+    let (Some(rom), Some((held, sync_at, row))) = (nfsgba_testkit::rom(), quickplay()) else {
+        return;
+    };
+    for (name, mode) in [("elimination", 1), ("hunter", 2)] {
+        let mut s = Session::new(&rom, vec![0xFF; 512]);
+        let (mut poked, mut results_at) = (false, None);
+        for f in 0..6000usize {
+            if f == sync_at {
+                choose(&mut s, &row, mode);
+            }
+            s.frame(held.get(f).copied().unwrap_or(0))
+                .unwrap_or_else(|e| panic!("{name}: frame {f}: {e}"));
+            if let Some(game) = s
+                .race
+                .as_mut()
+                .filter(|g| g.world.lp.game_state == 5 && g.world.g.race_frames >= 150)
+                && !poked
+            {
+                assert_eq!(game.world.g.mode, mode, "{name}: the race mode");
+                let p = game.world.g.player as usize;
+                game.world.slots[p].e.race_state = 2;
+                poked = true;
+            }
+            if poked && s.race.is_none() && s.st.g.screen == 12 {
+                results_at = Some(f);
+                break;
+            }
+        }
+        assert!(poked, "{name}: a race was started and run");
+        assert!(results_at.is_some(), "{name}: the results screen was reached");
+    }
+}
+
+/// U8: the pause menu's resume. `pause.log` (a circuit, START, A on the first item): `goto_screen(0x82)` calls
+/// `VBlankIntrWait` 15 times, then `restart_engine_sound` and the race music (id 1) in the VBlank the race's next frame
+/// starts in. The `Session` must hold the race and the menu page for the same number of video frames after the A, then
+/// restart the engine loop and the music, and run the race.
+#[test]
+fn the_resume_waits_as_the_game_does() {
+    let (Some(rom), Some((held, sync_at, row)), Some(text)) = (
+        nfsgba_testkit::rom(),
+        quickplay(),
+        nfsgba_testkit::read_to_string("traces2/pause.log"),
+    ) else {
+        return;
+    };
+    // The recording: the resume's goto_screen, its VBlankIntrWait calls, the first race frame after it.
+    let vb = |line: &str| field(line, "vb");
+    let lines: Vec<&str> = text.lines().collect();
+    let goto = lines
+        .iter()
+        .position(|l| l.contains(" G arg=130 "))
+        .expect("goto_screen(0x82)");
+    let first_frame = lines[goto..]
+        .iter()
+        .position(|l| l.contains(" M ") && field(l, "state") == 5)
+        .expect("the race's first main_frame")
+        + goto;
+    let waits = lines[goto..first_frame].iter().filter(|l| l.contains(" W ")).count();
+    let (start, end) = (vb(lines[goto]), vb(lines[first_frame]));
+    let restart = lines[goto..=first_frame + 8]
+        .iter()
+        .find(|l| l.contains(" X "))
+        .expect("restart_engine_sound");
+    let music = lines[goto..]
+        .iter()
+        .find(|l| l.contains(" MP "))
+        .expect("the race music");
+    assert_eq!(
+        (waits, end - start),
+        (15, 15),
+        "15 VBlankIntrWait, the race 15 VBlanks after the goto"
+    );
+    assert_eq!(
+        (vb(restart), vb(music), field(music, "id")),
+        (end, end, 1),
+        "the engine loop and the music restart after"
+    );
+
+    // The session: to the pause menu, then the A.
+    let mut s = Session::new(&rom, vec![0xFF; 512]);
+    for (f, keys) in held.iter().enumerate().take(2700) {
+        if f == sync_at {
+            choose(&mut s, &row, 0);
+        }
+        s.frame(*keys).unwrap();
+    }
+    let race_frames = |s: &Session| s.race.as_ref().unwrap().world.g.race_frames;
+    (0..200).for_each(|_| s.frame(0).unwrap());
+    (0..12).for_each(|_| s.frame(0x8).unwrap()); // START
+    (0..60).for_each(|_| s.frame(0).unwrap());
+    assert_eq!(s.st.g.screen, 5, "the pause menu");
+    let paused = race_frames(&s);
+    let page = s.view().page.to_vec();
+    s.frame(0x1).unwrap(); // A: resume (the press is call 0)
+    let mut first_race_call = None;
+    for call in 1..40 {
+        s.frame(0).unwrap();
+        if race_frames(&s) > paused && first_race_call.is_none() {
+            first_race_call = Some(call);
+        }
+        // (The race is handed back at the end of the last wait: its first frame is the next call.)
+        if first_race_call.is_none() && call < end - start - 1 {
+            assert!(!s.racing(), "call {call}: the race stands still");
+            assert!(s.view().page == &page[..], "call {call}: the menu page stays");
+        }
+    }
+    assert_eq!(
+        first_race_call,
+        Some(end - start),
+        "video frames from the A to the race's next frame"
+    );
+    let game = s.race.as_mut().unwrap();
+    assert!(game.world.audio.sfx_playing(1), "the engine loop runs");
+    assert_eq!(game.world.lp.music_id, 1, "the race music");
 }

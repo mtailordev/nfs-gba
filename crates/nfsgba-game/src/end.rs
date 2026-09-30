@@ -203,8 +203,8 @@ impl Game {
 
     /// The pause menu's resume (`goto_screen(0x82)`): the BG palette black, game state 5 and the pause flag off, the
     /// palette fade in (16), the race palettes (`race_menu_palette_setup`), the HUD back when the option is on, the
-    /// race music (`music`, the profile's + 1) and with a route the light tint. NOT 1:1 (G1): the 15 VBlanks the
-    /// game waits and the engine loop's restart are not run.
+    /// engine loop's restart (`restart_engine_sound`, `0x08139E10`), the race music (`music`, the profile's + 1) and with a
+    /// route the light tint. The 15 VBlanks the game waits before all this are the caller's (`Session::frame`, U8).
     pub fn resume(&mut self, hud_on: bool, music: i32) {
         self.palette[..0x200].fill(0);
         let w = &mut self.world;
@@ -218,6 +218,10 @@ impl Game {
             self.sprite_update(&mut h);
             self.world.set_hud_frame(h);
         }
+        let id = self.world.profile.engine_sound as i32 as u32;
+        self.world
+            .audio
+            .carbon_play_sound(Rom(&self.rom), id, self.world.g.volume);
         self.world.audio.carbon_play_music(Rom(&self.rom), (music + 1) as u32);
         self.world.lp.music_id = music + 1;
         if self.world.g.u_5388 != 0 {

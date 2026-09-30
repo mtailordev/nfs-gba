@@ -1,17 +1,16 @@
-"""Headless recordings for the ledger rows D14, D8, G1 and U8 (fixture folder `traces2`). A test oracle, not a runtime.
+"""Recordings for the ledger rows D14, D8, G1 and U8 (fixture folder `traces2`). A test oracle, not a runtime.
 
-    .venv/Scripts/python.exe tools/traces2.py states     # retro: power-on to the Quick Play setup screen, per race case
-    .venv/Scripts/python.exe tools/traces2.py pause      # retro: a race, START, a wait, A (resume): per video frame
+    .venv/Scripts/python.exe tools/traces2.py states     # retro (headless): power-on to the Quick Play setup screen, per case
+    .venv/Scripts/python.exe tools/traces2.py menus      # mGBA + traces2.lua from power-on: menus-NAME.log (D14)
+    .venv/Scripts/python.exe tools/traces2.py circle     # circle.log: a full turn, the rim redraw decisions (D8)
+    .venv/Scripts/python.exe tools/traces2.py pause      # pause.log: START, a wait, A (the resume's VBlank waits, U8)
+    NFSGBA_MGBA_SESSION=traces2 .venv/Scripts/python.exe tools/record.py game record start-circuit   # (and start-wingman; then `pack`) G1
 
-`states` runs the key script of session_trace.py (power-on, a fresh save, the menus to Quick Play), sets the race choice on
-the setup screen (screen 10) of each CASE and writes, into $NFSGBA_DATA/work/e5298b24/traces2/:
-  NAMEinfo.ss       the machine on that screen (an mGBA state: `record.py game record start-NAME` loads it)
-  session-NAME.json the script, the choice, the tick and the opponents the race got, for the Session tests
-The mGBA-Lua recordings that need breakpoints (`tools/recorders/traces2.lua`: rand_table draws, the rim redraw) and the
-game-frame traces start from the .ss files: see `tools/recorders/game.py` (scenarios start-circuit, start-wingman) and
-`tools/record.py run` (the circle scenario, `circle.json` in this folder's provenance row).
+`states` runs the key script of session_trace.py (power-on, a fresh save, the menus to Quick Play) in the libretro core,
+sets the race choice of each CASE on the setup screen (screen 10) and writes $NFSGBA_DATA/work/e5298b24/traces2/NAMEinfo.ss
+(an mGBA state). The other commands run mGBA (scripted, tools/mgba_ctl.py; NFSGBA_MGBA points at the executable in a
+worktree) with the breakpoint log tools/recorders/traces2.lua, from those states or from power-on (its key driver).
 """
-import json
 import shutil
 import struct
 import sys
@@ -26,12 +25,10 @@ from common import data_dir
 
 SETUP_AT = 2620  # on the Quick Play setup screen (screen 10), entered at ~2563; the last A (2670) starts the race
 SAVE_AT = 2640
-END = 2800
 # name: race choice poked on the setup screen (profile +0x200 = the wingman; opponents in the settings copy +0x3C8)
 CASES = {"circuit": dict(mode=0, opponents=3, wingman=0), "wingman": dict(mode=0, opponents=2, wingman=1)}
 WORK = data_dir() / "work" / "e5298b24" / "traces2"
 STATE_SIZE = 397312
-CARS, PAINTS = 0x0300611C, 0x03005FEC
 
 
 def write_ss(raw, path):
@@ -68,34 +65,18 @@ def run_case(name, c):
     for first, n, key in session_trace.SCRIPT:
         for f in range(first, first + n):
             held[f] = (key,)
-    out = dict(script=session_trace.SCRIPT, sync_at=session_trace.SYNC_AT, case=c)
-    for f in range(END):
+    for f in range(SAVE_AT + 1):
         r.run(1, keys=held.get(f, ()))
         if f == SETUP_AT:
             row = session_trace.rows(r.serialize())
             assert (row["screen"], row["state"]) == (10, 1), row
             poke_choice(r, row, c)
-        if f == SAVE_AT:
-            s = r.serialize()
-            row = session_trace.rows(s)
-            assert (row["screen"], row["state"]) == (10, 1) and row["mode"] == c["mode"], row
-            write_ss(s, WORK / f"{name}info.ss")
-            out["choice"] = {k: row[k] for k in ("mode", "route", "reverse", "laps", "opponents", "difficulty", "traffic", "car")}
-            out["press_at"] = 2670
-        if f > SAVE_AT:
-            s = r.serialize()
-            row = session_trace.rows(s)
-            if "tick_at_state4" not in out and row["state"] == 4:
-                out["tick_at_state4"] = row["ticks"]
-            if row["state"] == 5 and "cars" not in out:
-                iw = s[0x19000:0x21000]
-                out["cars"] = list(struct.unpack_from("<4b", iw, CARS & 0x7FFF))
-                out["paints"] = list(struct.unpack_from("<4b", iw, PAINTS & 0x7FFF))
-                out["race_start_frame"] = f
-                out["tick_at_race"] = row["ticks"]
-    assert "cars" in out, "the race did not start"
-    (WORK / f"session-{name}.json").write_text(json.dumps(out), encoding="utf-8")
-    print(name, {k: v for k, v in out.items() if k not in ("script",)})
+    s = r.serialize()
+    row = session_trace.rows(s)
+    assert (row["screen"], row["state"]) == (10, 1) and row["mode"] == c["mode"], row
+    write_ss(s, WORK / f"{name}info.ss")
+    shutil.rmtree(session, ignore_errors=True)
+    print(name, "choice:", {k: row[k] for k in ("mode", "route", "laps", "opponents", "difficulty", "traffic", "car")})
 
 
 def lua_run(name, state, commands):
@@ -131,6 +112,12 @@ def circle():
     lua_run("circle", "circuitinfo", ["hold A 10", "wait 700", "hold A,LEFT 1800", "wait 30"])
 
 
+def pause():
+    """A circuit from the setup screen, raced for a while, START (the pause menu), a wait, A on its first item (resume):
+    the screen changes, VBlank waits and sound restarts of the resume (`pause.log`: G, W, X, MP, MS and M lines)."""
+    lua_run("pause", "circuitinfo", ["hold A 10", "wait 900", "hold START 8", "wait 120", "hold A 10", "wait 300"])
+
+
 def main(argv):
     WORK.mkdir(parents=True, exist_ok=True)
     cmd = argv[0] if argv else "states"
@@ -140,6 +127,8 @@ def main(argv):
     elif cmd == "menus":
         for name in argv[1:] or CASES:
             menus(name)
+    elif cmd == "pause":
+        pause()
     elif cmd == "circle":
         circle()
     else:
