@@ -235,3 +235,64 @@ fn career_facts_in_the_rom() {
     let bars: Vec<String> = [0x8B, 0x2E2, 0x141, 0x39A].map(text).into();
     assert_eq!(bars, ["ACCELERATION", "TOP SPEED", "HANDLING", "VISUAL"]);
 }
+
+/// A circuit race on route 23 (the reference race's), easy, no traffic, at its start.
+fn circuit_23(rom: &[u8]) -> Game {
+    let slot = &race_slots(rom)[23];
+    let (s, d) = setup(rom, slot.environment as u32, slot.route as u32, 0, 0, false);
+    race_init::start(rom.to_vec(), &s, d, 40).unwrap()
+}
+
+/// `ai::init`'s stop (`FUN_0814dd24` with a wheel point outside every sector) is unreachable (FIDELITY N1): a point
+/// the sector search misses falls back to the entity's own sector, and `update_entities` never runs an entity whose
+/// sector is 0xFFFF. An opponent moved far outside the city before its setup still sets up.
+#[test]
+fn opponent_setup_outside_the_city() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let mut g = circuit_23(&rom);
+    let i = (0..4)
+        .find(|&i| g.world.slots[i].e.handler == 0x29)
+        .expect("an opponent");
+    let sector = g.world.slots[i].e.sector;
+    assert!(g.world.slots[i].e.race_state == 0 && sector != 0xFFFF);
+    g.world.slots[i].e.pos[0] = 0x3FFF_0000;
+    g.world.slots[i].e.pos[2] = -0x3FFF_0000;
+    g.frame(0, &Timing::steady()).unwrap();
+    assert_ne!(g.world.slots[i].e.race_state, 0, "the opponent's setup ran");
+}
+
+/// `Game::bldalpha` is race_init's 0x0D0F from the race start on.
+#[test]
+fn race_blend_from_the_start() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let mut g = circuit_23(&rom);
+    assert_eq!(g.bldalpha, 0x0D0F);
+    for _ in 0..30 {
+        g.frame(0, &Timing::steady()).unwrap();
+    }
+    assert_eq!(g.bldalpha, 0x0D0F);
+}
+
+/// `Game::tinted_palette` is what the race frame's tail (`Game::tint`) writes to palette RAM once the fade is done;
+/// on a start that has not run a frame, `Game::tint` sends it to the fade's target.
+#[test]
+fn tint_callable_on_a_paused_start() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let mut g = circuit_23(&rom);
+    let want = g.tinted_palette().expect("route 23's grid is lit");
+    let fading = g.world.g.fade != 0;
+    g.tint();
+    let ranges = || (1..=143).chain(149..=255);
+    if fading {
+        assert!(ranges().all(|i| g.world.palette_fade[i] == want[i]));
+    }
+    let mut frames = 0;
+    while g.world.g.fade != 0 || frames == 0 {
+        g.frame(0, &Timing::steady()).unwrap();
+        frames += 1;
+        assert!(frames < 200, "the fade ends");
+    }
+    g.frame(0, &Timing::steady()).unwrap();
+    let want = g.tinted_palette().unwrap();
+    assert!(ranges().all(|i| u16::from_le_bytes([g.palette[2 * i], g.palette[2 * i + 1]]) == want[i]));
+}

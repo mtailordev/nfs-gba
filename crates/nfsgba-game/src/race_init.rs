@@ -891,5 +891,6 @@ pub fn start(rom: Vec<u8>, setup: &Setup, mut display: Display, seed_vblanks: u3
     enter_race(&mut world);
     let mut game = crate::Game::with_world(rom, data, world, display.palette, display.vram, display.oam);
     game.dispcnt = u16::from_le_bytes([display.io[0], display.io[1]]);
+    game.bldalpha = u16::from_le_bytes([display.io[0x52], display.io[0x53]]);
     Ok(game)
 }

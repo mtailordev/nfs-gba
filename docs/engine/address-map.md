@@ -126,7 +126,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7EEBBC` | 6 per set | decal sets: 3 i16 vehicle materials (67–93) per record `[4]`, drawn only over body pixels | formats/car-paint |
 | `0x7EF5A0` / `0x7EF672` | 7 per car | overlay material per `(car·7 + rec[1])` / its (x, y) | formats/car-paint |
 | `0x7EF816` | 0x10 per entry | **wheel rims** per `(car·15 + rec[2])`: one 40×40 rim (materials 46–60) at two (x, y) placements; redrawn rotated by the wheel angle during the race | formats/car-paint |
-| `0x7F0626` | per car | style base byte | formats/career |
+| `0x7F0626` | per car | style base byte; also the car's body-kit count: record[3] stays below it (`kind18_update` bounds the kit page's cursor, `new_part` case 3; `reach::rim_redraw_never_reads_its_atlas`) | formats/career |
 | `0x7F0636` | i16 per `car·0x10 + rec[0]` | entity `+0x64` source (clamped at 0) | formats/car-paint |
 | `0x7F0BD8` | 15 × 0x58 | car table (`+0x0C` first material, `+0x0E` palette bank = 1 for all, `+0x10`/`+0x12` far model, `+0x14`/`+0x16` close model) | formats/vehicle-models, formats/car-paint |
 | `0x7F1100` | 15 × 0x158 | handling records | engine/physics |

@@ -223,3 +223,69 @@ fn no_car_overlay_is_format_4() {
         }
     }
 }
+
+/// `Game::bldalpha`: the race's BLDALPHA is written once, by race_init (0x0D0F, through `0x04000050 + 2`); the menu
+/// scene (`load_menu_descriptor`) and `0x08139F88` write the blend registers too, and nothing calls the latter.
+#[test]
+fn race_blend_is_set_once() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    assert_eq!(words(&rom, 0x0400_0050), [0x139928, 0x139DDC, 0x139FD4]);
+    assert_eq!(words(&rom, 0x0400_0052), [0x139FF0]);
+    assert!(uncalled(&rom, 0x0813_9F88));
+}
+
+/// `slots::rim_redraw`'s stop (the rotated read around the rim buffer reaching the atlas box it writes) is
+/// unreachable. The atlas is material `car table +0x0C + record[3]`; record[3] (the body kit) is written only by
+/// `buy` for ids 0xA0 + k: from the kit page (title 0x95), whose cursor `kind18_update` bounds by the car's kit count
+/// (`0x7F0626`), and from `upgrades_changed`, whose `new_part` offers the next kit only below that count. The kit page
+/// is page 0 of 0x14, page 10 of 0x13 (its selection is at most 9: the list's items 1..=10, action 0x1F, minus 1) and
+/// page 11 of 0x12 (no purchase). With record[3] below the count, the box is at least 0x40 bytes (the read's reach)
+/// inside both ends of the atlas buffer, wherever the rim buffer lies.
+#[test]
+fn rim_redraw_never_reads_its_atlas() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let s16 = |o: usize| u16_at(&rom, o) as i16 as i32;
+    let page =
+        |screen: usize, sel: usize| (u32_at(&rom, 0x7E_6EA4 + 0x10 * screen + 0xC) - ROM_BASE) as usize + 0x14 * sel;
+    let kit_pages: Vec<(usize, usize)> = (0..3)
+        .flat_map(|i| (0..12).map(move |k| (i, k)))
+        .filter(|&(i, k)| s16(page(i, k)) == 0x95)
+        .collect();
+    assert_eq!(kit_pages, [(0, 10), (1, 0), (2, 11)]);
+    let kits = (u32_at(&rom, page(1, 0) + 8) - ROM_BASE) as usize;
+    assert!((0..4).all(|k| s16(kits + 10 * k + 6) == 0xA0 + k as i32));
+    assert_eq!(u16_at(&rom, 0x7E_544C + 0x14 * 8 + 10), 11); // list slot 8: item 0 (0x8B) and ten 0x1F items
+    let slot8 = (u32_at(&rom, 0x7E_544C + 0x14 * 8 + 0x10) - ROM_BASE) as usize;
+    assert!((1..11).all(|k| u16_at(&rom, slot8 + 8 * k + 6) == 0x1F));
+    for env in 0..12 {
+        let mats = (u32_at(&rom, 0x7F_2B08 + 0x68 * env + 0x20) - ROM_BASE) as usize;
+        let size = |m: usize| {
+            (
+                u16_at(&rom, mats + 0x24 * m + 0xC) as i32,
+                u16_at(&rom, mats + 0x24 * m + 0xE) as i32,
+            )
+        };
+        for car in 0..15 {
+            for kit in 0..rom[0x7F_0626 + car] as usize {
+                let (aw, ah) = size(u16_at(&rom, 0x7F_0BD8 + 0x58 * car + 0xC) as usize + kit);
+                for r in 0..15 {
+                    let at = 0x7E_F816 + 0x10 * (15 * car + r);
+                    if s16(at) == -1 {
+                        continue;
+                    }
+                    let (w, h) = size(s16(at + 4) as usize);
+                    let (first, second) = ((s16(at), s16(at + 2)), (s16(at + 8), s16(at + 10)));
+                    let (x0, y0) = (first.0 + (w >> 3), first.1 + (h >> 3));
+                    let (x1, y1) = (first.0 + w - (w >> 3), first.1 + h - (h >> 3));
+                    let shift = (second.1 - first.1) * 0x100 + second.0 - first.0;
+                    let lo = y0 * 0x100 + x0 + shift.min(0);
+                    let hi = (y1 - 1) * 0x100 + x1 + shift.max(0);
+                    assert!(
+                        aw * ah - hi >= 0x40 && lo >= w * h + 0x40,
+                        "environment {env} car {car} kit {kit} rim {r}"
+                    );
+                }
+            }
+        }
+    }
+}

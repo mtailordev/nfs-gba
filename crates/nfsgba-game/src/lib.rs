@@ -183,6 +183,10 @@ pub struct Game {
     /// DISPCNT: `obj_upload_tiles` does nothing without the 1-D mapping (bit 6). Not part of a traced state; the
     /// race start sets it (`race_init::start` takes it from the display it built).
     pub dispcnt: u16,
+    /// BLDALPHA, the blend of semi-transparent sprites: `race_init` sets 0x0D0F (`race_init::start` takes it from
+    /// the display it built) and nothing changes it during a race (its only other writer, `0x08139F88`, is uncalled:
+    /// `reach::race_blend_is_set_once`).
+    pub bldalpha: u16,
     /// The ranked results block (`0x03005730`) the menus keep, which `results_tiebreak` changes at the race end.
     pub ranked: nfsgba_sim::state::RaceResults,
     /// DISPSTAT's VCount IRQ, which sets the backdrop colour per line pair from the sky gradient (off in the pause).
@@ -222,6 +226,7 @@ impl Game {
             display_page: 0,
             sound: Vec::new(),
             dispcnt: 0x1040,
+            bldalpha: 0x0D0F,
             ranked: Default::default(),
             vcount_irq: true,
             irqs: 0,
@@ -700,18 +705,14 @@ impl Game {
     }
 
     /// `apply_sector_light_to_palette` (`0x0813a514`): palette RAM (during a fade, the fade's target buffer) = the base palette tinted by the light at the
-    /// player's position in the camera sector; unchanged when no light is found.
-    fn tint(&mut self) {
-        let w = &self.world;
-        let e = &w.slots[w.g.player as usize].e;
-        let sectors = city(&self.rom);
-        let sector = &sectors[w.camera.sector as usize];
-        let Some(light) = sector_light(&self.rom, sector, e.pos[0] >> 8, e.pos[2] >> 8) else {
+    /// player's position in the camera sector; unchanged when no light is found. The race frame's tail runs it; a
+    /// caller showing a race start that has not run a frame (the viewer's paused start) can run it too.
+    pub fn tint(&mut self) {
+        let Some(tinted) = self.tinted_palette() else {
             return;
         };
         // During a fade the tint goes to the fade's target buffer (0x0300577C) instead of palette RAM.
-        let fading = w.g.fade != 0;
-        let tinted = tint_palette(&w.palette_base, light);
+        let fading = self.world.g.fade != 0;
         for (i, c) in tinted.into_iter().enumerate() {
             if (1..=143).contains(&i) || (149..=255).contains(&i) {
                 if fading {
@@ -721,6 +722,21 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// The 256 colours `tint` writes (it writes 1..=143 and 149..=255): the base palette tinted by the light at the
+    /// player's position in the camera sector; `None` when the sector has no light there.
+    pub fn tinted_palette(&self) -> Option<Vec<u16>> {
+        let w = &self.world;
+        let e = &w.slots[w.g.player as usize].e;
+        let sectors = city(&self.rom);
+        let light = sector_light(
+            &self.rom,
+            &sectors[w.camera.sector as usize],
+            e.pos[0] >> 8,
+            e.pos[2] >> 8,
+        )?;
+        Some(tint_palette(&w.palette_base, light))
     }
 
     /// `draw_visible_sectors` (`iwram_call` to `0x030048c8`) into the draw page.
