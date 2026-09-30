@@ -705,3 +705,4 @@ address,name,kind,comment
 0x0814ae2c,spawn_entity_33_chain,function,top of the only call chain to spawn_entity_33 (FUN_0814c32c); uncalled
 0x08797ce8,upgrade_item_ids,data,u16 item ids of the upgrade lists (upgrades_changed and the list new-marks)
 0x08797d0a,quick_race_modes,data,4 race modes Quick Play's random race picks from (0..3)
+0x08139f88,set_blend_registers,function,(menu flag) BLDCNT 0x3F3F; BLDALPHA 0x0C0F if the flag else 0x0D0F; uncalled (the race's BLDALPHA is race_init's alone)

@@ -1,2 +1,0 @@
-address,name,kind,comment
-0x08139f88,set_blend_registers,function,(menu flag) BLDCNT 0x3F3F; BLDALPHA 0x0C0F if the flag else 0x0D0F; uncalled (the race's BLDALPHA is race_init's alone)
