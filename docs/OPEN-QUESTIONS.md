@@ -51,6 +51,10 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 - ~~**Link play reachable?**~~ **No: dead code in Carbon** (2026-09-30, from the ROM). The link flag `0x03005624` is written once, with 0 (`FUN_0812a84c`); nothing sets it to 1 or 2. The link entry points (`FUN_08146b00`, `FUN_08146b90`, `FUN_08147310`, `FUN_081473bc`, `FUN_081474d0`, `FUN_0814fc80`, the SIO cluster around `0x081506a0`–`0x08150e54`: SIOCNT multi-player mode, SIOMULTI, RCNT) have no callers and no pointer-table entries anywhere in the ROM. Not checked: a hidden menu text entry.
 - **Cops, free roam:** none seen in the code (D4).
 
+## The ending (2026-09-30, recorded headless from a Gauntlet save; `data/work/e5298b24/career-ending/`)
+
+- After the Gauntlet's last win: results (6) → 0x29 → **20 story pages** on screen 0x26 (hint record 23 at `0x087E8570 + 0xC·23`: keys `TEXT_STORY_23_00`…`23_18`, page 1 a `0xFFFF` marker) → **screen 3** (Crew House, the career menu), stable. **No credits screen**: 0x15 (Setup kind, text at `0x799882`) is reached from the menus, not from the ending. Every screen on the way has a typed handler (`flow::is_typed`); the career test covers pages 0..10 so far: extend it to all 20 and the return to screen 3.
+
 ## Answered
 
 - ~~The 65-entry function table at `0x7F38B8`~~ **Answered:** the entity handler table (`update_entities`; world `+0x78` by entity `+0x4E`) ([engine/physics.md](engine/physics.md)).
