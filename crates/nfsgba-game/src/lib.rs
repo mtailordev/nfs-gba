@@ -17,6 +17,8 @@ pub mod menu;
 pub mod oam;
 pub mod race_init;
 pub mod race_setup;
+#[cfg(test)]
+mod reach;
 pub mod session;
 pub mod slots;
 pub mod trace;
