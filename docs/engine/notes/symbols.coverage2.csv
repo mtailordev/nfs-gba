@@ -1,0 +1,3 @@
+address,name,kind,comment
+0x0812ee14,career_unlock_news,function,after a career race: the old unlock bits are copied to profile +0x405 (40 bytes); rebuild_unlocks; +0x405 = old xor new; each changed id gets its message key at +0x4AA (a heading first per kind; the kinds at +0x4C8); +0x3B4 = 1; kind 3 sets +0x256 (menu/results.rs unlock_news)
+0x0812ed28,unlock_message_index,function,(group; unlock id) position of an id within its group's message keys (menu/results.rs message_index)

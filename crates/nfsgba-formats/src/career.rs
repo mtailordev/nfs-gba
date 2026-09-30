@@ -1741,8 +1741,6 @@ mod tests {
         let mut files: Vec<_> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "log" || x == "jsonl"))
-            // The whole-profile payout cases are replayed by nfsgba-game (`career_payout_matches_the_game`).
-            .filter(|p| !p.file_name().unwrap().to_string_lossy().contains("career_payout"))
             .collect();
         files.sort();
         let mut out = Vec::new();

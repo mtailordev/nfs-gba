@@ -549,7 +549,7 @@ fn percent_arg(st: &mut MenuState, h: &mut impl Host, n: i32) -> u32 {
     h.text_arg(s)
 }
 
-/// `FUN_08133D30` (car, x, y, rows): the stat bars (speed, accel, handling, and with `rows` the style rating).
+/// `FUN_08133D30` (car, x, y, rows): the stat bars (acceleration, top speed, handling, and with `rows` the visual rating = style rating − 100).
 pub fn car_stats_draw(st: &mut MenuState, h: &mut impl Host, car: i32, x: i32, y: i32, rows: u32) {
     let x8 = x - 8;
     text(h, 0xE, 0x8B, x8, y, -1, 0);

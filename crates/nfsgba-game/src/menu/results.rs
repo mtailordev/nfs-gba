@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn career_payout_matches_the_game() {
         let Some(rom) = nfsgba_testkit::rom() else { return };
-        let Some(text) = nfsgba_testkit::read_to_string("race-rules/oracle-career_payout.jsonl") else {
+        let Some(text) = nfsgba_testkit::read_to_string("coverage2/oracle-career_payout.jsonl") else {
             return;
         };
         let (mut cases, mut paid, mut messages) = (0, 0, 0);

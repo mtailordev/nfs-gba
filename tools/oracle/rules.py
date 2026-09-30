@@ -575,7 +575,9 @@ def main(argv=None):
         gba = Gba(args.snapshot)  # fresh per function (hunter_tuning_init keeps its writes)
         rng = random.Random(f"{args.seed}:{name}")
         cases = GENERATORS[name](gba, rng, args.n)
-        path = out_dir / f"oracle-{name}.jsonl"
+        folder = out_dir.parent / "coverage2" if name == "career_payout" else out_dir  # not a race-rule trace
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"oracle-{name}.jsonl"
         with path.open("w", encoding="utf-8") as f:
             for case in cases:
                 row = {"fn": name, "snapshot": args.snapshot, **{k: str(v) for k, v in case.items()}}

@@ -34,24 +34,21 @@ Unknowns and unverified hypotheses. Move an item to the relevant `formats/` or `
 
 15. **Does the GBA Carbon have free roam, or can its city data support it?** The city is one connected sector world shared by all 12 environments, which is promising.
 
-## From the game's booklet (2026-09-30; notes in `data/reference/guidebook.md`, not in git)
+## From the game's booklet (answered from the ROM 2026-09-30; test `career_facts_in_the_rom`, `tests/coverage.rs`)
 
-Check each against the ROM during coverage:
-- **Wingman charges:** the booklet says the first wingmen have 3 uses per race, later ones more, with a green/orange/red availability bar and a flashing "use now" icon. Where are the charge count and the bar in the code?
-- **Wingman as a ghost:** the booklet says wingmen can act as ghosts. What does that mean in the code?
-- **Buttons the booklet and `docs/formats/ui.md` disagree on:** garage rotate (booklet: D-pad up/down; ui.md: L/R) and the zone map (booklet: L; ui.md: SELECT). The race bindings match the ROM table (nitro A+L automatic, A+UP manual).
-- **The Summary screen's four car bars** (acceleration, top speed, handling, visual): which values feed them?
-- **Fresh-profile defaults** (chase view, MPH, HUD on, automatic): confirm in `profile_reset`.
+- **Wingman charges and bar.** Commands per race: the `i32` table at `0x7F4284`, indexed by wingman − 1 (KITA … CLUTCH) = 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8 (`wingman_setup` loads it into `0x030061DC`; one is spent per command). The role follows the parity: odd wingmen attack, even ones draft (`wingman_attacker = (w − 1) & 1`). The 8-step bar next to the portrait is `0x030061E4` over `0x03006188` (0x78000 timer ticks): the time left of the running command (full when it starts). The portrait blinks (`0x030061D4`) when a command can be given now (charges left, no cool-down, target close). The bar's colours are art in the HUD frames (not checked).
+- **Wingman as a ghost:** still open. The wingman is a non-racer car (handler 0x29, no results slot); no ghost mode was found in `wingman_throttle`, `non_racer_car_hit` or the collision code.
+- **Buttons.** The ROM agrees with the booklet: the garage upgrade pages rotate the car with UP/DOWN held (`garage.rs`, angle ± 0x400), and L (`0x200`) opens the district map on the career event screen (`event.rs`). `docs/formats/ui.md` said SELECT for the map (corrected there); its garage rotate note (L/R) was not found in the file.
+- **The Summary screen's four bars** (`car_stats_draw`, `FUN_08133D30`) are ACCELERATION (text key 0x8B), TOP SPEED (0x2E2), HANDLING (0x141) and VISUAL (0x39A). The first three are the car table's bytes `+0x52..+0x54` plus the installed part levels of the 10 part groups times the weights at `0x7E46EC` (`i8` × 3 per group) / 100, capped at 100 (the lighter part of the bar is the upgrade); VISUAL is the career car's style rating − 100 (`career::style_rating`).
+- **Fresh-profile defaults** (`profile_reset`): chase view (`0x030053E4` = 0), HUD on, transmission variable `0x03005798` = 1 (automatic per the booklet), units = MPH for English and km/h for every other language.
 
-## From external research (2026-09-30; notes in `data/reference/research.md`, not in git)
+## From external research (answered from the ROM 2026-09-30 where marked)
 
-Guidance only (blog and review sources, not confirmed): the ROM is the source of truth. Things to look for in the ROM (text table, career tables, route and car tables):
-- **66 career events** in five crew sections (Lucky 7's, Eastsiders, Syrens, Corps, Krimson Crew) plus The Gauntlet (races in sequence); two bosses per section.
-- **15 player cars** and **4 traffic models**; car prices in points.
-- **30 named routes:** 12 circuits and 18 sprints (the ROM has more route records: which are the others?).
-- **Garage:** performance and body parts, paint, vinyls, window tint, a Style meter, a Drivetrain screen (clutch, gearing, traction control), a tuning-rate percentage.
-- **Link play:** reviews say there is no multiplayer, but the code has link-play paths (`0x03005624`, the key-packet functions in `read_keys`). Is it reachable from the menus?
-- **Cops, free roam:** reviews and the booklet say neither exists; none was seen in the code (D4).
+- **66 career events in five crews plus The Gauntlet: confirmed.** The zone names (text keys 963–968) are Lucky 7's, The Eastsiders, Syrens, The Corps, Krimson Crew and The Gauntlet; events 0–59 are five crews of 12, events 60–65 the Gauntlet's six (hunter, elimination, circuit, elimination, circuit, sprint, in slot order). Two bosses per crew, the events 7 and 8 of it (indices 7/8, 19/20, 31/32, 43/44, 55/56); the Gauntlet has none. Modes over all 66 events: 17 circuit, 17 elimination, 16 hunter, 16 sprint.
+- **15 player cars:** the car table `0x7F0BD8` has 15 records. **4 traffic models:** not checked.
+- **30 named routes: confirmed, and the other records are named.** The name table `0x7E4A70` holds 12 circuits (each forward and reversed: 24 route numbers) and 18 sprints = 42 route numbers, 1..=42; the race-slot table `0x7F2588` has 44 records: record 0 is the menu scene (environment 12) and record 43 is a spare (the same tail bytes as 0, environment 0, no name, no route). Circuits use the 12 racing environments 0..11, two route numbers each; sprints reuse six of them (1, 7, 4, 0, 8, 10). All 42 route numbers race (circuit, elimination and hunter on the circuits; sprints as sprints; easy and hard, with and without traffic) for 400 frames without a stop (`every_route_runs`), as does every car (`every_car_runs`).
+- **Garage** (parts, paint, vinyls, tint, style meter, drivetrain), **link play** (`0x03005624`, the key-packet paths in `read_keys`; reachable from the menus?): still open.
+- **Cops, free roam:** none seen in the code (D4).
 
 ## Answered
 

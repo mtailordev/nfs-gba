@@ -385,7 +385,7 @@ locked district. Not ported: the map's zone palette (`map_zone_palettes` `0x0814
 
 ### Career event (0xD)
 
-The zone's events in rows of 3 (12; 6 in zone 5), cursor per zone at profile `+0x388`. SELECT opens the district map.
+The zone's events in rows of 3 (12; 6 in zone 5), cursor per zone at profile `+0x388`. L opens the district map (`event.rs` `update`, key `0x200`).
 A on an open event (a boss race needs its unlock `0x122 + zone` / `0x11D + zone`; events past 0x3C need the one
 before won) clears the result slots, copies the event into the race globals (`career_event_to_globals`, from
 `career::events`), then shows a due hint (0x28) or goes on. The draw: the grid with mode icons (`0x7E5078`), boss
