@@ -29,8 +29,8 @@ A re-recorded trace changes these numbers on purpose; update the table in the te
 
 ## Fixture manifest (`docs/engine/fixtures.csv`, hard rule 3)
 
-Every file the tests read, with SHA-1, size, recorder, command, source state and the ROM hash: 1,414 files,
-1,129 MB. Built from what the tests actually resolve: `tools/fixtures.py build` runs the Rust tests with
+Every file the tests read, with SHA-1 and size (the ROM hash is the header line): 1,727 files,
+1,468 MB. Built from what the tests actually resolve: `tools/fixtures.py build` runs the Rust tests with
 `NFSGBA_REQUIRE_DATA=1` and `NFSGBA_FIXTURE_LOG=<file>` (every `fixture()` call appends its path; a folder
 fixture lists every file under it). `tools/fixtures.py check [--log FILE]` verifies each listed file (about
 1 s) and, given a test run's log, that nothing unlisted was read.

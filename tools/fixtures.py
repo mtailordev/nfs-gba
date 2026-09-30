@@ -1,9 +1,8 @@
-"""The fixture manifest (hard rule 3: provenance): every fixture file the Rust tests read, with its SHA-1, its size,
-the tool that recorded it and where it came from. Paths are relative to $NFSGBA_DATA/work/<sha1-8 of the ROM>/.
+"""The fixture manifest (hard rule 3: provenance): every fixture file the Rust tests read, with its SHA-1 and size;
+the ROM it was recorded from is the header line, and the tool, command and source state are per top folder
+(`PROVENANCE` below). Paths are relative to $NFSGBA_DATA/work/<sha1-8 of the ROM>/.
 
     .venv/Scripts/python.exe tools/fixtures.py build              # run the tests, write docs/engine/fixtures.csv
-    .venv/Scripts/python.exe tools/fixtures.py relabel            # rewrite the recorder/command/source columns
-                                                                  # from PROVENANCE (after a tool is renamed)
     .venv/Scripts/python.exe tools/fixtures.py check [--log FILE] # every listed file present with its SHA-1; with
                                                                   # --log (NFSGBA_FIXTURE_LOG of a test run), every
                                                                   # fixture the tests read is listed
@@ -26,7 +25,7 @@ from pathlib import Path
 from common import ROOT, data_dir, write_if_changed
 
 MANIFEST = ROOT / "docs" / "engine" / "fixtures.csv"
-COLUMNS = ["path", "sha1", "size", "recorder", "command", "source", "rom_sha1"]
+COLUMNS = ["path", "sha1", "size"]
 
 # Top folder -> (recorder, command, source state). Recorded per session; details in the named doc.
 PROVENANCE = {
@@ -65,37 +64,49 @@ def sha1_of(path: Path) -> str:
     return h.hexdigest()
 
 
+# A recording session's own bookkeeping (mgba_remote.lua, the recorders): rewritten by every recording, never test data.
+SESSION_FILES = {"done.txt", "pid.txt", "log.txt", "gtrace_log.txt", "cmd.txt", "probe.txt", "probe.tmp"}
+
+
 def files_of(work: Path, rels) -> list[str]:
-    """Logged fixture paths, folders expanded to the files under them."""
+    """Logged fixture paths, folders expanded to the files under them (without a session's bookkeeping files)."""
     out = set()
     for rel in rels:
         p = work / rel
         if p.is_dir():
-            out.update(f.relative_to(work).as_posix() for f in p.rglob("*") if f.is_file())
+            out.update(f.relative_to(work).as_posix() for f in p.rglob("*") if f.is_file() and f.name not in SESSION_FILES)
         elif p.is_file():
             out.add(Path(rel).as_posix())
     return sorted(out)
 
 
-def rows_for(work: Path, rom_sha1: str, files: list[str]) -> list[dict]:
+def rows_for(work: Path, files: list[str]) -> list[dict]:
     rows = []
     for rel in files:
         top = rel.split("/")[0]
         if top not in PROVENANCE:
             sys.exit(f"no provenance for fixture folder {top!r}: add it to PROVENANCE in tools/fixtures.py")
-        recorder, command, source = PROVENANCE[top]
         p = work / rel
-        rows.append({"path": rel, "sha1": sha1_of(p), "size": p.stat().st_size, "recorder": recorder,
-                     "command": command, "source": source, "rom_sha1": rom_sha1})
+        rows.append({"path": rel, "sha1": sha1_of(p), "size": p.stat().st_size})
     return rows
 
 
-def render(rows: list[dict]) -> str:
+HEADER = "# rom_sha1="
+
+
+def render(rom_sha1: str, rows: list[dict]) -> str:
     out = io.StringIO()
-    w = csv.DictWriter(out, COLUMNS, lineterminator="\n")
+    out.write(f"{HEADER}{rom_sha1}; provenance per top folder: PROVENANCE in tools/fixtures.py" + chr(10))
+    w = csv.DictWriter(out, COLUMNS, lineterminator=chr(10))
     w.writeheader()
     w.writerows(rows)
     return out.getvalue()
+
+
+def read() -> tuple[str, list[dict]]:
+    """(the ROM the fixtures were recorded from, the rows)."""
+    lines = MANIFEST.read_text(encoding="utf-8").splitlines()
+    return lines[0][len(HEADER):].split(";")[0], list(csv.DictReader(lines[1:]))
 
 
 def cargo() -> str:
@@ -109,30 +120,21 @@ def build() -> int:
         env = dict(os.environ, NFSGBA_REQUIRE_DATA="1", NFSGBA_FIXTURE_LOG=str(log))
         subprocess.run([cargo(), "test", "--release", "--workspace", "-q"], cwd=ROOT, env=env, check=True)
         rels = set(log.read_text(encoding="utf-8").split())
-    rows = rows_for(work, rom_sha1, files_of(work, rels))
-    changed = write_if_changed(MANIFEST, render(rows))
+    rows = rows_for(work, files_of(work, rels))
+    changed = write_if_changed(MANIFEST, render(rom_sha1, rows))
     print(f"{len(rows)} fixtures, {sum(r['size'] for r in rows) / 1e6:.0f} MB; "
           f"{'wrote' if changed else 'unchanged'} {MANIFEST.relative_to(ROOT)}")
     return 0
 
 
-def relabel() -> int:
-    rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
-    for r in rows:
-        r["recorder"], r["command"], r["source"] = PROVENANCE[r["path"].split("/")[0]]
-    changed = write_if_changed(MANIFEST, render(rows))
-    print(f"{len(rows)} fixtures; {'relabelled' if changed else 'unchanged'} {MANIFEST.relative_to(ROOT)}")
-    return 0
-
-
 def check(log: Path | None) -> int:
     work, rom_sha1 = work_dir()
-    rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
-    bad = []
+    recorded, rows = read()
+    bad = [] if recorded == rom_sha1 else [f"manifest: recorded from ROM {recorded[:8]}, the vault's is {rom_sha1[:8]}"]
     for r in rows:
         p = work / r["path"]
-        if r["rom_sha1"] != rom_sha1:
-            bad.append(f"{r['path']}: recorded from ROM {r['rom_sha1'][:8]}, the vault's is {rom_sha1[:8]}")
+        if r["path"].split("/")[0] not in PROVENANCE:
+            bad.append(f"{r['path']}: no provenance for its folder (PROVENANCE in tools/fixtures.py)")
         elif not p.is_file():
             bad.append(f"{r['path']}: missing")
         elif sha1_of(p) != r["sha1"]:
@@ -151,11 +153,10 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("build")
-    sub.add_parser("relabel")
     c = sub.add_parser("check")
     c.add_argument("--log", type=Path)
     args = ap.parse_args(argv)
-    return {"build": build, "relabel": relabel}.get(args.cmd, lambda: check(args.log))()
+    return build() if args.cmd == "build" else check(args.log)
 
 
 if __name__ == "__main__":
