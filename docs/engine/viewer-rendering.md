@@ -337,3 +337,11 @@ Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160
 - **Measures:** (a) exact-match and within-one-pixel share; (b) per object, the share of its pixels whose colour (tolerance) is in the GPU view within 2 px, failing under 50% (cars and traffic of 20+ px, portal entries of 100+ px); (c) holes: pixels inside the exact frame's geometry (5×5 block, row 159 excluded) where the GPU view shows the sky layer (it writes alpha 0.98, all else 1.0, `SKY_ALPHA` in `indexed.wgsl`), and the seam pixels among them (at most two pixels thin between GPU geometry). Failing over 0.5% holes or 10 seam pixels.
 - **Use:** `SHOTS_TRACE=drive` runs one trace, `SHOTS_DIR=<dir>` saves GPU | exact | difference (holes red) images.
 - **Not covered:** effect sprites (R30), and blended states between game frames.
+
+## Full game (`Play::full`, the default mode)
+
+`cargo run --release -p nfsgba-viewer` runs `nfsgba_game::session::Session` from power-on (`NFSGBA_GAME=1` forces it; `NFSGBA_CITY=1`, `NFSGBA_ROUTE`, `NFSGBA_DUMP` or `NFSGBA_PLAY` pick the older modes). The save is `data/work/e5298b24/viewer.sav` (the game's EEPROM image, written whenever the game changes it). Keys as in play mode (arrows, X = A, Z = B, A = L, S = R, Enter = START, Backspace = SELECT). One step is a video frame in the menus and a game frame (four video frames) in a race; the game's samples go to the audio stream after every step.
+
+- **Menus** (`play::menu_layer`): `Session::view()` (mode-4 page, palettes, OAM, OBJ tiles) composed with the same `compose` the HUD layer uses in the exact frame, drawn nearest-neighbour at the largest whole scale that fits the window, centred on black. Semi-transparent sprites blend with the menus' `BLDALPHA`.
+- **Races**: the session's `Game` is lent to `Play::game` while it runs (`Play::step` swaps it with a spare, and back before the next session frame), so every race system reads it unchanged; a new race gets a new `Play::id` and `remake_cars` builds its cars (also for R/K). Results, pause and the next race are the session's; the pause menu is the exact 240×160 frame. `Race::active` is true only in a race.
+- Test: `play_test.rs` runs the `session_matches_the_game` key plan through `play::play` (no window) and asserts the race, the results screen and the save.

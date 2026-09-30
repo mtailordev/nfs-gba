@@ -1,3 +1,7 @@
+//! The game, played: `cargo run --release -p nfsgba-viewer` runs the whole game from power-on (`play::Full`, save in
+//! `$NFSGBA_DATA/work/e5298b24/viewer.sav`; menus as the exact 240×160 frame, races in the high-resolution view). The
+//! other modes below need their variable (`NFSGBA_CITY=1` for the fly-through).
+//!
 //! Fly-through viewer for Carbon's city (portal/sector world) and vehicle model bank, read from the user's ROM:
 //! textured walls, floors and ceilings, the race sky, a race's four cars, and a showroom of all 15 cars in every
 //! paint variant. Run from the repo root: `cargo run --release -p nfsgba-viewer`.
@@ -349,6 +353,7 @@ fn add_viewer(app: &mut App) {
             shot,
             (
                 play::play,
+                remake_cars,
                 banner,
                 poses,
                 keys,
@@ -358,6 +363,7 @@ fn add_viewer(app: &mut App) {
                 sky,
                 tint,
                 play::hud_layer,
+                play::menu_layer,
             )
                 .chain(),
             racing_line,
@@ -573,6 +579,7 @@ fn setup(
             ..default()
         },
     ));
+    play::spawn_menu(&mut commands, &mut images);
     commands.spawn((
         Banner,
         Text::new(""),
@@ -605,6 +612,12 @@ fn setup(
     #[cfg(not(test))]
     let supplied: Option<play::Play> = None;
     let dump = supplied.as_ref().map(|_| "supplied".to_string()).or(dump);
+    // The full game is the default: `NFSGBA_GAME=1` forces it, another mode's variable (or `NFSGBA_CITY=1`) picks that mode.
+    let full = supplied.is_none()
+        && (std::env::var("NFSGBA_GAME").is_ok()
+            || !["NFSGBA_ROUTE", "NFSGBA_DUMP", "NFSGBA_PLAY", "NFSGBA_CITY"]
+                .iter()
+                .any(|k| std::env::var(k).is_ok()));
     let race_game = match (supplied, &dump) {
         (Some(mut p), _) => {
             p.hud = hud.clone();
@@ -621,6 +634,13 @@ fn setup(
         )
         .unwrap_or_else(|e| panic!("race start: {e} (needs the race-init/circuit_pre capture)")),
     };
+    let race_game = if full {
+        let sav = rom::data_dir().join("work/e5298b24/viewer.sav");
+        info!("full game from power-on; save file {}", sav.display());
+        race_game.with_full(play::Full::new(data.clone(), Some(sav)))
+    } else {
+        race_game
+    };
     let setup = view::RaceView::read(&race_game.game.world);
     let env = if dump.is_some() { setup.env % envs.len() } else { env };
     let current = setup.route % routes.len();
@@ -636,38 +656,17 @@ fn setup(
             _ => " (race start, paused)",
         }
     );
-    // The player's texture as the game holds it in EWRAM (`unpack_player_atlas`, the rim); the opponents' are raw
-    // materials already in their palette slots (`look`).
-    let player_car = setup.cars[0] as usize;
-    let player_first = &vehicle_textures[cars[player_car].first_material];
-    let player_pixels = view::player_atlas(&race_game.game.world, player_first.pixels.len())
-        .unwrap_or_else(|| player_first.pixels.clone());
-    for (slot, racer) in setup.racers.iter().enumerate().filter(|(_, r)| r.model > 0) {
-        let atlas = if slot == 0 {
-            rom::Texture {
-                pixels: player_pixels.clone(),
-                ..player_first.clone()
-            }
-        } else {
-            vehicle_textures[atlas::look(&data, setup.cars, slot, false, false).material as usize].clone()
-        };
-        let material = new_material(images.add(index_image(&atlas)), &palette, 0);
-        // Every model the racer can show (near body `+0x36 − 1`, far body `+0x36`, spoiler `+0x64`); `visibility`
-        // picks by depth as `draw_sector_entities` does.
-        let mut parts = vec![racer.model as usize - 1, racer.model as usize];
-        if racer.extra != 0 {
-            parts.push(racer.extra.unsigned_abs() as usize);
-        }
-        for model in parts {
-            let tris = model_tris(&models[model], Some(&atlas), Color::WHITE);
-            commands.spawn((
-                Mesh3d(meshes.add(tris.mesh())),
-                MeshMaterial3d(material.clone()),
-                Transform::default(),
-                RaceCar { slot, model },
-            ));
-        }
-    }
+    spawn_race_cars(
+        &mut commands,
+        &mut meshes,
+        &mut images,
+        &mut new_material,
+        &data,
+        (&models, &vehicle_textures, &cars),
+        &race_game.game.world,
+        &setup,
+        &palette,
+    );
 
     // Everything else in the bank (lower-detail car models, spoilers, traffic, markers) untextured, 12 per row.
     let flat = materials.add(StandardMaterial {
@@ -702,7 +701,7 @@ fn setup(
         current,
         active,
         hud,
-        game_camera: active && !free_cam,
+        game_camera: (active || full) && !free_cam,
         original: active && std::env::var("NFSGBA_ORIGINAL").is_ok(),
         frame: None,
         visible: None,
@@ -845,6 +844,102 @@ struct RaceCar {
     model: usize,
 }
 
+/// The race's cars, textured as the game has them: the player's atlas as EWRAM holds it (`unpack_player_atlas`, the
+/// rim); the opponents' are raw materials already in their palette slots (`look`). One entity per model a racer can
+/// show (near body `+0x36 − 1`, far body `+0x36`, spoiler `+0x64`); `visibility` picks by depth as
+/// `draw_sector_entities` does. `bank` is the models, vehicle textures and cars; `layers` the shared palette, the
+/// backdrop lines and the portal texture.
+#[allow(clippy::too_many_arguments)]
+fn spawn_race_cars(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    new_material: &mut impl FnMut(Handle<Image>, &Handle<Image>, u32) -> Handle<Indexed>,
+    data: &[u8],
+    bank: (&[rom::Model], &[rom::Texture], &[rom::Car]),
+    world: &nfsgba_game::world::World,
+    setup: &view::RaceView,
+    palette: &Handle<Image>,
+) {
+    let (models, vehicle_textures, cars) = bank;
+    let player_first = &vehicle_textures[cars[setup.cars[0] as usize].first_material];
+    let player_pixels =
+        view::player_atlas(world, player_first.pixels.len()).unwrap_or_else(|| player_first.pixels.clone());
+    for (slot, racer) in setup.racers.iter().enumerate().filter(|(_, r)| r.model > 0) {
+        let atlas = if slot == 0 {
+            rom::Texture {
+                pixels: player_pixels.clone(),
+                ..player_first.clone()
+            }
+        } else {
+            vehicle_textures[atlas::look(data, setup.cars, slot, false, false).material as usize].clone()
+        };
+        let material = new_material(images.add(index_image(&atlas)), palette, 0);
+        let mut parts = vec![racer.model as usize - 1, racer.model as usize];
+        if racer.extra != 0 {
+            parts.push(racer.extra.unsigned_abs() as usize);
+        }
+        for model in parts {
+            let tris = model_tris(&models[model], Some(&atlas), Color::WHITE);
+            commands.spawn((
+                Mesh3d(meshes.add(tris.mesh())),
+                MeshMaterial3d(material.clone()),
+                Transform::default(),
+                RaceCar { slot, model },
+            ));
+        }
+    }
+}
+
+/// A new race (`Play::id` changed): its cars replace the last race's.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn remake_cars(
+    mut commands: Commands,
+    play: Res<play::Play>,
+    race: Res<Race>,
+    tint: Res<Tint>,
+    skies: Res<Skies>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut indexed: ResMut<Assets<Indexed>>,
+    old: Query<Entity, With<RaceCar>>,
+    mut seen: Local<Option<u64>>,
+    mut bank: Local<Option<(Vec<rom::Model>, Vec<rom::Texture>, Vec<rom::Car>)>>,
+) {
+    // The first race's cars are made at start-up.
+    if seen.replace(play.id).is_none_or(|id| id == play.id) {
+        return;
+    }
+    old.iter().for_each(|e| commands.entity(e).despawn());
+    let (models, textures, cars) = bank.get_or_insert_with(|| {
+        (
+            rom::models(&tint.rom),
+            rom::vehicle_textures(&tint.rom),
+            rom::cars(&tint.rom),
+        )
+    });
+    let mut new_material = |indices, palette: &Handle<Image>, mode| {
+        indexed.add(Indexed {
+            indices,
+            palette: palette.clone(),
+            backdrop: skies.backdrop.clone(),
+            mode: UVec4::new(mode, 0, 0, 0),
+            portals: race.portals.clone(),
+        })
+    };
+    spawn_race_cars(
+        &mut commands,
+        &mut meshes,
+        &mut images,
+        &mut new_material,
+        &tint.rom,
+        (models, textures, cars),
+        &play.game.world,
+        &race.setup,
+        &tint.palette,
+    );
+}
+
 /// A racer's pose from its vehicle matrix slot (camera space, `render::Scene::matrices`) and the camera it was built
 /// for: model vertex `v` goes to camera space as `A·v + t` (rows `(m0 m3 m6)`, `(m1 m4 m7)`, `(m2 m5 m8)` over
 /// 0x4000; x right, y down, depth ahead). With `F = diag(1, −1, −1)` both the mesh (`world`) and Bevy's view space
@@ -873,7 +968,10 @@ fn keys(
     let (env, route) = (race.setup.env as u32, race.setup.route as u32);
     let routes = race.routes.len() as u32;
     let next = keys.just_pressed(KeyCode::KeyR) || (play.banner.is_some() && keys.just_pressed(KeyCode::Enter));
-    let start = if next {
+    // The full game starts its own races.
+    let start = if play.full.is_some() {
+        None
+    } else if next {
         Some((env, (1..=routes).map(|k| (route + k) % routes).collect::<Vec<_>>()))
     } else if keys.just_pressed(KeyCode::KeyK) && race.active && play.grid.is_some() {
         Some(((env + 1) % skies.palettes.len() as u32, vec![route]))

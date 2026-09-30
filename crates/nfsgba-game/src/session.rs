@@ -75,6 +75,8 @@ pub struct View<'a> {
     pub page: &'a [u8],
     pub palette: Vec<u16>,
     pub oam: Vec<[u16; 4]>,
+    /// The sprite tiles: OBJ VRAM from tile 0x200 (`0x06014000`), where the OAM's tile numbers point.
+    pub obj_tiles: &'a [u8],
 }
 
 pub struct Session<'a> {
@@ -295,6 +297,16 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
+    /// A race is running (not paused): [`Session::race`] is the game shown and stepped.
+    pub fn racing(&self) -> bool {
+        self.race.is_some() && !self.paused
+    }
+
+    /// The `BLDALPHA` register the menus set: the blend of semi-transparent sprites.
+    pub fn blend(&self) -> u16 {
+        self.host.screen.bldalpha
+    }
+
     /// The 240×160 screen: the race's frame during a race, else the menus'.
     pub fn view(&self) -> View<'_> {
         if let (Some(game), false) = (&self.race, self.paused) {
@@ -310,6 +322,7 @@ impl<'a> Session<'a> {
                 page: game.screen(),
                 palette: u16s(&game.palette),
                 oam,
+                obj_tiles: game.vram.get(0x1_4000..).unwrap_or_default(),
             };
         }
         let s = &self.host.screen;
@@ -317,6 +330,7 @@ impl<'a> Session<'a> {
             page: &s.pages[(s.dispcnt >> 4 & 1) as usize],
             palette: s.palette.to_vec(),
             oam: s.oam.to_vec(),
+            obj_tiles: &s.obj_tiles,
         }
     }
 

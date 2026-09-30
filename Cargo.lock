@@ -3583,6 +3583,7 @@ dependencies = [
  "nfsgba-formats",
  "nfsgba-game",
  "nfsgba-testkit",
+ "serde_json",
 ]
 
 [[package]]

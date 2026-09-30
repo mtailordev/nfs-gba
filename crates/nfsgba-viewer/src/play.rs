@@ -1,6 +1,10 @@
 //! The race, in every viewer mode, is an `nfsgba_game::Game`: the viewer's race state (racers, camera, visible list,
 //! palette, original frame) is read back from it (`nfsgba_game::{view, race_init}`), and the HUD is the game's OAM
-//! drawn as a 2D layer. Three ways to get one:
+//! drawn as a 2D layer. Four ways to get one:
+//! - the full game (the default; `NFSGBA_GAME=1`): an `nfsgba_game::session::Session` from power-on with the save
+//!   `viewer.sav`. The menus are the exact 240×160 frame ([`menu_layer`], integer-scaled, centred); each race the
+//!   session starts is lent to [`Play::game`] (the session keeps a spare there) so every race system reads it as in the
+//!   other modes, and the session gets it back for the next frame; results, pause and the next race are the session's;
 //! - `NFSGBA_PLAY=1` with `NFSGBA_DUMP`: the keyboard drives the game, one game frame every four video frames
 //!   (59.7275 Hz), from the dump's machine state (`docs/engine/game-loop.md`);
 //! - `NFSGBA_DUMP` alone: the same machine, paused;
@@ -19,6 +23,7 @@ use std::{
     collections::VecDeque,
     io,
     num::NonZero,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -29,7 +34,7 @@ use bevy::{
     prelude::*,
 };
 use nfsgba_formats as rom;
-use nfsgba_game::{Game, Machine, Timing, race_init, race_setup, view};
+use nfsgba_game::{Flow, Game, Machine, Timing, race_init, race_setup, session::Session, view};
 
 use crate::{Race, texture_2d};
 
@@ -62,6 +67,39 @@ pub struct Play {
     pub hud: Handle<Image>,
     /// The samples the game's sound hardware played, waiting for the audio device.
     pub sound: Arc<Mutex<VecDeque<Sample>>>,
+    /// The full game (`NFSGBA_GAME`): the session that owns the race while it is not lent to `game`.
+    pub full: Option<Full>,
+}
+
+/// The whole game from power-on. A step is a video frame in the menus and a game frame (four video frames) in a race.
+pub struct Full {
+    pub session: Session<'static>,
+    /// The race is in `Play::game` and the session holds a spare there.
+    lent: bool,
+    /// The samples of the last step.
+    sound: Vec<u8>,
+    /// The save file, and its bytes as last written.
+    sav: Option<PathBuf>,
+    saved: Vec<u8>,
+}
+
+impl Full {
+    /// The game at power-on with the save at `sav` (created on the first save).
+    pub fn new(rom_bytes: Vec<u8>, sav: Option<PathBuf>) -> Full {
+        let saved = sav
+            .as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+            .unwrap_or_else(|| vec![0xFF; 512]);
+        // ponytail: the ROM is leaked (8 MB, once per process) because the session borrows it for its lifetime.
+        let rom: &'static [u8] = Box::leak(rom_bytes.into_boxed_slice());
+        Full {
+            session: Session::new(rom, saved.clone()),
+            lent: false,
+            sound: Vec::new(),
+            sav,
+            saved,
+        }
+    }
 }
 
 /// The GBA's sound output (Direct Sound A and B play the same buffer: mono, signed 8-bit, 10,512 Hz) as a Bevy
@@ -112,7 +150,7 @@ impl Play {
         if self.paused || self.stopped.is_some() {
             1.0
         } else {
-            (self.clock / (4.0 / VIDEO_HZ)).clamp(0.0, 1.0)
+            (self.clock / self.step_secs()).clamp(0.0, 1.0)
         }
     }
 
@@ -170,7 +208,58 @@ impl Play {
             script,
             hud,
             sound: Arc::default(),
+            full: None,
         }
+    }
+
+    /// The full game from power-on; `self` (any race start, paused) is the spare the session's races are lent through.
+    pub fn with_full(mut self, full: Full) -> Play {
+        (self.full, self.paused) = (Some(full), false);
+        self
+    }
+
+    /// A race is on the screen (always, but in the full game's menus).
+    pub fn in_race(&self) -> bool {
+        self.full.as_ref().is_none_or(|f| f.lent)
+    }
+
+    /// The video time one step takes.
+    fn step_secs(&self) -> f32 {
+        (if self.in_race() { 4.0 } else { 1.0 }) / VIDEO_HZ
+    }
+
+    /// The samples the last step played.
+    fn samples(&self) -> &[u8] {
+        self.full.as_ref().map_or(&self.game.sound, |f| &f.sound)
+    }
+
+    /// One step with `keys`. In the full game: the session's frame, the race lent to `game` while it runs, the save
+    /// written when the game changed it. A new race gets a new `id`; the second value says so.
+    fn step(&mut self, keys: u16) -> Result<(Flow, bool), String> {
+        let Some(full) = &mut self.full else {
+            return Ok((
+                self.game.frame(keys, &Timing::steady()).map_err(|e| e.to_string())?,
+                false,
+            ));
+        };
+        let had_race = full.session.race.is_some() || full.lent;
+        if full.lent {
+            std::mem::swap(&mut self.game, full.session.race.as_mut().expect("the lent race"));
+        }
+        let result = full.session.frame(keys).map_err(|e| e.to_string());
+        full.sound = full.session.sound().to_vec();
+        full.lent = full.session.racing();
+        if full.lent {
+            std::mem::swap(&mut self.game, full.session.race.as_mut().expect("a race"));
+        }
+        let eeprom = &full.session.host.eeprom;
+        if let (Some(path), true) = (&full.sav, *eeprom != full.saved) {
+            match std::fs::write(path, eeprom) {
+                Ok(()) => full.saved.clone_from(eeprom),
+                Err(e) => warn!("save {}: {e}", path.display()),
+            }
+        }
+        result.map(|()| (Flow::Racing, full.lent && !had_race))
     }
 }
 
@@ -242,10 +331,9 @@ pub fn play(
     mut race: ResMut<Race>,
     mut stats: Local<(f32, u32, u32, f32, f32)>,
 ) {
-    let step = 4.0 / VIDEO_HZ;
     if !play.paused && play.stopped.is_none() {
         // A slow game frame must not make the next display frames run several (a spiral): at most 3 are owed.
-        play.clock = (play.clock + time.delta_secs()).min(3.0 * step);
+        play.clock = (play.clock + time.delta_secs()).min(3.0 * play.step_secs());
         // Display fps and game-frame time, logged every 3 s (display frames, game frames, seconds, ms sum, ms max).
         stats.0 += time.delta_secs();
         stats.1 += 1;
@@ -260,23 +348,29 @@ pub fn play(
             *stats = (0.0, 0, 0, 0.0, 0.0);
         }
     }
-    while play.clock >= step && !play.paused && play.stopped.is_none() {
-        play.clock -= step;
+    while play.clock >= play.step_secs() && !play.paused && play.stopped.is_none() {
+        play.clock -= play.step_secs();
         let keys = match &play.script {
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
             None => keyboard(&input),
         };
         let began = std::time::Instant::now();
-        let result = play.game.frame(keys, &Timing::steady());
+        let result = play.step(keys);
         let ms = began.elapsed().as_secs_f32() * 1000.0;
         (stats.2, stats.3, stats.4) = (stats.2 + 1, stats.3 + ms, stats.4.max(ms));
         match result {
             Err(e) => {
                 warn!("play stopped at game frame {}: {e}", play.frames);
-                play.stopped = Some(e.to_string());
+                play.banner = play.full.as_ref().map(|_| format!("Stopped: {e}"));
+                play.stopped = Some(e);
                 break;
             }
-            Ok(nfsgba_game::Flow::Handover(h)) => {
+            Ok((_, true)) => {
+                // A new race: a new identity (the viewer remakes its cars), the game camera.
+                play.id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                race.game_camera = true;
+            }
+            Ok((Flow::Handover(h), _)) => {
                 play.banner = Some(banner(&h));
                 warn!(
                     "play stopped at game frame {}: the race hands over to the menus ({h:?})",
@@ -288,12 +382,15 @@ pub fn play(
             Ok(_) => {}
         }
         if let Ok(mut q) = play.sound.lock() {
-            q.extend(play.game.sound.iter().map(|&s| s as i8 as Sample / 128.0));
+            q.extend(play.samples().iter().map(|&s| s as i8 as Sample / 128.0));
             // Keep at most a quarter of a second queued, so the sound stays with the picture.
             let excess = q.len().saturating_sub(10_512 / 4);
             q.drain(..excess);
         }
         play.frames += 1;
+    }
+    if play.full.is_some() {
+        race.active = play.in_race();
     }
     race.setup = view::RaceView::read(&play.game.world);
     race.current = race.setup.route % race.routes.len();
@@ -318,6 +415,9 @@ const BLEND: (u32, u32) = (15, 13);
 /// GPU image, which the 2D layer cannot read). OBJ priority against the background is not modelled (the HUD is
 /// always in front).
 pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, mut images: ResMut<Assets<Image>>) {
+    if !play.in_race() {
+        return;
+    }
     let g = &play.game;
     let colour = |pal: &[u8], i: usize| u16::from_le_bytes([pal[2 * i], pal[2 * i + 1]]);
     let obj_palette: Vec<u16> = (0..256).map(|i| colour(&g.palette[0x200..], i)).collect();
@@ -327,21 +427,46 @@ pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, m
     }
     let objects = draw_objects(&oam, &g.vram[0x1_0000..], &obj_palette);
     let backdrop = g.backdrop();
+    let bg: Vec<u16> = (0..256).map(|i| colour(&g.palette, i)).collect();
+    let out = compose(
+        g.screen(),
+        &bg,
+        |line| backdrop[line],
+        objects,
+        BLEND,
+        race.original && !play.paused,
+    );
+    if let Some(mut image) = images.get_mut(&play.hud) {
+        image.data = Some(out);
+    }
+}
+
+/// One RGBA8 GBA screen from the mode-4 `page` through the BG palette `bg` (index 0: `backdrop(line)`) and the sprite
+/// layer `objects` (`draw_objects`). `exact`: the whole screen, semi-transparent sprites blended with `blend`
+/// (EVA, EVB); else the sprites alone over transparent, semi-transparent ones at 50% alpha.
+fn compose(
+    page: &[u8],
+    bg: &[u16],
+    backdrop: impl Fn(usize) -> u16,
+    objects: Vec<Option<(u16, bool)>>,
+    blend: (u32, u32),
+    exact: bool,
+) -> Vec<u8> {
     let mut out = vec![0u8; 240 * 160 * 4];
     for (p, o) in objects.into_iter().enumerate() {
-        let bg = match g.screen()[p] {
-            0 => backdrop[p / 240],
-            i => colour(&g.palette, i as usize),
+        let back = match page[p] {
+            0 => backdrop(p / 240),
+            i => bg[i as usize],
         };
         let rgb = |c: u16| {
             let [r, g, b, _] = rom::bgr555(c);
             [r, g, b]
         };
-        let px: Option<[u8; 4]> = match (o, race.original && !play.paused) {
+        let px: Option<[u8; 4]> = match (o, exact) {
             (Some((c, true)), true) => {
                 let ch = |s: u16| {
-                    let (a, b) = (((c >> s) & 31) as u32, ((bg >> s) & 31) as u32);
-                    ((a * BLEND.0 + b * BLEND.1) >> 4).min(31) as u16
+                    let (a, b) = (((c >> s) & 31) as u32, ((back >> s) & 31) as u32);
+                    ((a * blend.0 + b * blend.1) >> 4).min(31) as u16
                 };
                 let [r, g, b] = rgb(ch(0) | ch(5) << 5 | ch(10) << 10);
                 Some([r, g, b, 255])
@@ -351,7 +476,7 @@ pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, m
                 Some([r, g, b, 255])
             }
             (None, true) => {
-                let [r, g, b] = rgb(bg);
+                let [r, g, b] = rgb(back);
                 Some([r, g, b, 255])
             }
             (Some((c, semi)), false) => {
@@ -364,7 +489,68 @@ pub fn hud_layer(play: Res<Play>, race: Res<Race>, smooth: Res<crate::Smooth>, m
             out[4 * p..4 * p + 4].copy_from_slice(&px);
         }
     }
-    if let Some(mut image) = images.get_mut(&play.hud) {
+    out
+}
+
+/// The full game's menus: a black layer over the window with the session's 240×160 screen (page, palettes and sprites
+/// composed as the game shows them) in the middle, scaled by the largest whole number that fits.
+#[derive(Component)]
+pub struct MenuLayer;
+
+/// The menu screen's image node (a child of the [`MenuLayer`]).
+#[derive(Component)]
+pub struct MenuScreen(Handle<Image>);
+
+pub fn spawn_menu(commands: &mut Commands, images: &mut Assets<Image>) {
+    let image = images.add(hud_image());
+    commands
+        .spawn((
+            MenuLayer,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::BLACK),
+            Visibility::Hidden,
+        ))
+        .with_child((MenuScreen(image.clone()), ImageNode::new(image), Node::default()));
+}
+
+pub fn menu_layer(
+    play: Res<Play>,
+    mut images: ResMut<Assets<Image>>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
+    mut layer: Single<&mut Visibility, With<MenuLayer>>,
+    mut screen: Single<(&MenuScreen, &mut Node)>,
+) {
+    let menus = play.full.as_ref().filter(|_| !play.in_race());
+    layer.set_if_neq(if menus.is_some() {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    });
+    let Some(full) = menus else { return };
+    let scale = (window.width() / 240.0).min(window.height() / 160.0).floor().max(1.0);
+    (screen.1.width, screen.1.height) = (Val::Px(240.0 * scale), Val::Px(160.0 * scale));
+    let v = full.session.view();
+    let mut tiles = vec![0u8; 0x4000];
+    tiles.extend_from_slice(v.obj_tiles);
+    let oam: Vec<u8> = v.oam.iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
+    let objects = draw_objects(&oam, &tiles, &v.palette[256..]);
+    let a = full.session.blend();
+    let out = compose(
+        v.page,
+        &v.palette[..256],
+        |_| v.palette[0],
+        objects,
+        (u32::from(a & 0x1F), u32::from(a >> 8 & 0x1F)),
+        true,
+    );
+    if let Some(mut image) = images.get_mut(&screen.0.0) {
         image.data = Some(out);
     }
 }
@@ -509,3 +695,7 @@ pub fn draw_objects(oam: &[u8], tiles: &[u8], palette: &[u16]) -> Vec<Option<(u1
     }
     out
 }
+
+#[cfg(test)]
+#[path = "play_test.rs"]
+mod tests;
