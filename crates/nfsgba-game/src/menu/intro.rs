@@ -7,8 +7,6 @@ use nfsgba_sim::state::MenuState;
 use super::flow::{self, CARBON_PLAY_SOUND, Host, rom_u16, rom_u32};
 use super::{FLASH_BLINK, INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, TEXT_MENU, TEXT_MENU_WRAPPED, VBLANK_INTR_WAIT, WORLD};
 
-/// The name buffer's address (the game passes it to the text primitive as a pointer).
-const NAME: u32 = 0x0300_5970;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
 const CARBON_PLAY_MUSIC: u32 = 0x0813_6054;
 
@@ -120,7 +118,10 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
         0x15 => credits_draw(st, h),
         0x16 => {
             h.call(TEXT_MENU, &[0xD, 0x164, 0x4A, 0x14, neg1, 8]);
-            h.call(TEXT_MENU, &[0xD, NAME, 0x78, 0x14, 1, 0]);
+            // The game passes the name buffer's address; the typed host has no RAM, so it gets the string.
+            let name: Vec<u8> = st.g.name.iter().copied().take_while(|&b| b != 0).collect();
+            let name = h.text_arg(name);
+            h.call(TEXT_MENU, &[0xD, name, 0x78, 0x14, 1, 0]);
             let letters = match lang {
                 1 => Some(0xDE),
                 2 => Some(0xE0),
