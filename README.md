@@ -56,6 +56,8 @@ Other modes are chosen with environment variables. `NFSGBA_PLAY=1 NFSGBA_ROUTE=<
 | Start | Enter |
 | Select | Backspace |
 
+A gamepad works too: South = A, East = B, shoulders or triggers = L/R, D-pad or left stick. On phones the web page shows a touch pad.
+
 Viewer keys in a race: **O** switches to the original 240×160 frame, **G** toggles the game camera and a free camera, **T** shows the racing line.
 
 ## Layout
