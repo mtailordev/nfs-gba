@@ -353,12 +353,18 @@ fn garage_base(data: &[u8], city: &[u16], car: usize, paint: i8) -> Vec<u16> {
 }
 
 fn main() {
+    // Web: one canvas pixel per UI unit. On high-density screens the canvas comes out at its CSS size while the scale
+    // factor is the screen's, so the menus (sized from the window's logical width) would overflow it.
+    #[cfg(target_arch = "wasm32")]
+    let resolution = WindowResolution::new(960, 640).with_scale_factor_override(1.0);
+    #[cfg(not(target_arch = "wasm32"))]
+    let resolution = WindowResolution::new(960, 640);
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "NFS Carbon GBA viewer (unofficial) - play: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>".into(),
             // Four times the GBA screen: every GBA pixel is 4×4 window pixels.
-            resolution: WindowResolution::new(960, 640),
+            resolution,
             // Web: the page's canvas, sized by the page.
             canvas: Some("#game".into()),
             fit_canvas_to_parent: true,

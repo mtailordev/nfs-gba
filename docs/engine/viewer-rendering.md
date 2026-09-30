@@ -356,7 +356,8 @@ What differs on the web (all behind `cfg(target_arch = "wasm32")`, `main.rs` `we
 - **Modes:** there are no `NFSGBA_*` variables, so it is always the full game from power-on.
 - **Rendering:** WebGL2 (Bevy's default `webgl2` feature): the integer textures and `textureLoad` of `indexed.wgsl` and the composite pass work there, and it reaches every browser; Bevy logs the features it drops (SSAO, OIT, GPU clustering), none of which the viewer uses. The canvas fills the page's largest 3:2 box; the menus keep their whole-number scale inside it.
 - **Audio:** the same `GbaSound` stream through Bevy audio (Web Audio); the context starts after the ROM pick, and the page resumes it on a key or click if the browser held it back.
-- **Input:** the keyboard as on the desktop; any gamepad (both platforms): South = A, East = B, shoulders and triggers = L/R, D-pad or left stick.
+- **Input:** the keyboard as on the desktop; any gamepad (both platforms): South = A, East = B, shoulders and triggers = L/R, D-pad or left stick; on touch screens a pad over the canvas sends the same keys.
+- **Scale factor:** fixed at 1 (one canvas pixel per UI unit): on high-density screens the canvas is sized in CSS pixels while the reported scale factor is the screen's, which made the menus overflow the canvas.
 
 ## Final pass and list order (G2, R10, R29)
 

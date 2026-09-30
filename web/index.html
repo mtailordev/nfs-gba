@@ -25,6 +25,15 @@
   table { border-collapse: collapse; color: var(--dim); }
   td { padding: 1px 8px; text-align: left; }
   td:first-child { color: var(--fg); text-align: right; }
+  /* Touch pad (phones and tablets): each button holds its key while touched. */
+  #pad { display: none; position: absolute; inset: 0; pointer-events: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #pad.on { display: block; }
+  #pad button { position: absolute; pointer-events: auto; touch-action: none; background: #ffffff22; border: 1px solid #ffffff55; color: #fffc; border-radius: 50%; font-weight: bold; padding: 0; }
+  #pad button.held { background: #ffffff66; }
+  #pad .d { width: 13%; aspect-ratio: 1; border-radius: 8px; }
+  #pad .ab { width: 15%; aspect-ratio: 1; }
+  #pad .sh { width: 16%; height: 12%; top: 2%; border-radius: 8px; }
+  #pad .st { width: 12%; height: 8%; bottom: 2%; border-radius: 8px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -37,6 +46,18 @@
 </header>
 <main><div id="wrap">
   <canvas id="game" tabindex="0"></canvas>
+  <div id="pad">
+    <button class="d" data-key="ArrowUp" style="left:14%;bottom:40%">&#9650;</button>
+    <button class="d" data-key="ArrowDown" style="left:14%;bottom:6%">&#9660;</button>
+    <button class="d" data-key="ArrowLeft" style="left:1%;bottom:23%">&#9664;</button>
+    <button class="d" data-key="ArrowRight" style="left:27%;bottom:23%">&#9654;</button>
+    <button class="ab" data-key="KeyZ" style="right:17%;bottom:8%">B</button>
+    <button class="ab" data-key="KeyX" style="right:2%;bottom:24%">A</button>
+    <button class="sh" data-key="KeyA" style="left:1%">L</button>
+    <button class="sh" data-key="KeyS" style="right:1%">R</button>
+    <button class="st" data-key="Backspace" style="left:37%">SELECT</button>
+    <button class="st" data-key="Enter" style="right:37%">START</button>
+  </div>
   <div id="intro">
     <big>Pick your own ROM of <i>Need for Speed Carbon: Own the City</i> (GBA, USA/Europe, BN7E)</big>
     <div>A <code>.gba</code> file or a <code>.zip</code> holding it. It is checked and never uploaded.</div>
@@ -139,6 +160,17 @@ $('rom').addEventListener('change', async (e) => {
     status(`Error: ${err.message || err}`, true);
   }
 });
+
+// The touch pad sends the keyboard's keys to the canvas (the engine reads them like real ones).
+if (matchMedia('(pointer: coarse)').matches) $('pad').classList.add('on');
+const keyNames = { ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', KeyZ: 'z', KeyX: 'x', KeyA: 'a', KeyS: 's', Backspace: 'Backspace', Enter: 'Enter' };
+for (const b of document.querySelectorAll('#pad button')) {
+  const send = (type) => $('game').dispatchEvent(new KeyboardEvent(type, { code: b.dataset.key, key: keyNames[b.dataset.key], bubbles: true }));
+  const up = () => { if (b.classList.contains('held')) { b.classList.remove('held'); send('keyup'); } };
+  b.addEventListener('pointerdown', (e) => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch {} b.classList.add('held'); send('keydown'); resume(); });
+  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(t, up);
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
+}
 
 $('loadsave').addEventListener('change', async (e) => {
   const file = e.target.files[0];
