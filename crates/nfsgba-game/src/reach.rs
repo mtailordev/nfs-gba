@@ -518,3 +518,50 @@ fn no_police_entity_type_exists() {
         }
     }
 }
+
+/// U3, the garage turntable's rim (`menu/car.rs::load_atlas`: `unpack_decal` draws the rim at angle 0 with the 64 bytes
+/// of heap either side of its buffer read as zeros, which the game fills with its neighbouring blocks). At angle 0 the
+/// rotated read maps each box texel to itself, so it never leaves the rim's own buffer: for every car and every rim
+/// the garage can show (the 15 × 15 rim table, each entry used), the atlas drawn is the same with the neighbours read
+/// as zeros, as 0xFF and as a pattern (a neighbour byte that was read would show: texel 0 is skipped, any other is
+/// drawn). The garage's atlas is the car's material plus its kit (`record[3]`, below the car's kit count), which the
+/// drawn box does not depend on.
+#[test]
+fn garage_rim_never_reads_its_neighbours() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let textures = nfsgba_formats::vehicle_textures(&rom);
+    let mut checked = 0;
+    for car in 0..15 {
+        for r in 0..15 {
+            let mut record = [0u8; 17];
+            record[2] = r;
+            let Some(rim) = nfsgba_formats::atlas::rim(&rom, &textures, car, &record) else {
+                continue;
+            };
+            let pixels = nfsgba_formats::atlas::rim_pixels(&textures, &rim);
+            for kit in 0..rom[0x7F_0626 + car] {
+                record[3] = kit;
+                let (_, base) = nfsgba_formats::atlas::player_atlas(&rom, &textures, car, 0, &record);
+                let draw = |fill: &dyn Fn(usize) -> u8| {
+                    let mut around: Vec<u8> = (0..0x40).map(fill).collect();
+                    around.extend(&pixels);
+                    around.extend((0..0x40).map(fill));
+                    let mut atlas = base.clone();
+                    nfsgba_formats::atlas::draw_rim(&rom, &mut atlas, &rim, &around, 0x40, 0);
+                    atlas
+                };
+                let zeros = draw(&|_| 0);
+                assert!(
+                    zeros == draw(&|_| 0xFF),
+                    "car {car} rim {r} kit {kit}: a neighbour was read"
+                );
+                assert!(
+                    zeros == draw(&|i| (i as u8).wrapping_mul(37) | 1),
+                    "car {car} rim {r} kit {kit}: a neighbour was read"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100, "{checked} (car, rim, kit) drawn");
+}
