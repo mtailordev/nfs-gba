@@ -23,7 +23,9 @@ pub struct TypedHost<'a> {
     pub texts: Vec<Vec<u8>>,
     /// Unported calls: address and arguments, in order.
     pub calls: Vec<(u32, Vec<u32>)>,
-    language: u32,
+    pub language: u32,
+    /// The cartridge's EEPROM (the `.sav` image): the profile saves.
+    pub eeprom: Vec<u8>,
     /// The state's pointers to the second base palette and the race palette buffers (the scene's `palettes`).
     palette_handles: [u32; 2],
 }
@@ -37,6 +39,7 @@ impl<'a> TypedHost<'a> {
             texts: Vec::new(),
             calls: Vec::new(),
             language: st.g.language,
+            eeprom: Vec::new(),
             palette_handles: [st.g.second_palette, st.g.race_palette],
         }
     }
@@ -286,6 +289,12 @@ impl Host for TypedHost<'_> {
             }
         }
     }
+    fn quick_race_random(&mut self, st: &mut MenuState) {
+        super::list::quick_race_random(st, self);
+    }
+    fn career_payout(&mut self, st: &mut MenuState) {
+        super::results::career_payout(st, self);
+    }
     fn map_draw(&mut self, st: &mut MenuState) {
         super::map::draw_map(st, self);
     }
@@ -296,6 +305,25 @@ impl Host for TypedHost<'_> {
                 self.screen.page()[y * 240 + x] = self.rom[at];
             }
         }
+    }
+
+    fn zone_palettes(&mut self, st: &mut MenuState) {
+        super::map::zone_palettes(st, self);
+    }
+    fn profile_reset(&mut self, st: &mut MenuState) {
+        super::save::profile_reset(st, self.rom);
+    }
+    fn save_load(&mut self, st: &mut MenuState) -> u32 {
+        let mut eeprom = std::mem::take(&mut self.eeprom);
+        let r = super::save::load(st, self, &mut eeprom, st.g.save_buffer as usize);
+        self.eeprom = eeprom;
+        r
+    }
+    fn save_write(&mut self, st: &mut MenuState) -> u32 {
+        let mut eeprom = std::mem::take(&mut self.eeprom);
+        let r = super::save::write(st, self, &mut eeprom, st.g.save_buffer as usize);
+        self.eeprom = eeprom;
+        r
     }
 
     fn button_prompts(&mut self, st: &MenuState, a: &[u32; 3]) {

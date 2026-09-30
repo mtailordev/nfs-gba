@@ -126,6 +126,12 @@ impl Host for BootHost {
     fn car_stats(&mut self, st: &mut MenuState, car: u32, x: u32, y: u32, rows: u32) {
         super::garage::car_stats_draw(st, self, car as i32, x as i32, y as i32, rows);
     }
+    fn quick_race_random(&mut self, st: &mut MenuState) {
+        super::list::quick_race_random(st, self);
+    }
+    fn career_payout(&mut self, st: &mut MenuState) {
+        super::results::career_payout(st, self);
+    }
     fn map_draw(&mut self, st: &mut MenuState) {
         super::map::draw_map(st, self);
     }

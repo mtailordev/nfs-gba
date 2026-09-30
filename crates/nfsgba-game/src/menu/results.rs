@@ -8,7 +8,6 @@ use super::text::{frames_to_centiseconds, number_text, thousands, time_text};
 use super::{INTRO_PAGE_SETUP, MENU_BLIT_MATERIAL, MENU_BLIT_MATERIAL_ALT, TEXT_BOX, TEXT_MENU, WORLD};
 
 const RESULT_PAGES: u32 = 0x087E_510C;
-const CAREER_RACE_PAYOUT: u32 = 0x0812_EFE8; // (): `career::race_payout` models it; not wired to state here
 /// Track slot per route (`0x7E49C4`).
 const ROUTE_SLOTS: u32 = 0x087E_49C4;
 
@@ -57,7 +56,7 @@ pub fn enter(st: &mut MenuState, h: &mut impl Host) -> u32 {
             if (st.g.career as i32) < 2 {
                 record_time(st, h.rom());
             }
-            h.call(CAREER_RACE_PAYOUT, &[]);
+            h.career_payout(st);
         }
         if st.profile.record_flag == 0 {
             flow::poke_back(st, st.g.back_top, 0xC);
@@ -320,5 +319,17 @@ fn unlock_messages(st: &MenuState, h: &mut impl Host) {
         if msg(i) == 0 {
             break;
         }
+    }
+}
+
+/// `career_race_payout` (`0x0812EFE8`) outside a career (`career` 0): it ranks the standings (hunter by life, most
+/// first; circuit, elimination and sprint by time) and nothing else. In a career it also pays out and updates the
+/// event status (`career::race_payout`, `style_rating`, `FUN_0812EE14`): not ported, the call is logged (U3).
+pub fn career_payout(st: &mut MenuState, h: &mut impl Host) {
+    if let Some((key, descending)) = nfsgba_formats::career::payout_ranking(st.g.race_mode) {
+        rank_results(st, key, descending);
+    }
+    if st.g.career != 0 {
+        h.call(0x0812_EFE8, &[]);
     }
 }

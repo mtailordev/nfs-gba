@@ -201,6 +201,31 @@ impl Game {
         Ok(Handover::Pause)
     }
 
+    /// The pause menu's resume (`goto_screen(0x82)`): the BG palette black, game state 5 and the pause flag off, the
+    /// palette fade in (16), the race palettes (`race_menu_palette_setup`), the HUD back when the option is on, the
+    /// race music (`music`, the profile's + 1) and with a route the light tint. NOT 1:1 (G1): the 15 VBlanks the
+    /// game waits and the engine loop's restart are not run.
+    pub fn resume(&mut self, hud_on: bool, music: i32) {
+        self.palette[..0x200].fill(0);
+        let w = &mut self.world;
+        (w.lp.game_state, w.lp.paused, w.g.fade) = (5, 0, 0x10);
+        self.race_menu_palette_setup();
+        if hud_on {
+            let w = &mut self.world;
+            let mut h = w.hud_frame();
+            let count = self.bank.screens[w.hud.screen as usize].count;
+            hud::toggle(&self.rom, &h.g, true, &mut h.objects, count, &mut h.messages);
+            self.sprite_update(&mut h);
+            self.world.set_hud_frame(h);
+        }
+        self.world.audio.carbon_play_music(Rom(&self.rom), (music + 1) as u32);
+        self.world.lp.music_id = music + 1;
+        if self.world.g.u_5388 != 0 {
+            self.world.palette_fade = self.world.palette_base.clone();
+            self.tint();
+        }
+    }
+
     /// `race_menu_palette_setup` (`0x081372e4`, the resume from the pause menu): both pages cleared, both palette buffers are the level's with the racers' car palettes, and outside the menus' preview (phase 5) the VCount
     /// IRQ comes back on (`0x0813a4c0`: the sky gradient restarts). The fade's target gets the same palette.
     pub fn race_menu_palette_setup(&mut self) {

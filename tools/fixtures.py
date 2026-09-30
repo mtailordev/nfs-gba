@@ -29,6 +29,7 @@ COLUMNS = ["path", "sha1", "size"]
 
 # Top folder -> (recorder, command, source state). Recorded per session; details in the named doc.
 PROVENANCE = {
+    "session": ("tools/session_trace.py (tools/retro.py, headless mGBA)", "session_trace.py", "power-on to a Quick Play race and its results with the key script in the file, the mode poked to a circuit and the player marked finished (docs/engine/game-loop.md, Session)"),
     "boot": ("tools/boot_trace.py (tools/retro.py, headless mGBA)", "boot_trace.py fresh; boot_trace.py existing race-rules/rr-career.sav", "power-on runs of the canonical ROM with the key script in each file (docs/formats/ui.md, Menus)"),
     "mgba": ("tools/mgba_ctl.py + tools/mgba_remote.lua", "mgba_ctl.py dump/save", "race.ss: Quick Play route 23 (docs/TOOLS.md route)"),
     "audio": ("tools/record.py audio (recorders/audio.py + audio.lua)", "record.py audio <state> <frames> [<name> <keys>]", "race.ss, mainmenu.ss (docs/formats/audio.md)"),

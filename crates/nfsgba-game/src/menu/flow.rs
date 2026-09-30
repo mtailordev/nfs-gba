@@ -87,6 +87,14 @@ pub trait Host {
     fn car_palette(&mut self, _st: &mut MenuState) {
         self.call(0x0812_BF48, &[]);
     }
+    /// `quick_race_random` (`0x0812FFB0`): the Quick Play settings; the default logs the call.
+    fn quick_race_random(&mut self, _st: &mut MenuState) {
+        self.call(0x0812_FFB0, &[]);
+    }
+    /// `career_race_payout` (`0x0812EFE8`); the default logs the call.
+    fn career_payout(&mut self, _st: &mut MenuState) {
+        self.call(0x0812_EFE8, &[]);
+    }
     /// `map_draw` (`0x081435C4`): the map screens' background, markers and labels.
     fn map_draw(&mut self, _st: &mut MenuState) {
         self.call(0x0814_35C4, &[]);

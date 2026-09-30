@@ -14,7 +14,6 @@ const LIST_PAGES: u32 = 0x087E_544C;
 const MENU_BLIT_MATERIAL_ALT: u32 = 0x0813_6E60; // (world, material, x, y)
 const GARAGE_LOAD_CAR_ATLAS: u32 = 0x0812_BEEC; // ()
 const GARAGE_DRAW_CAR: u32 = 0x0812_BFA4; // (x, y, angle)
-const QUICK_RACE_RANDOM: u32 = 0x0812_FFB0; // ()
 const UPGRADES_CHANGED: u32 = 0x0813_02C4; // (performance page?)
 
 /// An i16 ROM read, sign-extended as the game passes it.
@@ -267,7 +266,7 @@ fn random_quick_race(st: &mut MenuState, h: &mut impl Host) {
         t
     };
     st.g.route = rom_u16(h.rom(), 0x087E_4A72_u32.wrapping_add(((track as i8 as i32) * 4) as u32)) as u32;
-    h.call(QUICK_RACE_RANDOM, &[]);
+    h.quick_race_random(st);
 }
 
 /// A List item's action from 0x85 (`list_update`'s switch); true when it ends the update (a hint is due).
@@ -586,4 +585,36 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
     }
     h.button_prompts(st, &[left, right, u32::MAX]);
     0
+}
+
+/// `quick_race_random` (`0x0812FFB0`): the Quick Play race's random settings (traffic, difficulty, laps, the wingman
+/// among the 13 unlocked, the opponents; a sprint has one lap, a hunter as many laps as opponents). The rand draws
+/// come in the game's order.
+pub fn quick_race_random(st: &mut MenuState, h: &mut impl Host) {
+    st.g.player_car = st.profile.career_car as i32 as u32;
+    if let Some(b) = st.g.slot_bytes.get_mut(st.g.race_player as usize) {
+        *b = st.g.start_slot as u8;
+    }
+    fn roll(st: &mut MenuState, h: &mut impl Host, n: u32) -> u32 {
+        flow::rand_table(st, h).checked_rem(n).unwrap_or(0) // __umodsi3
+    }
+    st.g.u_562c = roll(st, h, 3) + 1;
+    st.g.difficulty = roll(st, h, 3);
+    st.g.u_6118 = roll(st, h, 0x14);
+    st.g.u_0050 = flow::rand_table(st, h) & 1;
+    st.g.u_580c = 0;
+    let unlocked = (0..13).filter(|i| st.profile.is_locked(0x127 + i) == 0).count() as u32;
+    let wingman = roll(st, h, unlocked);
+    st.profile.wingman = wingman;
+    if wingman != 0 {
+        st.profile.wingman_side = (wingman as u8).wrapping_add(1) & 1;
+    }
+    st.g.opponents = if wingman == 0 { 3 } else { 2 };
+    st.g.laps = roll(st, h, 6) + 1;
+    st.g.traffic = roll(st, h, 3);
+    match st.g.race_mode {
+        3 => st.g.laps = 1,
+        1 => st.g.laps = st.g.opponents,
+        _ => {}
+    }
 }

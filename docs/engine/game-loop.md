@@ -12,7 +12,7 @@ effect sprites and the spark entities all run in `Game::frame`. Five traces hold
 state (the gameplay state, the sound engine, the atlases) and in VRAM, palette and OAM, both from each traced state
 and as free runs that carry their own state. Only the frame timing (T1) and the keys come from the trace. The viewer drives it live
 (`NFSGBA_PLAY=1`) and plays its sound. The race start (state 4), the intro, the countdown and GO run in the loop (`start` trace, 89 frames; `countdown.rs`);
-the race end, the state-5 exit and the pause run to their hand-over to the menus (`Flow::Handover`); the menu frames are not in it yet ([Not ported](#not-ported)).
+the race end, the state-5 exit and the pause run to their hand-over to the menus (`Flow::Handover`); the menu frames run in `session::Session` (below).
 
 ## No frame pacing: timing is an input
 
@@ -159,6 +159,17 @@ quarter of a second at most. NOT 1:1:
 - the HUD is blended at 50% over the high-resolution view (G2).
 
 Play stops at the first unported code path and logs it (the pause menu, the race end, …).
+
+## The whole game (`session.rs`)
+
+`Session::new(rom, eeprom, template)` then `frame(keys)` per video frame; `view()` (page, palettes, OAM) and `sound()`.
+The typed menus (`menu::flow::main_frame` on a `TypedHost`) run until game state 4; then `apply_choice` writes the
+menu state's race choice into a `Setup` (the template is a captured race start for the parts the menus do not model:
+heap arena, sound engine, display memory), `race_init::start` builds the race and `Game::frame` runs it. A `Handover`
+goes back to the menus: `Results` = `goto_screen(0xB)`/`menu_back` with the results and ranked blocks; `Pause` =
+`goto_screen(5)`, and the menus' state 5 resumes (`Game::resume`) or quits. Unported stops: menu calls other than the
+harmless ones (`HARMLESS`, `SOUND` in `session.rs`; the menus' sound is dropped) give `Unported`, as do the race
+paths below (hunter races, ...), and a career race's payout. Check: `tests/session.rs` against `tools/session_trace.py`.
 
 ## Not ported
 
