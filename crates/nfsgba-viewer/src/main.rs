@@ -1190,7 +1190,7 @@ fn game_camera(
 /// the shader; the entities the game's draw reaches (`Race::drawn`), each with the models `draw_sector_entities` picks at its camera
 /// depth (`Racer::models_at`). The racers stand as the game's vehicle matrix slots put them (pitch and roll
 /// included), seen from the game's camera whichever camera is shown.
-/// NOT 1:1 (R10): hidden surfaces come from the depth buffer; the game overdraws in list order (painter's).
+/// Hidden surfaces follow the game's list order (`indexed.wgsl`, R10).
 #[allow(clippy::too_many_arguments)]
 fn visibility(
     race: Res<Race>,
