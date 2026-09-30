@@ -483,7 +483,7 @@ fn gpu_view_matches_the_exact_frame() {
     }
     let (exact, near) = (exact / states as f32, near / states as f32);
     eprintln!(
-        "{states} states, {objects} objects: exact {:.1}%, within a pixel {:.1}%; least present: car {:.0}%, traffic {:.0}%, \
+        "{states} states, {objects} objects: exact {:.3}%, within a pixel {:.3}%; least present: car {:.0}%, traffic {:.0}%, \
          walls {:.0}%; worst holes {:.2}% of the geometry, worst {worst_seams} seam pixels; {ram_objects} RAM-atlas traffic \n         objects, least present {:.0}%",
         100.0 * exact,
         100.0 * near,

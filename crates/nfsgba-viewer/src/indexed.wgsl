@@ -23,6 +23,11 @@
 // the backdrop; the cars are clipped to the rectangle of the portal entry they were drawn through.
 //
 // SCREEN surfaces read `indices` as the 240×160 GBA screen at the pixel's screen position (the sky layer).
+//
+// Hidden surfaces (R10): the game paints the list from its last entry to its first (`draw_visible_sectors`), then the
+// cars of every entry over all of it. A city fragment writes the depth `0.5 (count - entry + z) / (count + 1)` (z: the
+// real reversed depth, 0..1), so a nearer entry covers a farther one as in the painter's order and, within an entry, the
+// real depth decides; a clipped car writes `0.5 + 0.5 z`, above all of the city, as pass 1 overwrites the sectors.
 
 #import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::view}
 
@@ -40,18 +45,24 @@ const PAIRS: u32 = 8u;
 // (`shots.rs`) tells sky from geometry by it.
 const SKY_ALPHA: f32 = 0.98;
 
+struct Out {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
 fn texel(uv: vec2<f32>) -> u32 {
     let size = vec2<i32>(textureDimensions(indices));
     let t = vec2<i32>(floor(uv * vec2<f32>(size)));
     return textureLoad(indices, ((t % size) + size) % size, 0).r;
 }
 
-// Whether GBA pixel `p` of `sector` (wall `wall` of it, or a flat when `wall` < 0) is drawn through one of the
-// portal list's entries for that sector.
-fn listed(sector: i32, wall: i32, p: vec2<i32>) -> bool {
+// The number (1..) of the first list entry that draws GBA pixel `p` of `sector` (wall `wall` of it, or a flat when `wall`
+// < 0) - the game draws the list from its last entry to its first, so the lowest number is drawn last - 0 when there is
+// no list (draw everything), -1 when no entry draws it.
+fn listed(sector: i32, wall: i32, p: vec2<i32>) -> i32 {
     let count = textureLoad(portals, vec2<i32>(0, 0), 0).x;
     if count < 0 {
-        return true;
+        return 0;
     }
     for (var k = 1; k <= count; k++) {
         let e = textureLoad(portals, vec2<i32>(k, 0), 0);
@@ -66,14 +77,15 @@ fn listed(sector: i32, wall: i32, p: vec2<i32>) -> bool {
             }
         }
         if e.y <= p.x && p.x <= e.z {
-            return true;
+            return k;
         }
     }
-    return false;
+    return -1;
 }
 
 @fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> Out {
+    var depth = in.position.z;
     // The window scaled onto the GBA's 240×160 screen.
     let column = view.viewport.z / 240.0;
     let at = (in.position.xy - view.viewport.xy) / view.viewport.zw * vec2<f32>(240.0, 160.0);
@@ -84,10 +96,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         discard;
     }
 #ifdef VERTEX_UVS_B
-    if !listed(i32(round(in.uv_b.x)), i32(round(in.uv_b.y)) - 1, gba) {
+    let entry = listed(i32(round(in.uv_b.x)), i32(round(in.uv_b.y)) - 1, gba);
+    if entry < 0 {
         discard;
     }
+    if entry > 0 {
+        // The list is drawn from its last entry to its first: a later entry's surfaces cover an earlier one's; within
+        // an entry the real depth decides. The city takes the lower half of the depth range, cars (pass 1) the upper.
+        let count = textureLoad(portals, vec2<i32>(0, 0), 0).x;
+        depth = 0.5 * (f32(count - entry) + in.position.z) / f32(count + 1);
+    }
 #else
+    if mode.w != 0u {
+        depth = 0.5 + 0.5 * in.position.z;
+    }
     // A car (R29): only inside the clip rectangle of the portal entry the game drew it through (`mode.yz`, biased by
     // 1024: left | right << 16, top | bottom << 16; right and bottom exclusive).
     if mode.w != 0u {
@@ -117,7 +139,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
         if (mode.x & OPAQUE) == 0u {
             discard;
         }
-        return vec4<f32>(textureLoad(backdrop, vec2<i32>(gba.y, 0), 0).rgb, alpha);
+        return Out(vec4<f32>(textureLoad(backdrop, vec2<i32>(gba.y, 0), 0).rgb, alpha), depth);
     }
-    return vec4<f32>(textureLoad(palette, vec2<i32>(i32(index), 0), 0).rgb, alpha);
+    return Out(vec4<f32>(textureLoad(palette, vec2<i32>(i32(index), 0), 0).rgb, alpha), depth);
 }
