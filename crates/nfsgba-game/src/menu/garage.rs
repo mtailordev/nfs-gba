@@ -392,7 +392,9 @@ pub fn list_item_new(st: &mut MenuState, h: &mut impl Host, screen: u32, item: u
 /// bought.
 pub fn upgrades_changed(st: &mut MenuState, h: &mut impl Host, second: bool) -> u32 {
     const LIST: usize = 0x456 - 0x44D; // in `unlocks_more`
-    let get = |p: &MenuProfile, k: usize| u16::from_le_bytes([p.unlocks_more[LIST + 2 * k], p.unlocks_more[LIST + 2 * k + 1]]);
+    let get = |p: &MenuProfile, k: usize| {
+        u16::from_le_bytes([p.unlocks_more[LIST + 2 * k], p.unlocks_more[LIST + 2 * k + 1]])
+    };
     let set = |p: &mut MenuProfile, k: usize, v: u16| {
         p.unlocks_more[LIST + 2 * k..LIST + 2 * k + 2].copy_from_slice(&v.to_le_bytes())
     };

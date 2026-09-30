@@ -433,7 +433,11 @@ mod tests {
 
     /// Oracle cases saved by `tools/ui_menu_oracle.py <name>`.
     fn cases(name: &str) -> Option<Vec<serde_json::Value>> {
-        let path = if name.contains('/') { format!("{name}.jsonl") } else { format!("menus3/{name}.jsonl") };
+        let path = if name.contains('/') {
+            format!("{name}.jsonl")
+        } else {
+            format!("menus3/{name}.jsonl")
+        };
         let text = nfsgba_testkit::read_to_string(&path)?;
         Some(text.lines().map(|l| serde_json::from_str(l).unwrap()).collect())
     }

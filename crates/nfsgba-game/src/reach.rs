@@ -17,7 +17,10 @@ fn u32_at(rom: &[u8], o: usize) -> u32 {
 
 /// Every 4-aligned ROM offset holding `word` (literal pools and data tables).
 fn words(rom: &[u8], word: u32) -> Vec<usize> {
-    (0..rom.len() - 3).step_by(4).filter(|&o| u32_at(rom, o) == word).collect()
+    (0..rom.len() - 3)
+        .step_by(4)
+        .filter(|&o| u32_at(rom, o) == word)
+        .collect()
 }
 
 /// Every Thumb `BL` (at a 2-aligned offset) whose target is `target`.
@@ -44,7 +47,10 @@ fn uncalled(rom: &[u8], f: u32) -> bool {
 fn route_templates(rom: &[u8], index: usize) -> (usize, usize) {
     let at = 0x7F_2798 + 0x14 * index;
     let counts = (u32_at(rom, at + 0xC) - ROM_BASE) as usize;
-    ((u32_at(rom, at).wrapping_sub(ROM_BASE)) as usize, u16_at(rom, counts + 4) as usize)
+    (
+        (u32_at(rom, at).wrapping_sub(ROM_BASE)) as usize,
+        u16_at(rom, counts + 4) as usize,
+    )
 }
 
 /// R11 / `camera::dispatch`: the camera view (`0x030055F8`) is only ever 0, 2 or 4 in a race, never 7
@@ -98,7 +104,10 @@ fn entity_handlers_are_ported() {
     assert_eq!(bl_calls(&rom, 0x0814_C0B8), [0x14C332]);
     assert_eq!(bl_calls(&rom, 0x0814_C32C), [0x14AE60]);
     assert!(uncalled(&rom, 0x0814_AE2C));
-    assert_eq!(bl_calls(&rom, 0x0814_AA48), [0x14AAF8, 0x14C1F0, 0x14C256, 0x14C2C0, 0x14C318]);
+    assert_eq!(
+        bl_calls(&rom, 0x0814_AA48),
+        [0x14AAF8, 0x14C1F0, 0x14C256, 0x14C2C0, 0x14C318]
+    );
     assert!(words(&rom, 0x0814_AA49).is_empty());
 }
 
@@ -115,7 +124,10 @@ fn raised_camera_is_unreachable() {
 #[test]
 fn physics_orientation_is_always_set() {
     let Some(rom) = nfsgba_testkit::rom() else { return };
-    assert_eq!(words(&rom, 0x0300_610C), [0x139904, 0x13DE48, 0x14B254, 0x14DB44, 0x14E0EC]);
+    assert_eq!(
+        words(&rom, 0x0300_610C),
+        [0x139904, 0x13DE48, 0x14B254, 0x14DB44, 0x14E0EC]
+    );
 }
 
 /// Link play (`0x03005624`, `lib.rs`/`slots.rs` stops): the boot stores 0 (0x12A900); the only other stores are in
@@ -128,7 +140,15 @@ fn link_play_is_unreachable() {
         0x13BC84, 0x13BD04, 0x146C9C, 0x146D48, 0x146E64, 0x146FA4, 0x146FF4, 0x1471C0, 0x1472CC, 0x14BDE0,
     ];
     assert_eq!(words(&rom, 0x0300_5624), sites);
-    for f in [0x0814_6BF8, 0x0814_6CA4, 0x0814_6E10, 0x0814_6F60, 0x0814_6FAC, 0x0814_7164, 0x0814_7250] {
+    for f in [
+        0x0814_6BF8,
+        0x0814_6CA4,
+        0x0814_6E10,
+        0x0814_6F60,
+        0x0814_6FAC,
+        0x0814_7164,
+        0x0814_7250,
+    ] {
         assert!(uncalled(&rom, f), "{f:#x}");
     }
 }
@@ -143,14 +163,19 @@ fn every_race_route_has_a_racing_line() {
     let Some(rom) = nfsgba_testkit::rom() else { return };
     assert_eq!(
         words(&rom, 0x0300_5720),
-        [0x12A920, 0x12B874, 0x13959C, 0x139DC4, 0x13B524, 0x13E48C, 0x13F2B8, 0x13F59C]
+        [
+            0x12A920, 0x12B874, 0x13959C, 0x139DC4, 0x13B524, 0x13E48C, 0x13F2B8, 0x13F59C
+        ]
     );
     let (slots, sections) = (race_slots(&rom), route_sections(&rom));
     assert_eq!(slots[0].route, 0);
     for slot in 0..42 {
         let route = u16_at(&rom, 0x7E_4A70 + 4 * slot + 2) as usize;
         let index = slots[route].route as usize;
-        assert!(index != 0 && !sections[index].is_empty(), "track slot {slot}: route {route}");
+        assert!(
+            index != 0 && !sections[index].is_empty(),
+            "track slot {slot}: route {route}"
+        );
     }
     // The route number -> slot map `menu_frame` uses to flip a circuit's direction stays within the slots.
     assert!((1..=42).all(|r| route_track_slot(&rom, r) < 42));
@@ -191,7 +216,10 @@ fn no_car_overlay_is_format_4() {
         let mats = (u32_at(&rom, 0x7F_2B08 + 0x68 * env + 0x20) - ROM_BASE) as usize;
         for &m in &used {
             let at = mats + 0x24 * m;
-            assert!(rom[at + 0x22] != 4 || u16_at(&rom, at + 2) & 0x40 != 0, "environment {env} material {m}");
+            assert!(
+                rom[at + 0x22] != 4 || u16_at(&rom, at + 2) & 0x40 != 0,
+                "environment {env} material {m}"
+            );
         }
     }
 }

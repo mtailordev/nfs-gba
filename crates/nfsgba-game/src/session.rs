@@ -223,7 +223,6 @@ impl<'a> Session<'a> {
         }
     }
 
-
     /// `game_state_step` state 4: the race start from the menus' choice.
     fn start_race(&mut self) -> Result<()> {
         let audio = self.audio.clone().expect("the engine is with the menus");
@@ -430,8 +429,22 @@ mod reach_tests {
         ];
         let typed = [0x0813_644C, 0x0815_DFD8, 0x0814_19C0]; // TypedHost::call's other arms
         let overridden = [
-            0x0813_56DC, 0x0814_3284, 0x0812_C81C, 0x0812_C5C4, 0x0812_D960, 0x0812_C8A8, 0x0813_00E0, 0x0813_3D30,
-            0x0812_BF48, 0x0812_BEEC, 0x0812_BFA4, 0x0812_FFB0, 0x0812_EFE8, 0x0814_35C4, 0x0814_9D84, 0x0814_9FD8,
+            0x0813_56DC,
+            0x0814_3284,
+            0x0812_C81C,
+            0x0812_C5C4,
+            0x0812_D960,
+            0x0812_C8A8,
+            0x0813_00E0,
+            0x0813_3D30,
+            0x0812_BF48,
+            0x0812_BEEC,
+            0x0812_BFA4,
+            0x0812_FFB0,
+            0x0812_EFE8,
+            0x0814_35C4,
+            0x0814_9D84,
+            0x0814_9FD8,
             0x0813_02C4,
         ];
         let states_4_5 = [0x0812_EAAC, 0x0813_96C4]; // fill_results, race_cleanup

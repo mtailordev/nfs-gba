@@ -68,6 +68,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x78E714–0x799B88` | 46,196 B | **unknown**, starting right after route 42's racing line; its `0x794000…` part is referenced 49 times from game code (`0x12AD40…`) | engine/harness |
 | `0x797CD8` | 3 x 2 | List carousel x positions (previous; next; current) | formats/ui |
 | `0x797CE0` | 3 x 2 | List carousel y positions (24; 24; 32) | formats/ui |
+| `0x797CE8` | 17 × u16 | upgrade list item ids: the new marks and `upgrades_changed` (`0x081302C4`; items 0..10 on screen 0x1D, 10..17 on 0x1E) | engine/address-map |
 | `0x797D0A` | 4 | Quick Play random race: the race modes to draw from | formats/ui |
 | `0x7988B9` / `0x7C0360` | | "Pocketeers" / "LS_Play (C) Logik State 2003" | |
 | `0x799882` |  | credits pages (u16 line count; (flags; text key) per line; a count of 0 ends) | formats/ui |
@@ -135,7 +136,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F2B08` | 12 × 0x68 | level descriptors = environments; the **menu descriptor** at `0x7F2FE8` has the same layout | formats/city-sectors, formats/ui |
 | `0x7F3050` | per route | race-start byte | engine/physics |
 | `0x7F37D8` | 44 × 4 | per route: pointer (null = none) to its branch count (→ `0x03006108`) and side-segment sector lists | engine/physics, formats/career |
-| `0x7F38B8` | 65 × 4 | **entity handler table** (world `+0x78`, by entity `+0x4E`; `update_entities`): 0..3 `car_handler`; 4..0xD `0x0814add4`; 0x29 `opponent_handler` (opponents, wingman); 0x34 `effect_handler`; 0x36 `traffic_handler`; 0x39..0x3F `camera_update`; 0x40 `camera_look_at_player`; 0xE empty | engine/physics, engine/ai |
+| `0x7F38B8` | 65 × 4 | **entity handler table** (world `+0x78`, by entity `+0x4E`; `update_entities`): 0..3 `car_handler`; 4..0xD `0x0814add4`; 0x29 `opponent_handler` (opponents, wingman); 0x34 `effect_handler`; 0x36 `traffic_handler`; 0x39..0x3F `camera_update`; 0x40 `camera_look_at_player`; 0xE empty | engine/physics, engine/ai; 0x10/0x37 `entity_handler_10` `0x0814A198` (the look-at camera, view 7) |
 | `0x7F399C` | 4 per view | camera function per view (camera_dispatch; 0 = none) | engine/game-loop |
 | `0x7F39BC` / `0x7F39D4` / `0x7F39EC` | 6 each | per camera view: x offset (all 0), height 8.8 (−100, −140, −150, −115, −80, −105), distance (0, −290, −300, −150, 200, −120); orbit distance = `distance·256 + (0x80 − focal)·0x200` | engine/viewer-rendering |
 | `0x7F3A24` | 0x10 per route index | moving pieces that start closed (i16 list; -1 ends; moving_pieces_init) | engine/race-init |
@@ -257,7 +258,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030053F0` | projected model vertices (world `+0xA0`), x/y halfwords |
 | `0x030055F0` | pointer to the base palette buffer (`0x02001008` in the race); the light tint reads it |
 | `0x030055F4` | camera: 0 at camera_init (4) |
-| `0x030055F8` | camera view (0 bumper, 2 chase; per-view tables `0x7F39BC`/`0x7F39D4`/`0x7F39EC`) |
+| `0x030055F8` | camera view (0 bumper, 2 chase; per-view tables `0x7F39BC`/`0x7F39D4`/`0x7F39EC`); 4 at camera_init, then 2 by race_init; 7 only by `camera_look_at` `0x081389CC` from entity handler 0x10/0x37 (`0x0814A198`), which no entity gets: views are 0, 2, 4 (`reach::camera_view_7_is_unreachable`) |
 | `0x030055FC` | camera: two halfwords cleared at camera_init (4) |
 | `0x03005600` | language (0 En … 4 Es) |
 | `0x03005604` | traffic |
@@ -265,7 +266,7 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x03005610` | reverse |
 | `0x03005614` | u32 **camera** sector (written by `camera_update`, searched 72 units ahead of the camera; `apply_sector_light_to_palette` reads it with the player's position; 760 in the reference race) |
 | `0x03005620` | pointer to the current level descriptor (`0x087F2F80` in the race) |
-| `0x03005624` | flag: no atlases, all racers dressed from `0x7EEA44` |
+| `0x03005624` | flag: no atlases, all racers dressed from `0x7EEA44`; the link-play flag: 0 at boot, set only by uncalled link functions (`0x08146BF8`…`0x08147250`; `reach::link_play_is_unreachable`) |
 | `0x03005628` | frame counter (`main_frame` adds 1; race start sets 0); its parity picks the page to draw; picks the traffic type |
 | `0x0300562C` | free race (RACE TYPE): rand % 3 + 1 (4) |
 | `0x03005630` | i32 palette fade step (±0x10, stepped by 2 to 0); while non-zero the tint and shade write the second buffer. **Not a pointer** |
@@ -355,12 +356,12 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x030060C0` | per section (16 words): non-zero = the AI may take this branch as a shortcut |
 | `0x03006104` | wingman (0 none, 1..12; `race_start_from_table_a`) |
 | `0x03006108` | branch count of the race's route |
-| `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step; non-zero lets `build_entity_matrix` take the physics orientation (entity `+0x0A` bit 5) |
+| `0x0300610C` | set by the dynamics; while 0 the racing step runs the suspension step; non-zero lets `build_entity_matrix` take the physics orientation (entity `+0x0A` bit 5); 1 from race_init on, nothing stores 0 (`reach::physics_orientation_is_always_set`) |
 | `0x03006110` | added to driver +0x188 in the AI's wheel drive (4) |
 | `0x03006118` | free race (RACE TYPE): rand % 20 (4) |
 | `0x0300611C` | i8 car id per racer ([0] player → entity 0 `+0x89`; [1..3] opponents) |
 | `0x03006120` | per section: branch distance scale onto the lap ×256 (`[0]` = 0x100) |
-| `0x03006148` | raised camera: 0x82 above the car instead of 0x10, and the orbit does not follow |
+| `0x03006148` | raised camera: 0x82 above the car instead of 0x10, and the orbit does not follow; never written (`reach::raised_camera_is_unreachable`) |
 | `0x03006150`, `0x0300614C` | nitro full-tank flag; grip-doubling flag |
 | `0x03006154` | time limit (0x4650; 0x2328 in career); `hud_countdown_timer` counts it down against the race time |
 | `0x03006158` | AI boost start value 0..2 (`0x7F3DE8`/`0x7F3DF4`); 2 also boosts over the last lap's last 3 segments; set by `race_start_setup` |

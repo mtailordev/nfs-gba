@@ -516,8 +516,7 @@ fn build_route(
         points: points.clone(),
         scales: Vec::new(),
     };
-    let mut planes = vec![[0i32; 8]; 0x100];
-    let back = line.planes(g.circuit != 0, &mut planes);
+    let (planes, back) = line.planes(g.circuit != 0);
     Ok(Route {
         line: RacingLine {
             sections: sections.iter().map(section).collect(),

@@ -674,7 +674,7 @@ impl Game {
                     r?;
                     self.play_commands(commands, t, &mut sounds)?;
                 }
-                _ => return Err(Unported("an entity handler other than 0..3, 0x29, 0x34 and 0x36")),
+                _ => return Err(Unported("an entity handler other than 0..3, 0xF, 0x29, 0x34 and 0x36")),
             }
         }
         Ok(())

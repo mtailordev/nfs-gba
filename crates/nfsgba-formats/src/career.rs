@@ -387,11 +387,19 @@ impl RacingLine {
         self.point(s, i)
     }
 
-    /// The plane table and back table that `FUN_08138f30` builds at race start (lap, then each branch where it
-    /// leaves the lap, recursively; `FUN_08138dc4`), with the lapped flag left from the previous scene. The game
-    /// writes into a `malloc(0x2000)` (256 rows) and only the rows it builds: pass the old contents in `planes`
-    /// (a branch entered only at its end is never built, and keeps them). The back table is fully reset.
-    pub fn planes(&self, lapped: bool, planes: &mut [Plane]) -> BackTable {
+    /// The plane table (256 rows) and back table that `FUN_08138f30` builds at race start, with the lapped flag left
+    /// from the previous scene. `race_load_level` allocates the table with `heap_alloc_zeroed(0x2000)`, so the rows
+    /// the build skips (a branch entered only at its end) are zero (D15).
+    pub fn planes(&self, lapped: bool) -> (Vec<Plane>, BackTable) {
+        let mut planes = vec![[0; 8]; 256];
+        let back = self.build_planes(lapped, &mut planes);
+        (planes, back)
+    }
+
+    /// `FUN_08138f30` into an existing table (lap, then each branch where it leaves the lap, recursively;
+    /// `FUN_08138dc4`): only the rows it builds are written, the rest keep `planes`' contents (the oracle cases run
+    /// it over old tables). The back table is fully reset.
+    fn build_planes(&self, lapped: bool, planes: &mut [Plane]) -> BackTable {
         let mut back = [-1; 256];
         let count = i32::from(self.sections[0].count);
         let row = |this: &Self, back: &BackTable, s: usize, k: i32| {
@@ -1441,7 +1449,7 @@ mod tests {
         }
         let (table, back_table) = (at(u32_at(&iw, 0x5FB4)), at(u32_at(&iw, 0x5FB8)));
         let mut planes = vec![[0; 8]; 256];
-        let back = line.planes(false, &mut planes);
+        let back = line.build_planes(false, &mut planes);
         for (k, row) in planes[..total].iter().enumerate() {
             let ram: Plane = std::array::from_fn(|i| u32_at(&ew, table + 0x20 * k + 4 * i) as i32);
             assert_eq!(*row, ram, "plane row {k}");
@@ -1840,7 +1848,7 @@ mod tests {
                     let old = t.kv.get("old").map_or(vec![UNSET; 256], |_| rows(&t.bytes("old")));
                     let build = |lapped: bool| {
                         let mut planes = old.clone();
-                        let back = line.planes(lapped, &mut planes);
+                        let back = line.build_planes(lapped, &mut planes);
                         (planes, back)
                     };
                     let matches = |lapped: bool| {
@@ -1883,7 +1891,7 @@ mod tests {
                     let line = line_for(&race, route);
                     // The table as the race had it: the build over the captured table keeps its unbuilt rows.
                     let mut planes = tables.get(&t.file).cloned().unwrap_or_else(|| vec![[0; 8]; 256]);
-                    let back = line.planes(lapped_at_build, &mut planes);
+                    let back = line.build_planes(lapped_at_build, &mut planes);
                     let mut r = t.racer("pre");
                     let crossed = if t.func == "track_player" {
                         let v = t.ints("vec");
