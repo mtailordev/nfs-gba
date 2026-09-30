@@ -9,6 +9,8 @@ savestate (or power-on) plus a key plan; screenshots of each step's end land in 
 plan did what it says. Stops only its own mGBA (by PID).
 """
 import csv
+import json
+import os
 import re
 import shutil
 import sys
@@ -41,6 +43,17 @@ SCENARIOS = {
                                                                 "shot:cov-pause-confirm", PRESS("A", 300)])
                   + ",shot:cov-pause-quit",
 }
+
+
+def career_plan(name):
+    """A plan file of tools/oracle/coverage_plan.py (`plan-NAME.json` in the session folder): (plan, save) or None."""
+    f = mgba_ctl.session_dir(SESSION) / f"plan-{name}.json"
+    if not f.is_file():
+        return None
+    d = json.loads(f.read_text(encoding="utf-8"))
+    # `mark` takes one frame: the plan's first wait (it starts with one) is a frame shorter.
+    plan = f"mark:{name}," + re.sub(r"^none:(\d+)", lambda m: f"none:{int(m[1]) - 1}", d["plan"])
+    return plan, data_dir() / "work" / canonical()[1] / "career" / d["save"]
 
 
 def functions():
@@ -87,9 +100,21 @@ def main(names):
     funcs_file.write_text("".join(f"{a:08x}\n" for a, _ in funcs))
     results = {}
     for name in names or SCENARIOS:
-        results[name] = run(name, SCENARIOS[name], work, funcs_file)
+        plan, save = SCENARIOS.get(name), None
+        if plan is None:
+            plan, save = career_plan(name) or sys.exit(f"unknown scenario {name!r}: not in SCENARIOS, no plan-{name}.json")
+        for _ in range(20):  # the previous mGBA may still hold the save for a moment
+            try:
+                (work / f"{rom.stem}.sav").unlink(missing_ok=True)
+                break
+            except PermissionError:
+                time.sleep(1)
+        if save:  # a career save: power-on with it (mGBA writes it back: the copy in the session folder)
+            shutil.copy2(save, work / f"{rom.stem}.sav")
+        results[name] = run(name, plan, work, funcs_file)
 
-    out = data_dir() / "out" / "coverage" / sha8
+    # NFSGBA_MGBA_SESSION (a new fixture folder) keeps the results there; else the shared data/out/coverage.
+    out = work if os.environ.get("NFSGBA_MGBA_SESSION") else data_dir() / "out" / "coverage" / sha8
     rows = [["address", "name", "kind", *results]]
     rows += [[f"{a:#010x}", n, kind(a), *(results[s].get(a, 0) for s in results)] for a, n in funcs]
     lines = [",".join(map(str, r)) for r in rows]

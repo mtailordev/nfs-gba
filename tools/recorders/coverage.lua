@@ -5,6 +5,7 @@
 --   mark:LABEL       count further hits under LABEL (default "start")
 --   KEY[+KEY]:N      hold keys for N frames (A B SELECT START RIGHT LEFT UP DOWN R L), "none:N" waits
 --   shot:NAME        screenshot NAME.png
+--   poke:ADDR=HEX[;ADDR=HEX]  write bytes (hex address, hex data) in this frame (race-finish pokes of the career plans)
 -- When the plan ends it writes COV_OUT ("label,address,hits" for every non-zero count) and done.txt.
 local dir = os.getenv("NFSGBA_MGBA_DIR")
 local KEYS = {A = 0, B = 1, SELECT = 2, START = 3, RIGHT = 4, LEFT = 5, UP = 6, DOWN = 7, R = 8, L = 9}
@@ -63,6 +64,10 @@ callbacks:add("frame", function()
     cur = counts[arg]
   elseif op == "shot" then
     emu:screenshot(dir .. "/" .. arg .. ".png")
+  elseif op == "poke" then
+    for addr, hex in arg:gmatch("(%x+)=(%x+)") do
+      for i = 1, #hex, 2 do emu:write8(tonumber(addr, 16) + (i - 1) // 2, tonumber(hex:sub(i, i + 1), 16)) end
+    end
   else
     local mask = 0
     for k in op:gmatch("[^+]+") do if KEYS[k] then mask = mask | (1 << KEYS[k]) end end
