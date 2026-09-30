@@ -6,7 +6,7 @@
 //! sprites. Both runs make the same choices: the same boot presses, then a press when the current screen has been
 //! settled for the script's number of frames (`tools/career_trace.py` docs).
 
-use nfsgba_game::{race_setup::load_pre, session::Session};
+use nfsgba_game::session::Session;
 use nfsgba_sim::{Mem, layout::Field};
 use serde_json::Value;
 
@@ -93,10 +93,9 @@ fn diffs(a: &[u8], b: &[u8]) -> String {
 
 /// Runs `name` (a script in `tools/career/`, its trace in `career/`) and compares every settled menu visit.
 fn compare(name: &str) {
-    let (Some(rom), Some(text), Some(pre)) = (
+    let (Some(rom), Some(text)) = (
         nfsgba_testkit::rom(),
         nfsgba_testkit::read_to_string(&format!("career/{name}.json")),
-        nfsgba_testkit::fixture("race-init/circuit_pre.wram.bin"),
     ) else {
         return;
     };
@@ -118,9 +117,7 @@ fn compare(name: &str) {
         cfg["win"].as_bool().unwrap_or(false),
     );
     let rules = cfg["rules"].as_array().unwrap();
-    let prefix = pre.to_str().unwrap().strip_suffix(".wram.bin").unwrap().to_owned();
-    let template = load_pre(rom.clone(), std::path::Path::new(&prefix)).unwrap();
-    let mut s = Session::new(&rom, save, template);
+    let mut s = Session::new(&rom, save);
 
     let (mut ours, mut last_key, mut poked) = (vec![], None, false);
     let (mut rule, mut entered, mut fired, mut prev_screen, mut end) = (0, 0u64, -99i64, -1i64, None::<u64>);
