@@ -175,6 +175,9 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `0x7F5CC8` | 32 B | unknown byte map (`e0 e1 e2 …`) | engine/harness |
 | `0x7F5CE8` | 4 × u32 | minimap copy masks per byte shift (0, 0xFF000000, 0xFFFF0000, 0xFFFFFF00), read by the minimap copy (`0x169B20` literal) | formats/ui |
 | `0x7F5CF8–0x800000` | | zero fill to the end of the ROM | engine/harness |
+| `0x8797CA8` | 0x2C | first unlock id of each message sub-group (u16 per group; group + 10 above 0x79) | formats/career |
+| `0x87E513C` | 0xE | heading text key per unlock message kind 0..5 | formats/career |
+| `0x87E514A` | 0x2C | unlock message text keys: u16 per group (the group for ids below 0x79; group + 10 above) added to the index within the group (unlock_message_index) | formats/career |
 
 ### Level descriptor (0x68 bytes, `0x7F2B08`)
 

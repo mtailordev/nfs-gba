@@ -1,7 +1,0 @@
-address,name,kind,comment
-0x081605e0,rotation_x,function,3x4 matrix: rotation about x by an angle (0x4000 0 0 / 0 cos sin / 0 -sin cos), zero translation
-0x081602f8,matrix_multiply,function,(a, b): a = a x b (3x3 in 2.14 fixed point rows times columns >> 14, translations added), copied back into a
-0x081606d4,matrix_set_translation,function,(matrix, vec3): the translation words +0x24..+0x2C
-0x087f0626,car_has_model,data,byte per car: nonzero when the garage draws a 3D model for it
-0x087f0636,car_spoiler_models,data,i16 per (car * 16 + level of part 0): the spoiler model number (0 = none), garage_load_car_atlas stores it in the entity +0x64
-0x087f0816,car_spoiler_offsets,data,i16 pairs (y, -z) per (car * 16 + level of part 0): the spoiler position in the car's frame (garage_draw_car)

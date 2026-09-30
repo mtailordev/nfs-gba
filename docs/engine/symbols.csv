@@ -587,3 +587,108 @@ address,name,kind,comment
 0x08133e74,district_completion_text,function,(buffer; zone) completion percent of a district's events as "N%" (a space before % in French and Italian)
 0x0813fdb0,ai_pick_hunt_target,function,hunter races: the racer on the same segment nearest ahead (or beside in another lane) becomes the chase target (driver +0x4F4, timer +0x4F0 = *0x03006198)
 0x0814bf98,wingman_marker_handler,function,entity handler 0xF: the wingman's marker (state 0 above the player; state 1 hovers 0x1000 above the last AI car bobbing sin(time<<9) >> 2, takes a billboard slot)
+0x0812ee14,career_unlock_news,function,after a career race: the old unlock bits are copied to profile +0x405 (40 bytes); rebuild_unlocks; +0x405 = old xor new; each changed id gets its message key at +0x4AA (a heading first per kind; the kinds at +0x4C8); +0x3B4 = 1; kind 3 sets +0x256 (menu/results.rs unlock_news)
+0x0812ed28,unlock_message_index,function,(group; unlock id) position of an id within its group's message keys (menu/results.rs message_index)
+0x0300464c,vec_from_angle,function,IWRAM: builds a 2D basis from an angle via the sin/cos copies; never called
+0x080000c0,rom_entry_loop,function,ROM entry: sets the IRQ vector word 0x03007FFC and loops game_main
+0x0812b17c,free_race_buffers,function,"frees the race heap buffers (0x030057F0, 5F88, 53B8, 5690, 577C, 55F0); never called"
+0x0812b258,clear_results_block,function,clears the 0x40-byte results block at 0x03005650; never called
+0x0812d82c,upgrade_percent,function,"part level (2-bit fields) times the 0x087E46EC weight / 100; garage stat, never called"
+0x0812fc7c,menu_record_badge,function,menu element: two materials 0xD2/0xD3 and a number when profile +0x3B8 != 0; never called
+0x08137390,race_frame_alt_entry,function,unused: runs FUN_0813accc then FUN_081396c4
+0x081376e8,update_entity_debug,function,"older entity update: prints an error to the debug console if the sector is 0xFFFF, else calls the handler from 0x087F38B8"
+0x0813accc,race_frame_alt_a,function,unused alternate race frame step called only by FUN_08137390
+0x0813adf4,race_frame_render_alt,function,"unused alternate race frame body (entities, camera, skyline, IWRAM renderer call); superseded by race_frame_update"
+0x08146b00,link_handshake_poll,function,"link play, never called: master or slave connect step, then waits for the peers"
+0x08146b90,link_packet_init,function,"link play, never called: fills the own link packet header (0x030062C0) with state 3, car and colour"
+0x081472d4,link_peers_flagged,function,"link play: 1 if any peer packet (0x030062D0, 0x10 bytes each) has a bit of the mask set"
+0x08147310,link_wait_all_ready,function,link play: waits until every peer packet reports ready (bits 0xC0 == 0x80)
+0x081473bc,link_slave_poll,function,link play: slave-side packet exchange (FUN_081503a4) then error check
+0x081474d0,link_resync,function,link play: clears the own packet flags and re-runs the handshake
+0x0814a6c0,entity_handler_30,function,entity handler 0x30: follows a racer with a 4-step blend; no route spawns it
+0x0814a818,entity_handler_31,function,entity handler 0x31: traffic-like mover; no route spawns it
+0x0814aa48,spawn_entity_16,function,allocates an entity of type 0x16; called only by handler 0x33
+0x0814ac38,entity_handler_14,function,entity handler 0x14: sound-emitting mover; no route spawns it
+0x0814acf4,entity_handler_15,function,entity handler 0x15: sound-emitting mover; no route spawns it
+0x0814add4,static_entity_handler,function,"entity handler types 4..0xD (static props): place_on_floor once, then slot; only route 0 (a dummy) spawns type 4"
+0x0814c0b8,spawn_entity_33,function,allocates an entity of type 0x33 with a sound; caller chain FUN_0814c32c/FUN_0814ae2c is unreferenced
+0x0814c19c,entity_handler_33,function,"entity handler 0x33 (projectile-like), spawned only by FUN_0814c0b8 (itself unreachable)"
+0x0814ed98,random_dots_init,function,fills 0x03005690 with random on-screen points; unused
+0x0814fc80,sio_master_session,function,link play: SIOCNT multi-player master session state machine (0x2000 = multi-player mode)
+0x081500fc,sio_slave_session,function,link play: SIO slave-side session state machine
+0x081503a4,sio_slave_connect,function,link play: slave connect step
+0x08150704,sio_start,function,link play: resets RCNT/SIOCNT to multi-player mode and installs the serial IRQ
+0x08150bc0,sio_irq_master,function,"link play: serial IRQ handler, master side (reads SIOMULTI0/1, sends the next packet word)"
+0x08150cf0,sio_irq_slave,function,"link play: serial IRQ handler, slave side"
+0x08150e54,sio_stop,function,link play: RCNT reset and SIOCNT back to multi-player idle
+0x081517b0,snd_copy_channels,function,audio: copies the channel array between the two banks; inline in the jingle switch in Rust
+0x08151958,audio_mode0_dma_start,function,audio library: direct-sound DMA1/2 set-up (0x040000C4/D0); mode 0 only
+0x08152a38,audio_mode0_init,function,audio library: mode-0 fields (0x145C = 0x160); never called (Carbon uses mode 1)
+0x08152ab8,snd_mode0_frame,function,"audio: mode-0 frame update (FIDELITY A3, Carbon uses mode 1)"
+0x08152b7c,snd_mode0_swap,function,audio: mode-0 buffer swap (FIDELITY A3)
+0x0815d458,bg_ref_point_set,function,GBA library: writes BG2/BG3 reference-point registers 0x04000020/30; never called
+0x0815d4d0,bg_width_px,function,GBA library: BG width in pixels from BGxCNT and the display mode
+0x0815d558,bg_height_px,function,GBA library: BG height in pixels from BGxCNT and the display mode
+0x0815d7b4,bg_affine_setup,function,GBA library: BG affine set-up from width and height
+0x0815e7ec,debug_console_tick,function,debug console (0x030064B0): clears the row on key bit 5
+0x0815e970,debug_console_free,function,debug console: frees its buffer
+0x0815e9d0,debug_print_int,function,debug console: prints a number via itoa (update_entities calls it on an invalid sector)
+0x0815ea54,debug_console_draw,function,debug console: draws its text rows with text_draw_glyph
+0x08160da8,gfx_alloc_slot,function,GBA library: finds a free block in the tile allocator at 0x030064CC
+0x08161420,oam_slot_set,function,GBA library: fills one of 32 sprite slots at 0x030064F0 (0x20 bytes each)
+0x081614b8,oam_slot_set_frame,function,GBA library: sets frame and clears counters of a sprite slot
+0x0816208c,boot_hw_reset,function,"boot: sets 0x04000204, waits for VBlank, clears EWRAM/IWRAM/VRAM/OAM/palette, copies the IWRAM overlay; runs only at reset"
+0x081621dc,boot_hook,function,boot: calls the empty FUN_08165130
+0x08165130,nop_return,function,empty function (return)
+0x08165218,raster_wall_columns_rom,function,ROM copy of the IWRAM function 0x03000304; the race runs the IWRAM copy
+0x08165714,find_camera_sector_rom,function,ROM copy of the IWRAM function 0x03000800; the race runs the IWRAM copy
+0x0816588c,transform_walls_rom,function,ROM copy of the IWRAM function 0x03000978; the race runs the IWRAM copy
+0x08165a58,clip_flat_outline_rom,function,ROM copy of the IWRAM function 0x03000B44; the race runs the IWRAM copy
+0x08166130,clip_wall_span_rom,function,ROM copy of the IWRAM function 0x0300121C; the race runs the IWRAM copy
+0x081662c0,setup_wall_spans_rom,function,ROM copy of the IWRAM function 0x030013AC; the race runs the IWRAM copy
+0x081669f8,sort_sector_entities_rom,function,ROM copy of the IWRAM function 0x03001AE4; the race runs the IWRAM copy
+0x08166f98,draw_sector_walls_rom,function,ROM copy of the IWRAM function 0x03002084; the race runs the IWRAM copy
+0x08167160,draw_sector_rom,function,ROM copy of the IWRAM function 0x0300224C; the race runs the IWRAM copy
+0x08167528,expand_portal_rom,function,ROM copy of the IWRAM function 0x03002614; the race runs the IWRAM copy
+0x08167920,flat_edge_step_rom,function,ROM copy of the IWRAM function 0x03002A0C; the race runs the IWRAM copy
+0x08167b54,flat_span_perspective_rom,function,ROM copy of the IWRAM function 0x03002C40; the race runs the IWRAM copy
+0x08167cb4,draw_flat_textured_rom,function,ROM copy of the IWRAM function 0x03002DA0; the race runs the IWRAM copy
+0x08168094,draw_flat_fill_rom,function,ROM copy of the IWRAM function 0x03003180; the race runs the IWRAM copy
+0x08168378,polygon_edge_back_rom,function,ROM copy of the IWRAM function 0x03003464; the race runs the IWRAM copy
+0x08168548,polygon_edge_forward_rom,function,ROM copy of the IWRAM function 0x03003634; the race runs the IWRAM copy
+0x0816871c,raster_polygon_rom,function,ROM copy of the IWRAM function 0x03003808; the race runs the IWRAM copy
+0x081689e0,clip_polygon_edge_rom,function,ROM copy of the IWRAM function 0x03003ACC; the race runs the IWRAM copy
+0x08168c84,clip_polygon_rom,function,ROM copy of the IWRAM function 0x03003D70; the race runs the IWRAM copy
+0x08168f2c,transform_model_vertices_rom,function,ROM copy of the IWRAM function 0x03004018; the race runs the IWRAM copy
+0x081690a4,draw_model_polygons_rom,function,ROM copy of the IWRAM function 0x03004190; the race runs the IWRAM copy
+0x08169384,atan2_fast_rom,function,ROM copy of the IWRAM function 0x03004470; the race runs the IWRAM copy
+0x08169560,iwram_0300464c_rom,function,ROM copy of the IWRAM function 0x0300464C; the race runs the IWRAM copy
+0x081696bc,point_in_sector_rom,function,ROM copy of the IWRAM function 0x030047A8; the race runs the IWRAM copy
+0x0816973c,build_visible_sectors_rom,function,ROM copy of the IWRAM function 0x03004828; the race runs the IWRAM copy
+0x081697dc,draw_visible_sectors_rom,function,ROM copy of the IWRAM function 0x030048C8; the race runs the IWRAM copy
+0x08169b30,fill_blocks16_rom,function,ROM copy of the IWRAM function 0x03004C1C; the race runs the IWRAM copy
+0x08169b54,recip_wide_rom,function,ROM copy of the IWRAM function 0x03004C40; the race runs the IWRAM copy
+0x08169bb8,recip_div_rom,function,ROM copy of the IWRAM function 0x03004CA4; the race runs the IWRAM copy
+0x08169be0,mul_frac24_rom,function,ROM copy of the IWRAM function 0x03004CCC; the race runs the IWRAM copy
+0x08169c0c,recip_div_8_rom,function,ROM copy of the IWRAM function 0x03004CF8; the race runs the IWRAM copy
+0x08169c34,recip_div_16_rom,function,ROM copy of the IWRAM function 0x03004D20; the race runs the IWRAM copy
+0x08169c5c,wall_column_transparent_rom,function,ROM copy of the IWRAM function 0x03004D48; the race runs the IWRAM copy
+0x08169cc4,wall_column_opaque_rom,function,ROM copy of the IWRAM function 0x03004DB0; the race runs the IWRAM copy
+0x08169d38,collect_sector_entities_rom,function,ROM copy of the IWRAM function 0x03004E24; the race runs the IWRAM copy
+0x08169e04,merge_portal_spans_rom,function,ROM copy of the IWRAM function 0x03004EF0; the race runs the IWRAM copy
+0x08169ebc,flat_span_affine_rom,function,ROM copy of the IWRAM function 0x03004FA8; the race runs the IWRAM copy
+0x08169f1c,flat_top_vertex_rom,function,ROM copy of the IWRAM function 0x03005008; the race runs the IWRAM copy
+0x08169fa8,fill_span_rom,function,ROM copy of the IWRAM function 0x03005094; the race runs the IWRAM copy
+0x0816a060,polygon_outcode_rom,function,ROM copy of the IWRAM function 0x0300514C; the race runs the IWRAM copy
+0x0816a108,draw_polygon_span_rom,function,ROM copy of the IWRAM function 0x030051F4; the race runs the IWRAM copy
+0x0816a234,polygon_top_corner_rom,function,ROM copy of the IWRAM function 0x03005320; the race runs the IWRAM copy
+0x0816a79c,div_return_stub,function,empty stub shared by the __divsi3 family
+0x0816a924,negdi3,function,libgcc 64-bit negate
+0x0816c15c,lshrdi3,function,libgcc 64-bit logical shift right
+0x08224ee0,not_code,function,bad instruction data in the ROM tail: not a function
+0x081605e0,rotation_x,function,3x4 matrix: rotation about x by an angle (0x4000 0 0 / 0 cos sin / 0 -sin cos), zero translation
+0x081602f8,matrix_multiply,function,(a, b): a = a x b (3x3 in 2.14 fixed point rows times columns >> 14, translations added), copied back into a
+0x081606d4,matrix_set_translation,function,(matrix, vec3): the translation words +0x24..+0x2C
+0x087f0626,car_has_model,data,byte per car: nonzero when the garage draws a 3D model for it
+0x087f0636,car_spoiler_models,data,i16 per (car * 16 + level of part 0): the spoiler model number (0 = none), garage_load_car_atlas stores it in the entity +0x64
+0x087f0816,car_spoiler_offsets,data,i16 pairs (y, -z) per (car * 16 + level of part 0): the spoiler position in the car's frame (garage_draw_car)
