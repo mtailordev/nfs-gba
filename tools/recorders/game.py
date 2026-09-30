@@ -23,6 +23,7 @@ from recorders import running
 SESSION = "game-loop"
 
 STATE = 0x40000 + 0x8000 + 0x400 + 0x18000 + 0x400
+AUTOPILOT = [f"lua {Path(__file__).with_name('autopilot.lua').as_posix()}", "luax AUTOPILOT.reset()"]
 SCENARIOS = {
     # name: (savestate, arming, game frames, keys[, commands before recording, e.g. RAM pokes]).
     # From the reference race (race.ss): accelerate, steer both ways, brake, accelerate again.
@@ -65,7 +66,18 @@ SCENARIOS = {
     # From the reference race with `main_frame`'s palette fade poked (FADE 0x03005630): out (-30: 15 frames, the
     # palettes and the sky gradient lose 4 per channel each), and in (+20: 10 frames, fadein.lua) from black.
     "fadeout": ("race", "", 20, ["hold A 400"], ["luax emu:write32(0x03005630,-30)"]),
-    "fadein": ("race", "", 14, ["hold A 400"], [f"lua {Path(__file__).with_name('fadein.lua')}"]),
+    # The other race modes, from in-race savestates (copied into the session folder as *-race.ss) with the autopilot
+    # (autopilot.lua) driving: a hunter race (mode 2, HUD life bars) ramming opponent 3; an elimination race
+    # (mode 1) on the racing line; a circuit with the wingman (attacker_start: 2 opponents plus the wingman),
+    # the wingman command (R+L) given twice; a career event (story3_race).
+    "hunter": ("hunter-race", "racing", 500, ["wait 1100"], [*AUTOPILOT, "luax AUTOPILOT.target=3",
+                                                            'luax AUTOPILOT.mode="ram"']),
+    "elimination": ("elimination-race", "racing", 900, ["wait 2000"], [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
+    "attacker": ("attacker-race", "racing", 700, ["wait 400", "luax AUTOPILOT.extra=0x300", "wait 12",
+                                                  "luax AUTOPILOT.extra=0", "wait 1200"],
+                 [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
+    "career": ("career-race", "racing", 600, ["wait 1400"], [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
+    "fadein": ("race", "", 14,["hold A 400"], [f"lua {Path(__file__).with_name('fadein.lua')}"]),
 }
 
 

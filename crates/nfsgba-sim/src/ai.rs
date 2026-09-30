@@ -200,9 +200,7 @@ fn init(w: &mut CarWorld, i: usize) -> Result<()> {
     }
     crate::init::race_start_setup(w, i);
     ent!(w, i).flags |= 0x20;
-    if ent!(w, i).index as u32 == w.g.player {
-        return Err(Unported("the player's car on the opponent handler (unpack_decal)"));
-    }
+    // The player's entity on this handler: `unpack_decal` (rendering; the game loop's adapter does it).
     Ok(())
 }
 

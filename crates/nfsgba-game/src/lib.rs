@@ -622,6 +622,11 @@ impl Game {
                         r
                     });
                     self.play_commands(commands, t, &mut sounds)?;
+                    // The player's entity on this handler (FUN_0814a390's last call): the decal, as for handler 0..3.
+                    if state == 0 && i as u32 == self.world.g.player {
+                        self.world.on_arena(&self.rom, i, nfsgba_sim::decal::unpack_decal);
+                        self.world.rim_redraw(&self.rom, &self.data, i, true)?;
+                    }
                     if let Some(f) = effects? {
                         let (rom, data) = (&self.rom, &self.data);
                         self.world.with_slots(rom, data, |s| {
