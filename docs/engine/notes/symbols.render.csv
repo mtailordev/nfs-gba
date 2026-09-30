@@ -1,0 +1,2 @@
+address,name,kind,comment
+0x0813a020,clear_material_table_unused,function,"fill_units(world +0x48, 0, +0xD8 * 8); nothing calls it (reach::renderer_runtime_tables_never_change)"

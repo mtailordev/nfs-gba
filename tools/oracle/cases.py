@@ -4,7 +4,7 @@ reference states the Rust tests replay. Each set is a module here; see its docst
     .venv/Scripts/python.exe tools/oracle/cases.py list
     .venv/Scripts/python.exe tools/oracle/cases.py SET [ARGS...]
 
-Sets (output folder under $NFSGBA_DATA/work/<sha8>/): unlock (menus), save (menus3), prove (harness/oracle), car, fuzz, calls, suspension
+Sets (output folder under $NFSGBA_DATA/work/<sha8>/): unlock (menus), save (menus3), render2 (render2), prove (harness/oracle), car, fuzz, calls, suspension
 (vehicle-physics), ai (ai-traffic), rules (race-rules), menus (menus, menus3), draw (menus3), race-init, race-init-inputs, game-edges
 (race-init). Regenerating a set gives byte-identical files (seeded inputs, deterministic oracle).
 """
@@ -18,7 +18,8 @@ sys.path[:0] = [str(HERE), str(HERE.parent)]  # the set modules import `oracle` 
 SETS = {"prove": "prove", "car": "car", "fuzz": "fuzz", "calls": "calls", "suspension": "suspension", "ai": "ai",
         "rules": "rules", "unlock": "unlock", "synth": "synth", "menus": "menus", "draw": "draw", "fill-rect-hw": "fill_rect_hw",
         "race-init": "race_init", "race-init-inputs": "race_init_inputs", "game-edges": "game_edges", "game-countdown": "game_countdown",
-        "game-end": "game_end", "garage": "garage", "upgrades": "upgrades", "turntable": "turntable", "scene": "scene", "power-on": "scene_power_on", "power-frames": "scene_frames", "save": "save"}
+        "game-end": "game_end", "garage": "garage", "upgrades": "upgrades", "turntable": "turntable", "scene": "scene", "power-on": "scene_power_on", "power-frames": "scene_frames", "save": "save",
+        "render2": "walls64"}
 
 
 def module(name: str):

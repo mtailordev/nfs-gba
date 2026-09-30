@@ -888,25 +888,23 @@ mod tests {
         eprintln!("{} written pixels match", differences(&a, &b, page).0);
     }
 
-    /// Whole frames from `tools/mgba_frame_probe.lua` (inputs at the start of `draw_visible_sectors`, the page at
-    /// its end) in `work/e5298b24/entity-draw/`: every pixel the renderer writes must equal the game's.
+    /// Whole frames (inputs at the start of `draw_visible_sectors`, the page at its end): every pixel the renderer
+    /// writes must equal the game's. `entity-draw/`: from `tools/mgba_frame_probe.lua`; `render2/`: the camera
+    /// facing 64-row walls, drawn by the game's own code (`cases.py render2`, R20).
     #[test]
     fn probe_frames_match() {
         let Some(rom) = rom() else { return };
-        let Some(dir) = fixture("entity-draw") else { return };
-        let files = std::fs::read_dir(&dir).unwrap();
-        let mut names: Vec<String> = files
-            .filter_map(|f| {
-                f.ok()?
-                    .file_name()
-                    .to_str()?
-                    .strip_suffix(".iwram.bin")
-                    .map(String::from)
-            })
-            .collect();
+        let mut names: Vec<String> = Vec::new();
+        for folder in ["entity-draw", "render2"] {
+            let Some(dir) = fixture(folder) else { return };
+            names.extend(std::fs::read_dir(&dir).unwrap().filter_map(|f| {
+                let name = f.ok()?.file_name().to_str()?.strip_suffix(".iwram.bin")?.to_string();
+                Some(format!("{folder}/{name}"))
+            }));
+        }
         names.sort();
         for name in names {
-            let dump = Dump::load(&format!("entity-draw/{name}")).unwrap();
+            let dump = Dump::load(&name).unwrap();
             let ((a, _, spans), (b, _, _)) = (draw(&rom, &dump, 0, usize::MAX), draw(&rom, &dump, 255, usize::MAX));
             let (written, differ) = differences(&a, &b, dump.page());
             // Per entity that passed the screen cull: its depth and the pixels it shows (the frame without it).

@@ -206,7 +206,8 @@ pub struct Piece {
 pub struct Runtime {
     /// World `+0x18`: moving wall pieces.
     pub pieces: Vec<Piece>,
-    /// World `+0x1C`, named by sector `+0x0A` (no Carbon sector uses one).
+    /// World `+0x1C`, named by sector `+0x0A` (no Carbon sector names one, and the material table stays zero:
+    /// `nfsgba-game` `reach::renderer_runtime_tables_never_change`).
     pub sector_offsets: Vec<SectorOffsets>,
     /// World `+0x48`, named by material `+0x00`; slots past the end read as all zero (no animation, no scroll).
     pub materials: Vec<MaterialState>,

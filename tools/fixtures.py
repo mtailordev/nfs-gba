@@ -55,6 +55,7 @@ PROVENANCE = {
     "live-race": ("tools/record.py game (recorders/game.py + game.lua)", "record.py game record <name>; record.py game pack <name>", "race starts and race.ss (docs/engine/game-loop.md, live-race)"),
     "coverage2": ("tools/oracle/cases.py rules career_payout (the game's own career_race_payout on generated profiles)", "cases.py rules career_payout --n 1500", "the career payout cases of menu/results.rs"),
     "live-race2": ("tools/record.py game (recorders/game.py + game.lua), NFSGBA_MGBA_SESSION=live-race2", "record.py game record <name>; record.py game pack <name> (drafter, overhunter, overcareer)", "wingmaninfo.ss, hunter-race.ss, career-race.ss (copies of the ai-traffic and live-race states)"),
+    "render2": ("tools/oracle/cases.py render2 (function oracle: the game's build_visible_sectors and draw_visible_sectors, mode-4 VRAM byte stores doubled)", "cases.py render2", "w64-*: mgba/race with the camera moved to face a 64-row wall (sectors 448, 528, 344), inputs before the draw and the page after it (docs/FIDELITY.md R20)"),
     "harness": ("tools/oracle/cases.py prove (function oracle)", "cases.py prove", "mgba/race dumps"),
 }
 

@@ -446,13 +446,13 @@ ROM offsets are file offsets (GBA address minus `0x08000000`). "rec" is the leve
 | `+0x0C` | u16 per sector: head of its entity list (`0xFFFF` = none) |
 | `+0x10` / `+0x14` | walls / sectors |
 | `+0x18` | moving wall pieces (in every captured race all 122 are zero offsets with flags 1, open), 0x20 bytes, by wall `+0x2A`: dx, dz, ceiling dy, floor dy, top dy, bottom dy, material offset, flags |
-| `+0x1C` | sector offsets, 0x14 bytes, by sector `+0x0A`: `+4` ceiling dy, `+6` floor dy, `+8` flags replacing sector `+0x12` (`0x40` = hidden) |
+| `+0x1C` | sector offsets, 0x14 bytes, by sector `+0x0A`: `+4` ceiling dy, `+6` floor dy, `+8` flags replacing sector `+0x12` (`0x40` = hidden); empty in Carbon (no sector names one) |
 | `+0x20` / `+0x24` | city / vehicle materials |
 | `+0x30` / `+0x34` | loaded palettes |
 | `+0x38` | route template entities |
 | `+0x3C` | entity array (0xA4 each) |
 | `+0x40` / `+0x44` | racing-line section table / racing line (0x1800) |
-| `+0x48` | per-material runtime entries (8 bytes: `+2` animation frame, `+4`/`+6` u/v scroll) |
+| `+0x48` | per-material runtime entries (8 bytes: `+2` animation frame, `+4`/`+6` u/v scroll); allocated zeroed by `race_load_level`, cleared by `race_init`/`load_menu_descriptor`, never written otherwise (the animation step `race_frame_nop_a` is empty; `reach::renderer_runtime_tables_never_change`) |
 | `+0x50` | view struct (`0x03000080`) |
 | `+0x54` | camera matrix: 12 × i32, 3×3 rotation in 2.14 fixed point then translation |
 | `+0x58…+0x5E` | screen rectangle (0, 240, 0, 159) |

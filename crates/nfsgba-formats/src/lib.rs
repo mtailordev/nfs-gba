@@ -413,7 +413,8 @@ impl Wall {
     /// following `FUN_030013ac` / `FUN_03000304`: u in texels is `u >> 7` with `u0 = +0x28 << 7`,
     /// `u1 = u0 + (+0x40 << (log2 width - 1))`; flag bit 1 runs u the other way. v is the same at both ends:
     /// rows `(+0x10 + +0x42·128) >> 7` at the top, plus `+0x18 >> 7` at the bottom (`docs/engine/renderer.md`).
-    /// NOT 1:1 (R21): the material's runtime v scroll (world `+0x48`) is not applied; its writers are not decoded.
+    /// The material's runtime v scroll (world `+0x48`) is left out: it is zero in every Carbon race
+    /// (`nfsgba-game` `reach::renderer_runtime_tables_never_change`).
     pub fn uv(&self, texture_width: usize, texture_height: usize) -> [[f32; 2]; 4] {
         let w = texture_width as f32;
         let (mut u0, mut u1) = (

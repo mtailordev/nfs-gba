@@ -289,3 +289,118 @@ fn rim_redraw_never_reads_its_atlas() {
         }
     }
 }
+
+/// Follows the register a Thumb `LDR rd, [rn, #imm]` at `site` loads through the straight-line code after it
+/// (conditional branches fall through; `B`, `BX` and `POP {pc}` end it), with the registers `ADD`/`SUB`/`MOV`
+/// derive from it. Returns the offsets where it is used as a store's base or index, stored as a value (a copy
+/// escapes) or passed in r0..r3 to a `BL`.
+fn thumb_uses(rom: &[u8], site: usize) -> Vec<usize> {
+    let mut t: u16 = 1 << (u16_at(rom, site) & 7);
+    let (mut p, mut out) = (site + 2, Vec::new());
+    let has = |t: u16, r: u16| t >> r & 1 != 0;
+    let with = |t: u16, r: u16, on: bool| if on { t | 1 << r } else { t & !(1 << r) };
+    for _ in 0..40 {
+        let h = u16_at(rom, p);
+        let (lo3, mid3, hi3) = (h & 7, h >> 3 & 7, h >> 6 & 7);
+        match h >> 11 {
+            0x1E if u16_at(rom, p + 2) >> 11 == 0x1F => {
+                if t & 0xF != 0 {
+                    out.push(p);
+                }
+                t &= !0x100F;
+                p += 2;
+            }
+            0x1C => break,                                                                         // B
+            _ if h & 0xFF00 == 0xBD00 || h & 0xFF80 == 0x4700 => break,                            // POP {.., pc}, BX
+            0x0C | 0x0E | 0x10 if has(t, mid3) || has(t, lo3) => out.push(p),                      // STR/STRB/STRH imm
+            0x0A if h >> 9 & 7 < 3 && (has(t, mid3) || has(t, hi3) || has(t, lo3)) => out.push(p), // STR/H/B reg
+            0x12 if has(t, h >> 8 & 7) => out.push(p),                                             // STR sp
+            0x16 if h & 0x0600 == 0x0400 && t & h & 0xFF != 0 => out.push(p),                      // PUSH
+            0x18 if has(t, h >> 8 & 7) || t & h & 0xFF != 0 => out.push(p),                        // STMIA
+            0x03 => t = with(t, lo3, has(t, mid3) || (h & 0x400 == 0 && has(t, hi3))),             // ADD/SUB
+            0x00..=0x02 | 0x0D | 0x0F | 0x11 => t = with(t, lo3, false), // shifts, LDR/LDRB/LDRH imm
+            0x0A => t = with(t, lo3, false),                             // loads, reg offset
+            0x04 | 0x09 | 0x13 | 0x14 | 0x15 => t = with(t, h >> 8 & 7, false), // MOV imm, LDR pc/sp, ADR
+            0x19 | 0x17 if h & 0xFE00 == 0xBC00 || h >> 11 == 0x19 => t &= !(h & 0xFF), // POP, LDMIA
+            0x08 if h & 0xFC00 == 0x4000 && !matches!(h >> 6 & 0xF, 8 | 0xA | 0xB) => t = with(t, lo3, false),
+            0x08 if h & 0xFF00 == 0x4400 || h & 0xFF00 == 0x4600 => {
+                let (d, m) = (lo3 | (h >> 4 & 8), h >> 3 & 0xF);
+                let keep = h & 0xFF00 == 0x4400 && has(t, d);
+                t = with(t, d, has(t, m) || keep);
+            }
+            _ => {}
+        }
+        if t == 0 {
+            break;
+        }
+        p += 2;
+    }
+    out
+}
+
+/// R21 (`render::Runtime`): the renderer's sector offsets (world `+0x1C`) and material animation and scroll table
+/// (world `+0x48`) never change in Carbon, so `draw_world` reading them as all zero is exact.
+///
+/// Sector offsets: `FUN_08138b20` counts the sectors whose `+0x0A` names a record (world `+0xDE`), `race_load_level`
+/// allocates that many, `FUN_08138b80` fills them from the sectors; the renderer reaches one only through a
+/// sector's `+0x0A`. No sector of any route record names one, so the table is empty.
+///
+/// Materials: `race_load_level` allocates the table zeroed (`+0xD8` × 8 bytes); `race_init` and
+/// `load_menu_descriptor` clear it again with `fill_units`, as does the uncalled `FUN_0813A020`. The engine's
+/// level-animation step, `race_frame_nop_a(world, 1)` from `FUN_08138b80` and `(world, 0)` from
+/// `race_frame_update`, is an empty `BX LR`. Every other Thumb load of a `+0x48` field whose register a store, a
+/// copy or a call follows (the ROM's whole code, decompiled or not) is listed below by its function: none holds the
+/// world. The IWRAM renderer (ARM) loads the table at the sites below and only reads it.
+#[test]
+fn renderer_runtime_tables_never_change() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let sectors = (u32_at(&rom, 0x7F_2B08 + 0x18) - ROM_BASE) as usize;
+    for index in 0..ROUTE_COUNT {
+        let counts = (u32_at(&rom, 0x7F_2798 + 0x14 * index + 0xC) - ROM_BASE) as usize;
+        for s in 0..u16_at(&rom, counts) as usize {
+            assert_eq!(
+                u16_at(&rom, sectors + 0x30 * s + 0xA),
+                0xFFFF,
+                "route record {index} sector {s}"
+            );
+        }
+    }
+    assert_eq!(u16_at(&rom, 0x13_B62C), 0x4770); // race_frame_nop_a: BX LR
+    assert_eq!(bl_calls(&rom, 0x0813_B62C), [0x138C14, 0x13A992]);
+    assert!(words(&rom, 0x0813_B62D).is_empty());
+    assert!(uncalled(&rom, 0x0813_A020));
+    let flagged: Vec<usize> = (0x12_A000..0x16_C400)
+        .step_by(2)
+        .filter(|&o| u16_at(&rom, o) & 0xFFC0 == 0x6C80 && !thumb_uses(&rom, o).is_empty()) // LDR rd, [rn, #0x48]
+        .collect();
+    assert_eq!(
+        flagged,
+        [
+            0x13964A, // race_load_level: the level descriptor's +0x48 (a model bank array) into world +0x90
+            0x139704, // race_cleanup: heap_free(table)
+            0x1398B4, // race_init: fill_units(table, 0)
+            0x139BBC, // menu_scene_free: heap_free(table)
+            0x139D4C, 0x13A022, // load_menu_descriptor, FUN_0813A020: fill_units(table, 0)
+            0x148400, 0x1488FC, 0x148E7E, // car_wheel_contact, car_tipped_dynamics, ai_wheel_contact: car state
+            0x1514EC, 0x151522, 0x152208, 0x15260C, 0x152DE6, 0x152EFE, 0x152F6E, 0x153018, 0x153454, 0x153598,
+            0x1537B8, 0x153B26, // the sound engine's own structs (snd_*)
+        ]
+    );
+    for (ldr, bl) in [(0x1398B4, 0x1398C2), (0x139D4C, 0x139D5A), (0x13A022, 0x13A030)] {
+        assert_eq!(thumb_uses(&rom, ldr), [bl]);
+        assert!(bl_calls(&rom, 0x0816_0CD0).contains(&bl));
+    }
+    // The ARM overlay (ROM 0x08165134, 0x5164 bytes, run in IWRAM): every LDR rd, [rn, #0x48].
+    let arm: Vec<usize> = (0x16_5134..0x16_A298)
+        .step_by(4)
+        .filter(|&o| u32_at(&rom, o) & 0x0FF0_0FFF == 0x0590_0048)
+        .collect();
+    // raster_wall_columns, clip_flat_outline and draw_flat_textured load a stack slot (sp + 0x48); setup_wall_spans
+    // (three), draw_sector_walls and draw_sector (two) load the table and read an entry's frame or scroll.
+    assert_eq!(
+        arm,
+        [
+            0x16542C, 0x165E7C, 0x166450, 0x16673C, 0x166744, 0x1670F4, 0x167340, 0x1673FC, 0x167DE4
+        ]
+    );
+}

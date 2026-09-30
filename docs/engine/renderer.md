@@ -254,7 +254,7 @@ Reimplemented as `render::raster_wall_columns`, with the draw loop as `render::d
   - **Height:** `h = ((bottom + 0x3FFF) >> 14) − ((top − 0x3FFF) >> 14)`.
   - **v** (wall flag `0x80` clear, which is every wall): starts at `(wall+0x10) << 8` and steps by `FUN_03004cf8(wall+0x18, h)` per row, plus `voff·256`. The texel row is `v >> 15` masked to the height. So **v is in 1/128 texel rows: 16,384 = 128 rows**, not one texture.
     - The data agrees: 64-row textures use a v span of 8,192.
-    - The pixel test covers 128-row textures only. The frame's 64-row step walls are hidden behind nearer sectors, so this part rests on the code and the data.
+    - Pixel-checked on 128-row textures (the reference frame) and 64-row ones (`render2/w64-*`: three views facing 64-row walls, drawn by the game's code in the function oracle, `cases.py render2`).
     - The end values `+0x14`/`+0x1C` are ignored unless flag `0x80` is set (perspective-correct v). No wall has it.
   - **Vertical clip:** clip rows to `E6..E8` (world `+0xE6`/`+0xE8`).
   - **Texel:** `texels + (colmap[u & (W−1)] << log2h) + row`.
@@ -404,4 +404,4 @@ A neighbour with floor 0 is replaced by its `+0x20` alias when that is set. Othe
 - The pixel check covers 17 frames from two races: 128-row wall textures, textured floors. Fill-colour flats, ceilings, deferred walls, moving pieces, animated or scrolled materials and transparent textures are reimplemented from the code but not yet exercised against a frame.
 - The focal speed effect's input `g` (`FUN_0815fc38`, `FUN_0815fadc`) is not decoded.
 - The camera offsets `0x030056B8`, `0x030053A0`, `0x030055F8`, `0x03005390` and `0x03005FA4` are not traced to their writers.
-- The runtime tables (world `+0x18`, `+0x1C`, `+0x48`) are inputs. Their writers (door/animation code) are not decoded.
+- The runtime tables (world `+0x18`, `+0x1C`, `+0x48`) are inputs. The moving pieces are written by `moving_pieces_init` and the wall breaks (`nfsgba-sim` `walls.rs`); the other two never change in Carbon: no sector names an offsets record, and the material table is only allocated zeroed and cleared (`race_init`, `load_menu_descriptor`), its level-animation step `race_frame_nop_a` (`0x0813B62C`) being empty (`reach::renderer_runtime_tables_never_change`).
