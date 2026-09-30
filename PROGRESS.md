@@ -83,8 +83,9 @@ Rules:
 - **Minimal docs.** Code comments, one `docs/FIDELITY.md` row and address/symbol rows per finding (`docs/engine/notes/*.<agent>.csv` → `tools/notes_merge.py --write`). No prose write-ups, no "Integration notes" sections, no long reports.
 - **Better code, not just more.** New code on typed state, one copy of each helper (`nfsgba-fixed`, `nfsgba-testkit`), small modules; no new RAM-image code.
 - The user looks at progress now and then; they are not part of the test loop. Ask them only when stuck on something only they can do.
+- Before any piece of work, ask "can we do this way smarter and still get the same or better result?" (the user's rule, 2026-09-30).
 - **Machine load (the user plays on this PC):** at most one cargo build or gate at a time across all worktrees (the test kit's fixture log and the `menus3` case files are shared, so parallel gates also give false failures); agents build but leave the gate to the coordinator, who runs gates one after another.
-- **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; each worktree builds into its own `target/` (never a shared `CARGO_TARGET_DIR`: cargo then reuses another worktree's build of a crate and tests the wrong code) and is removed after merging; an emulator session is stopped by its own PID.
+- **Gate before every merge** (`tools/gate.py`); rebase branches made before a history rewrite; no attribution trailers in commits; each worktree builds into its own `target/`, seeded with `cp -r` of the main checkout's `target/` (dependencies stay fresh; only crates with build scripts and ours rebuild; never a shared `CARGO_TARGET_DIR`, which makes cargo test another worktree's code; sccache gives no hits across worktree paths) and is removed after merging; the coordinator gates in the main checkout (warm: ~7 min instead of 40): rebase the branch onto `main`, `git checkout --detach` it, `tools/fixtures.py build` if fixtures changed, `tools/gate.py`, then fast-forward `main` at once (commit nothing to `main` in between); an emulator session is stopped by its own PID.
 
 ## Environment notes
 
