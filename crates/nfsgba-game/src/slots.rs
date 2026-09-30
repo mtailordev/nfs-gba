@@ -32,6 +32,9 @@ pub struct Slots<'a> {
     pub slots: Vec<M>,
     /// The effect-sprite pool (its count is the length).
     pub pool: Vec<Sprite>,
+    /// Per pool sprite, the matrix slot of the car it belongs to (`0xFF`: none). Not the game's state: the viewer
+    /// moves a car's lights and flames with the car.
+    pub pool_owner: Vec<u8>,
     /// All entities, and the physics struct of the cars, opponents and wingman among them.
     pub entities: Vec<Entity>,
     pub cars: Vec<Option<Car>>,
@@ -195,11 +198,14 @@ impl Slots<'_> {
     /// `FUN_08162048` and the fill of the object: the first free sprite of the pool (`used` marks it), kind (1
     /// one-shot, 3 …), frame, scale, size class, screen position, and the palette byte of an effect `material`.
     #[allow(clippy::too_many_arguments)]
-    fn put_sprite(&mut self, kind: u8, frame: i16, scale: i16, size: i16, x: i16, y: i16, material: usize) {
+    fn put_sprite(&mut self, owner: u8, kind: u8, frame: i16, scale: i16, size: i16, x: i16, y: i16, material: usize) {
         let palette = self.data.effects.palette[material];
-        let Some(s) = self.pool.iter_mut().find(|s| s.used == 0) else {
+        let Some(k) = self.pool.iter().position(|s| s.used == 0) else {
             return;
         };
+        self.pool_owner.resize(self.pool.len(), 0xFF);
+        self.pool_owner[k] = owner;
+        let s = &mut self.pool[k];
         *s = Sprite {
             x,
             y,
@@ -256,7 +262,7 @@ impl Slots<'_> {
         let y = ((s.wrapping_mul(out[1].wrapping_sub(radius)) as u32 >> 16) as i16)
             .wrapping_add(cy)
             .wrapping_add(half);
-        self.put_sprite(3, frame as i16, 0x168, size as i16, x, y, material);
+        self.put_sprite(slot as u8, 3, frame as i16, 0x168, size as i16, x, y, material);
     }
 
     /// `spawn_effect_sprite` (`0x0814e7b0`): a one-shot sprite scaled with its depth.
@@ -285,7 +291,7 @@ impl Slots<'_> {
         let y = ((s.wrapping_mul(out[1].wrapping_sub(radius)) as u32 >> 16) as i16)
             .wrapping_add(cy)
             .wrapping_add(half);
-        self.put_sprite(1, frame as i16, scale, size as i16, x, y, material);
+        self.put_sprite(slot as u8, 1, frame as i16, scale, size as i16, x, y, material);
     }
 
     /// `FUN_0814eca4`: a billboard sprite at the slot's origin, centred on (0x70, 0x50).
@@ -306,7 +312,7 @@ impl Slots<'_> {
         let y = ((s.wrapping_mul(out[1].wrapping_sub(radius)) as u32 >> 16) as i16)
             .wrapping_add(0x50)
             .wrapping_add(half);
-        self.put_sprite(3, frame, scale, size, x, y, BILLBOARD);
+        self.put_sprite(0xFF, 3, frame, scale, size, x, y, BILLBOARD);
     }
 
     /// `opponent_effects` (`0x0814e628`) for entity `i`: seen from behind (angle between `heading` and `view` over

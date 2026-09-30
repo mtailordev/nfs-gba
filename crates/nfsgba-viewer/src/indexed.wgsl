@@ -19,6 +19,9 @@
 // is continuous: a surface behind a portal ends where the portal's continuous end lies, up to a pixel past the
 // rounded `right`, so the span keeps that pixel (clipping any tighter opens a hairline where the backdrop shows).
 //
+// Car models: index 0 shows the backdrop (OPAQUE), as the game's span drawer writes every texel and palette entry 0 is
+// the backdrop; the cars are clipped to the rectangle of the portal entry they were drawn through.
+//
 // SCREEN surfaces read `indices` as the 240×160 GBA screen at the pixel's screen position (the sky layer).
 
 #import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::view}
@@ -83,6 +86,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0
 #ifdef VERTEX_UVS_B
     if !listed(i32(round(in.uv_b.x)), i32(round(in.uv_b.y)) - 1, gba) {
         discard;
+    }
+#else
+    // A car (R29): only inside the clip rectangle of the portal entry the game drew it through (`mode.yz`, biased by
+    // 1024: left | right << 16, top | bottom << 16; right and bottom exclusive).
+    if mode.w != 0u {
+        let x = vec2<i32>(i32(mode.y & 0xFFFFu), i32(mode.y >> 16u)) - 1024;
+        let y = vec2<i32>(i32(mode.z & 0xFFFFu), i32(mode.z >> 16u)) - 1024;
+        if gba.x < x.x || gba.x >= x.y || gba.y < y.x || gba.y >= y.y {
+            discard;
+        }
     }
 #endif
     var index = texel(in.uv);

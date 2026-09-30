@@ -569,13 +569,11 @@ fn screen_of(cam: &Transform, p: Vec3) -> Option<Vec2> {
     (d > 1.0).then(|| Vec2::new(120.0 + 150.0 * v.x / (d + 1.0), 79.0 - 150.0 * v.y / (d + 1.0)))
 }
 
-/// The effect sprites (lights, sparks, flames: the game's sprite pool) sit on screen positions the game worked out
-/// for its own frame's cars. While the display shows the cars between two game frames, each pool sprite that lies
-/// within `NEAR` pixels of a car's projected origin moves with that car: by how far the car's screen position
-/// changed from the game frame to the blended view.
-/// NOT 1:1 (R30): the sprites are matched to cars by screen distance, not by the effect's owner.
+/// The effect sprites (lights and flames: the game's sprite pool) sit on screen positions the game worked out for
+/// its own frame's cars. While the display shows the cars between two game frames, each pool sprite that belongs to a
+/// car (`World::pool_owner`: the matrix slot the game placed it through) moves by how far that car's screen position
+/// changed from the game frame to the blended view. Sprites without a car (sparks, billboards) stay put.
 fn lock_effects(oam: &mut [u8], play: &Play, race: &Race, smooth: &crate::Smooth) {
-    const NEAR: f32 = 30.0;
     let (Some(fc), Some((fb, _))) = (&smooth.curr.frame, &race.frame) else {
         return;
     };
@@ -584,20 +582,18 @@ fn lock_effects(oam: &mut [u8], play: &Play, race: &Race, smooth: &crate::Smooth
         crate::game::frame_transform(fb, crate::world),
     );
     let alpha = play.alpha();
-    let anchors: Vec<(Vec2, Vec2)> = smooth
-        .prev
-        .ents
-        .iter()
-        .zip(&smooth.curr.ents)
-        .filter_map(|(a, b)| {
-            let (a, b) = (a.as_ref()?, b.as_ref()?);
-            let n = screen_of(&cam_n, b.translation)?;
-            let shown = screen_of(&cam_b, crate::blend(a, b, alpha).translation)?;
-            Some((n, shown - n))
-        })
-        .collect();
-    let first = play.game.world.pool_first as i32;
-    for k in 0..play.game.world.pool.len() as i32 {
+    // Per entity: where the game frame put its origin on screen, and how far the blended view moves it.
+    let delta_of = |entity: usize| -> Option<Vec2> {
+        let (a, b) = (
+            smooth.prev.ents.get(entity)?.as_ref()?,
+            smooth.curr.ents.get(entity)?.as_ref()?,
+        );
+        let n = screen_of(&cam_n, b.translation)?;
+        Some(screen_of(&cam_b, crate::blend(a, b, alpha).translation)? - n)
+    };
+    let world = &play.game.world;
+    let first = world.pool_first as i32;
+    for k in 0..world.pool.len() as i32 {
         let i = first - k;
         if !(0..128).contains(&i) {
             continue;
@@ -608,7 +604,6 @@ fn lock_effects(oam: &mut [u8], play: &Play, race: &Race, smooth: &crate::Smooth
         if a0 & 0xFF == 0xA0 || (a0 >> 8) & 3 == 2 || a0 >> 14 == 3 {
             continue;
         }
-        let (w, ht) = SIZES[(a0 >> 14) as usize][(a1 >> 14) as usize];
         let (mut x, mut y) = ((a1 & 0x1FF) as i32, (a0 & 0xFF) as i32);
         if x >= 256 {
             x -= 512;
@@ -616,11 +611,11 @@ fn lock_effects(oam: &mut [u8], play: &Play, race: &Race, smooth: &crate::Smooth
         if y >= 160 {
             y -= 256;
         }
-        let centre = Vec2::new((x + w / 2) as f32, (y + ht / 2) as f32);
-        let Some((_, delta)) = anchors
-            .iter()
-            .filter(|(p, _)| p.distance(centre) < NEAR)
-            .min_by(|a, b| a.0.distance(centre).total_cmp(&b.0.distance(centre)))
+        let owner = world.pool_owner.0.get(k as usize).copied().unwrap_or(0xFF);
+        let Some(delta) = (owner != 0xFF)
+            .then(|| world.slots.iter().position(|s| s.e.slot == owner))
+            .flatten()
+            .and_then(delta_of)
         else {
             continue;
         };

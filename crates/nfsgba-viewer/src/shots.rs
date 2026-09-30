@@ -106,6 +106,20 @@ impl Rig {
         if built { cache.pipelines().count() } else { 0 }
     }
 
+    /// How many car materials are clipped to a portal entry (R29) and how many of those show index 0 as the
+    /// backdrop (R14) in the state shown.
+    pub fn clipped_cars(&self) -> (usize, usize) {
+        let modes: Vec<UVec4> = self
+            .app
+            .world()
+            .resource::<Assets<crate::Indexed>>()
+            .iter()
+            .map(|(_, m)| m.mode)
+            .filter(|m| m.w != 0)
+            .collect();
+        (modes.len(), modes.iter().filter(|m| m.x & crate::OPAQUE != 0).count())
+    }
+
     /// The GPU view of `play` (paused: shown at the game's own frame), 240×160 RGBA8, once it has stopped changing
     /// (the first frames render while pipelines are still compiling).
     pub fn show(&mut self, mut play: play::Play) -> Vec<u8> {
@@ -382,7 +396,7 @@ const PER_TRACE: usize = 10;
 fn gpu_view_matches_the_exact_frame() {
     let Some(rom) = nfsgba_testkit::rom() else { return };
     let only = std::env::var("SHOTS_TRACE").ok();
-    let (mut states, mut exact, mut near) = (0, 0.0, 0.0);
+    let (mut states, mut exact, mut near, mut clipped_states) = (0, 0.0, 0.0, 0);
     let (mut worst_car, mut worst_traffic, mut worst_wall) = (1.0f32, 1.0f32, 1.0f32);
     let (mut worst_holes, mut worst_seams, mut objects) = (0.0f32, 0, 0);
     for (session, name) in TRACES {
@@ -401,6 +415,12 @@ fn gpu_view_matches_the_exact_frame() {
         let mut rig = Rig::new(state(0));
         for k in (0..PER_TRACE).map(|i| i * (frames - 1) / (PER_TRACE - 1)) {
             let gpu = rig.show(state(k));
+            let (clipped, opaque) = rig.clipped_cars();
+            assert_eq!(
+                clipped, opaque,
+                "a clipped car material shows index 0 as the backdrop (R14)"
+            );
+            clipped_states += (clipped > 0) as usize;
             let r = compare(&rig, &rom, &gpu);
             if r.covered == 0 {
                 // The race start's first frame: the world is not drawn yet.
@@ -460,6 +480,11 @@ fn gpu_view_matches_the_exact_frame() {
         return;
     }
     assert!(states >= 60, "{states} states");
+    // The cars are clipped to their portal entry (R29) in most states.
+    assert!(
+        clipped_states * 2 > states,
+        "cars clipped in {clipped_states} of {states} states"
+    );
     // Non-regression floors for the agreement (by design about half the pixels differ: R27).
     assert!(exact > 0.48 && near > 0.79, "exact {exact}, near {near}");
     // Every object the exact frame draws is in the GPU view.

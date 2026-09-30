@@ -85,6 +85,10 @@ pub struct Scene<'a> {
     pub handler: Box<dyn FnMut(&mut Entity) + 'a>,
     /// Spans left to draw: the rasteriser stops after this many (to match a RAM dump taken mid-frame).
     pub spans: usize,
+    /// Per entity, the clip rectangle `[left, top, right, bottom]` its model was drawn in (right and bottom
+    /// exclusive: the portal entry's span, or the whole view for flag bit 0), `None` if not drawn. An entity is
+    /// sorted once per frame, so it is drawn through one entry only. Not the game's state; the viewer reads it.
+    pub clip: Vec<Option<[i32; 4]>>,
     /// `0x03006920`: entities already sorted this frame (one bit each, cleared by `begin_frame`).
     visited: [u8; 32],
 }
@@ -92,6 +96,7 @@ pub struct Scene<'a> {
 impl<'a> Scene<'a> {
     pub fn new(entities: Vec<Entity>, heads: Vec<u16>, matrices: Vec<[i32; 12]>, ram: &'a [u8]) -> Scene<'a> {
         Scene {
+            clip: vec![None; entities.len()],
             entities,
             heads,
             matrices,
@@ -262,6 +267,9 @@ fn draw_sorted(
             let sy = view.cy as i32 + (r.wrapping_mul(y) >> 16);
             let margin = r << 9 >> 16;
             if e6 - margin < sy && sy < e8 + margin {
+                if let Some(c) = scene.clip.get_mut(i) {
+                    *c = Some(rect);
+                }
                 draw_entity(rom, frame, scene, i, &mut d, rect, materials, texels, screen);
             }
         }

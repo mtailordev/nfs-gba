@@ -47,6 +47,7 @@ fn the_full_game_reaches_the_race_and_the_results() {
         frame: None,
         visible: None,
         drawn: vec![],
+        clip: vec![],
         setup: view::RaceView::read(&play.game.world),
         portals: Handle::default(),
     };
@@ -88,4 +89,30 @@ fn the_full_game_reaches_the_race_and_the_results() {
     let screen = play.full.as_ref().unwrap().session.st.g.screen;
     assert!(matches!(screen, 0xB | 0xC), "the results screens, not {screen:#x}");
     assert!(sav.exists(), "the profile was saved on the way");
+}
+
+/// R30: the lights and flames the game places through a car's matrix slot carry that slot (the sprites are drawn and
+/// freed inside the frame, so the owners are read after it; `pool_owner` keeps the last owner of each pool object).
+#[test]
+fn effect_sprites_know_their_car() {
+    let (Some(rom), Some(dir)) = (nfsgba_testkit::rom(), nfsgba_testkit::fixture("live-race")) else {
+        return;
+    };
+    let trace = nfsgba_game::trace::Trace::load(&dir, "live").unwrap();
+    let mut game = crate::shots::game_at(&rom, &trace, 0);
+    let (mut owned, mut named) = (0, 0);
+    for timing in &trace.timing {
+        game.world.pool_owner.0.clear();
+        game.frame(0, timing).unwrap();
+        let w = &game.world;
+        // An owner set this frame is a matrix slot some entity holds this frame.
+        for &o in w.pool_owner.0.iter().filter(|&&o| o != 0xFF) {
+            assert!(o < 64, "not a matrix slot: {o}");
+            owned += 1;
+            named += w.slots.iter().any(|s| s.e.slot == o) as u32;
+        }
+    }
+    assert!(owned > 0, "no effect sprite had an owner");
+    // (Cleared before each frame, so every owner was set by this frame.)
+    assert_eq!(named, owned, "owners that name no entity");
 }

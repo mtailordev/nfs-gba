@@ -165,6 +165,18 @@ const CULL: u32 = 4;
 /// Transparent wall texture: a pixel pair of the GBA's 240 columns is drawn only if both texels are non-zero.
 const PAIRS: u32 = 8;
 
+/// A car's clip rectangle `[left, top, right, bottom]` (right and bottom exclusive) in `mode` `y` (left, right) and `z`
+/// (top, bottom), each biased by 1024 so it fits an unsigned half; `w` = 1 turns the clip on (the shader). Returns
+/// whether the material changed.
+fn set_clip(mode: &mut UVec4, clip: Option<[i32; 4]>) -> bool {
+    let pack = |a: i32, b: i32| (a + 1024).clamp(0, 0xFFFF) as u32 | ((b + 1024).clamp(0, 0xFFFF) as u32) << 16;
+    let new = match clip {
+        Some([l, t, r, b]) => UVec4::new(mode.x, pack(l, r), pack(t, b), 1),
+        None => UVec4::new(mode.x, 0, 0, 0),
+    };
+    std::mem::replace(mode, new) != new
+}
+
 /// GBA-style indexed colour (`indexed.wgsl`): a texture of 8-bit palette indices drawn through a 256-colour
 /// palette texture, texel by texel with wrapped integer coordinates; index 0 per `mode`.
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
@@ -706,6 +718,7 @@ fn setup(
         frame: None,
         visible: None,
         drawn: Vec::new(),
+        clip: Vec::new(),
         setup,
         portals: portals.clone(),
     });
@@ -817,6 +830,8 @@ struct Race {
     visible: Option<render::Visibility>,
     /// Per entity slot: the game's draw reaches it this frame (`game_camera`); empty without the game camera.
     drawn: Vec<bool>,
+    /// Per entity slot: the clip rectangle its models are drawn in (R29; `Scene::clip`).
+    clip: Vec<Option<[i32; 4]>>,
     /// The game's racers, cars and route (`play::play` reads them back every frame).
     setup: view::RaceView,
     /// The portal texture every city material reads.
@@ -874,7 +889,7 @@ fn spawn_race_cars(
         } else {
             vehicle_textures[atlas::look(data, setup.cars, slot, false, false).material as usize].clone()
         };
-        let material = new_material(images.add(index_image(&atlas)), palette, 0);
+        let material = new_material(images.add(index_image(&atlas)), palette, OPAQUE);
         let mut parts = vec![racer.model as usize - 1, racer.model as usize];
         if racer.extra != 0 {
             parts.push(racer.extra.unsigned_abs() as usize);
@@ -1122,6 +1137,7 @@ fn game_camera(
     if !race.game_camera {
         (race.frame, race.visible) = (None, None);
         race.drawn.clear();
+        race.clip.clear();
         return;
     }
     let root = view::root(&play.game.world);
@@ -1155,6 +1171,7 @@ fn game_camera(
         &mut scratch,
     );
     race.drawn = scene.entities.iter().map(|e| e.flags & 4 != 0).collect();
+    race.clip = scene.clip.clone();
     (race.frame, race.visible) = (Some((frame, root)), Some(visible));
 }
 
@@ -1164,7 +1181,6 @@ fn game_camera(
 /// depth (`Racer::models_at`). The racers stand as the game's vehicle matrix slots put them (pitch and roll
 /// included), seen from the game's camera whichever camera is shown.
 /// NOT 1:1 (R10): hidden surfaces come from the depth buffer; the game overdraws in list order (painter's).
-/// NOT 1:1 (R29): the cars are not clipped to their portal's span and the screen-row cull is not applied.
 #[allow(clippy::too_many_arguments)]
 fn visibility(
     race: Res<Race>,
@@ -1173,8 +1189,9 @@ fn visibility(
     smooth: Res<Smooth>,
     mut logged: Local<Vec<(render::Portal, u128)>>,
     mut images: ResMut<Assets<Image>>,
+    mut indexed: ResMut<Assets<Indexed>>,
     mut city: Query<&mut Visibility, (With<CityMesh>, Without<RaceCar>)>,
-    mut cars: Query<(&RaceCar, &mut Transform, &mut Visibility), Without<CityMesh>>,
+    mut cars: Query<(&RaceCar, &MeshMaterial3d<Indexed>, &mut Transform, &mut Visibility), Without<CityMesh>>,
 ) {
     let drawn: Option<Vec<(render::Portal, u128)>> =
         race.frame.as_ref().zip(race.visible.as_ref()).map(|((f, _), v)| {
@@ -1210,9 +1227,10 @@ fn visibility(
     let mem = &play.game.world;
     let game_frame = view::frame(mem);
     let alpha = if race.original { 1.0 } else { play.alpha() };
-    for (car, mut t, mut v) in &mut cars {
+    for (car, look, mut t, mut v) in &mut cars {
         let r = &race.setup.racers[car.slot];
         let ent = (play.game.world.g.player as usize + car.slot) % 4;
+        clip_material(&mut indexed, look, race.clip.get(ent).copied().flatten());
         if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(ent), smooth.curr.ents.get(ent)) {
             t.set_if_neq(blend(a, b, alpha));
         }
@@ -1245,6 +1263,17 @@ fn banner(play: Res<play::Play>, mut text: Single<(&mut Text, &mut Visibility), 
     });
 }
 
+/// Sets the material's clip rectangle (R29) if it changed (a changed asset is uploaded again).
+fn clip_material(indexed: &mut Assets<Indexed>, look: &MeshMaterial3d<Indexed>, clip: Option<[i32; 4]>) {
+    if let Some(m) = indexed.get(&look.0)
+        && let mut mode = m.mode
+        && set_clip(&mut mode, clip)
+        && let Some(mut m) = indexed.get_mut(&look.0)
+    {
+        m.mode = mode;
+    }
+}
+
 /// A traffic car part: entity `ent`'s model `model` in vehicle material `material`.
 #[derive(Component)]
 struct TrafficCar {
@@ -1256,8 +1285,8 @@ struct TrafficCar {
 /// The game's traffic cars (`Slot::block`; the racers and the effect entities are other slots), drawn like the
 /// racers: the models `draw_sector_entities` picks at the car's depth, on the pose of its vehicle matrix slot,
 /// blended between game frames. Parts are made the first time an entity shows them.
-/// NOT 1:1 (R29): as for the racers, no portal-span clip; a traffic atlas kept in RAM (flag bit 3) is not drawn.
-#[allow(clippy::too_many_arguments)]
+/// NOT 1:1 (R29): a traffic atlas kept in RAM (flag bit 3) is not drawn.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn traffic(
     mut commands: Commands,
     race: Res<Race>,
@@ -1270,8 +1299,17 @@ fn traffic(
     mut indexed: ResMut<Assets<Indexed>>,
     mut bank: Local<Option<(Vec<rom::Model>, Vec<rom::Texture>)>>,
     mut made: Local<BTreeMap<(usize, usize), Handle<Mesh>>>,
-    mut looks: Local<BTreeMap<usize, Handle<Indexed>>>,
-    mut parts: Query<(Entity, &TrafficCar, &mut Transform, &mut Visibility), Without<RaceCar>>,
+    mut looks: Local<BTreeMap<(usize, usize), Handle<Indexed>>>,
+    mut parts: Query<
+        (
+            Entity,
+            &TrafficCar,
+            &MeshMaterial3d<Indexed>,
+            &mut Transform,
+            &mut Visibility,
+        ),
+        Without<RaceCar>,
+    >,
 ) {
     let mem = &play.game.world;
     let (models, textures) = bank.get_or_insert_with(|| (rom::models(&tint.rom), rom::vehicle_textures(&tint.rom)));
@@ -1301,7 +1339,8 @@ fn traffic(
         }
     }
     let mut have = Vec::new();
-    for (entity, part, mut t, mut v) in &mut parts {
+    for (entity, part, look, mut t, mut v) in &mut parts {
+        clip_material(&mut indexed, look, race.clip.get(part.ent).copied().flatten());
         let show = wanted.contains(&(part.ent, part.model, part.material));
         if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(part.ent), smooth.curr.ents.get(part.ent)) {
             t.set_if_neq(blend(a, b, alpha));
@@ -1323,13 +1362,13 @@ fn traffic(
             .or_insert_with(|| meshes.add(model_tris(&models[model], Some(atlas), Color::WHITE).mesh()))
             .clone();
         let look = looks
-            .entry(material)
+            .entry((ent, material))
             .or_insert_with(|| {
                 indexed.add(Indexed {
                     indices: images.add(index_image(atlas)),
                     palette: tint.palette.clone(),
                     backdrop: skies.backdrop.clone(),
-                    mode: UVec4::ZERO,
+                    mode: UVec4::new(OPAQUE, 0, 0, 0),
                     portals: race.portals.clone(),
                 })
             })

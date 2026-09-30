@@ -68,6 +68,22 @@ pub struct Hud {
     pub tile_base: u16,
 }
 
+/// Data beside the game's state that a comparison with the game's RAM ignores: equal to any other value, printed as `_`.
+#[derive(Clone, Default)]
+pub struct Aside<T>(pub T);
+
+impl<T> PartialEq for Aside<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> std::fmt::Debug for Aside<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("_")
+    }
+}
+
 /// The race's state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct World {
@@ -109,6 +125,8 @@ pub struct World {
     /// The 64 matrix slots, the effect sprites and the first OAM entry they use.
     pub matrices: Vec<M>,
     pub pool: Vec<Sprite>,
+    /// Per pool sprite, the matrix slot of the car it belongs to (`0xFF`: none); see `Slots::pool_owner`.
+    pub pool_owner: Aside<Vec<u8>>,
     pub pool_first: i16,
     /// The slots handed out this frame; the effect lights are on.
     pub slot_counter: u32,
@@ -272,6 +290,7 @@ impl World {
             sky: hdr.sky,
             matrices: Ptr::<M>::new(hdr.matrix_slots).read_n(m, 64),
             pool: pool.objects.read_n(m, pool.count.max(0) as u32),
+            pool_owner: Aside::default(),
             pool_first: pool.first,
             slot_counter: sg.slot_counter,
             lights: sg.lights,
@@ -446,6 +465,7 @@ impl World {
             view: self.view.clone(),
             slots: take(&mut self.matrices),
             pool: take(&mut self.pool),
+            pool_owner: take(&mut self.pool_owner.0),
             entities: self.slots.iter().map(|s| s.e.clone()).collect(),
             cars: self.slots.iter().map(|s| s.has_car.then(|| s.c.clone())).collect(),
             heads: take(&mut self.heads),
@@ -462,6 +482,7 @@ impl World {
         self.camera = s.camera;
         self.matrices = s.slots;
         self.pool = s.pool;
+        self.pool_owner.0 = s.pool_owner;
         self.heads = s.heads;
         (self.query.pos, self.query.sector) = s.query;
         for (k, (e, c)) in s.entities.into_iter().zip(s.cars).enumerate() {

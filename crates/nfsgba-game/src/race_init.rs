@@ -231,6 +231,7 @@ pub fn race_start(rom: &[u8], data: &GameData, s: &Setup, seed_vblanks: u32, d: 
         sky: s.sky,
         matrices,
         pool: Vec::new(),
+        pool_owner: Default::default(),
         pool_first: 0,
         slot_counter: s.slot_counter,
         lights: 1,
