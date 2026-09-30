@@ -79,7 +79,8 @@ pub struct Full {
     lent: bool,
     /// The samples of the last step.
     sound: Vec<u8>,
-    /// The save file, and its bytes as last written.
+    /// The save file, and its bytes as last written (web: the page keeps the save, `crate::web`).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     sav: Option<PathBuf>,
     saved: Vec<u8>,
 }
@@ -87,10 +88,11 @@ pub struct Full {
 impl Full {
     /// The game at power-on with the save at `sav` (created on the first save).
     pub fn new(rom_bytes: Vec<u8>, sav: Option<PathBuf>) -> Full {
-        let saved = sav
-            .as_ref()
-            .and_then(|p| std::fs::read(p).ok())
-            .unwrap_or_else(|| vec![0xFF; 512]);
+        #[cfg(not(target_arch = "wasm32"))]
+        let saved = sav.as_ref().and_then(|p| std::fs::read(p).ok());
+        #[cfg(target_arch = "wasm32")]
+        let saved = crate::web::save();
+        let saved = saved.unwrap_or_else(|| vec![0xFF; 512]);
         // ponytail: the ROM is leaked (8 MB, once per process) because the session borrows it for its lifetime.
         let rom: &'static [u8] = Box::leak(rom_bytes.into_boxed_slice());
         Full {
@@ -184,6 +186,17 @@ impl Play {
         }
     }
 
+    /// The full game's spare race (`with_full`): a Quick Play start on `route` in environment `env` from the menus'
+    /// setup (`Setup::menus`), so it needs no capture. It is never shown: the menus cover it until the first race.
+    pub fn spare(rom_bytes: Vec<u8>, env: u32, route: u32, hud: Handle<Image>) -> Result<Play, String> {
+        let engine = nfsgba_audio::Engine::new(nfsgba_audio::Rom(&rom_bytes), 16, 16);
+        let mut setup = race_setup::Setup::menus(&rom_bytes, engine, 0, 0, &[[0; 17]; 15], None);
+        setup.choose(env, route, 0, PLAYER_CAR);
+        let display = race_setup::Display::from_screen(&Default::default());
+        let game = race_init::start(rom_bytes, &setup, display, SEED_VBLANKS).map_err(|e| e.to_string())?;
+        Ok(Play::new(game, hud, true, None))
+    }
+
     pub fn new(game: Game, hud: Handle<Image>, paused: bool, grid: Option<(u32, u32)>) -> Play {
         let script = std::env::var("NFSGBA_PLAY_KEYS").ok().map(|s| {
             s.split(',')
@@ -254,6 +267,12 @@ impl Play {
             std::mem::swap(&mut self.game, full.session.race.as_mut().expect("a race"));
         }
         let eeprom = &full.session.host.eeprom;
+        #[cfg(target_arch = "wasm32")]
+        if *eeprom != full.saved {
+            crate::web::saved(eeprom);
+            full.saved.clone_from(eeprom);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if let (Some(path), true) = (&full.sav, *eeprom != full.saved) {
             match std::fs::write(path, eeprom) {
                 Ok(()) => full.saved.clone_from(eeprom),
@@ -302,6 +321,38 @@ pub fn hud_image(format: TextureFormat) -> Image {
     image
 }
 
+/// The GBA keys held on the keyboard and any gamepad (South = A, East = B, the shoulders and triggers = L and R, the
+/// D-pad or left stick = the D-pad).
+fn keys_held(k: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> u16 {
+    use GamepadButton as B;
+    let buttons = [
+        (B::South, 0),
+        (B::East, 1),
+        (B::Select, 2),
+        (B::Start, 3),
+        (B::DPadRight, 4),
+        (B::DPadLeft, 5),
+        (B::DPadUp, 6),
+        (B::DPadDown, 7),
+        (B::RightTrigger, 8),
+        (B::RightTrigger2, 8),
+        (B::LeftTrigger, 9),
+        (B::LeftTrigger2, 9),
+    ];
+    gamepads.iter().fold(keyboard(k), |mut m, pad| {
+        for (b, bit) in buttons {
+            if pad.pressed(b) {
+                m |= 1 << bit;
+            }
+        }
+        let s = pad.left_stick();
+        for (on, bit) in [(s.x > 0.5, 4), (s.x < -0.5, 5), (s.y > 0.5, 6), (s.y < -0.5, 7)] {
+            m |= u16::from(on) << bit;
+        }
+        m
+    })
+}
+
 fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
     let map = [
         (KeyCode::KeyX, 0),
@@ -324,6 +375,7 @@ fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
 pub fn play(
     time: Res<Time>,
     input: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
     mut play: ResMut<Play>,
     mut race: ResMut<Race>,
     mut stats: Local<(f32, u32, u32, f32, f32)>,
@@ -349,9 +401,9 @@ pub fn play(
         play.clock -= play.step_secs();
         let keys = match &play.script {
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
-            None => keyboard(&input),
+            None => keys_held(&input, &gamepads),
         };
-        let began = std::time::Instant::now();
+        let began = bevy::platform::time::Instant::now();
         let result = play.step(keys);
         let ms = began.elapsed().as_secs_f32() * 1000.0;
         (stats.2, stats.3, stats.4) = (stats.2 + 1, stats.3 + ms, stats.4.max(ms));

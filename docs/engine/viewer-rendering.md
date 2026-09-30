@@ -343,8 +343,20 @@ Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160
 `cargo run --release -p nfsgba-viewer` runs `nfsgba_game::session::Session` from power-on (`NFSGBA_GAME=1` forces it; `NFSGBA_CITY=1`, `NFSGBA_ROUTE`, `NFSGBA_DUMP` or `NFSGBA_PLAY` pick the older modes). The save is `data/work/e5298b24/viewer.sav` (the game's EEPROM image, written whenever the game changes it). Keys as in play mode (arrows, X = A, Z = B, A = L, S = R, Enter = START, Backspace = SELECT). One step is a video frame in the menus and a game frame (four video frames) in a race; the game's samples go to the audio stream after every step.
 
 - **Menus** (`play::menu_layer`): `Session::view()` (mode-4 page, palettes, OAM, OBJ tiles) composed with the same `compose` the HUD layer uses in the exact frame, drawn nearest-neighbour at the largest whole scale that fits the window, centred on black. Semi-transparent sprites blend with the menus' `BLDALPHA`.
-- **Races**: the session's `Game` is lent to `Play::game` while it runs (`Play::step` swaps it with a spare, and back before the next session frame), so every race system reads it unchanged; a new race gets a new `Play::id` and `remake_cars` builds its cars (also for R/K). Results, pause and the next race are the session's; the pause menu is the exact 240×160 frame. `Race::active` is true only in a race.
+- **Races**: the session's `Game` is lent to `Play::game` while it runs (`Play::step` swaps it with a spare, `Play::spare`: a race start from the menus' setup, so the full game needs no capture; and back before the next session frame), so every race system reads it unchanged; a new race gets a new `Play::id` and `remake_cars` builds its cars (also for R/K). Results, pause and the next race are the session's; the pause menu is the exact 240×160 frame. `Race::active` is true only in a race.
 - Test: `play_test.rs` runs the `session_matches_the_game` key plan through `play::play` (no window) and asserts the race, the results screen and the save.
+
+## Web build
+
+`tools/web_build.py` builds the viewer for `wasm32-unknown-unknown` (`cargo build --profile web`: size-optimised, LTO), runs `wasm-bindgen --target web` and `wasm-opt -Oz` (when on PATH) and copies `web/` next to the output in `target/site/`; test with `.venv/Scripts/python.exe -m http.server 8090 -d target/site`. `.github/workflows/pages.yml` runs the same script on every push to `main` and deploys `target/site/` to GitHub Pages. The page ships only the engine.
+
+What differs on the web (all behind `cfg(target_arch = "wasm32")`, `main.rs` `web`):
+- **ROM:** the player picks a `.gba` or `.zip` (unzipped with `DecompressionStream`); the page checks its SHA-1 against `e5298b24…` and hands the bytes to the engine as `window.nfsgba.rom` before starting it. Nothing is uploaded.
+- **Save:** the page passes the stored EEPROM image as `window.nfsgba.save`; every save the game writes goes to `window.nfsgba.saved(bytes)`, kept in `localStorage` under the ROM's SHA-1, with download and load buttons (the file is the game's EEPROM image, as `viewer.sav`).
+- **Modes:** there are no `NFSGBA_*` variables, so it is always the full game from power-on.
+- **Rendering:** WebGL2 (Bevy's default `webgl2` feature): the integer textures and `textureLoad` of `indexed.wgsl` and the composite pass work there, and it reaches every browser; Bevy logs the features it drops (SSAO, OIT, GPU clustering), none of which the viewer uses. The canvas fills the page's largest 3:2 box; the menus keep their whole-number scale inside it.
+- **Audio:** the same `GbaSound` stream through Bevy audio (Web Audio); the context starts after the ROM pick, and the page resumes it on a key or click if the browser held it back.
+- **Input:** the keyboard as on the desktop; any gamepad (both platforms): South = A, East = B, shoulders and triggers = L/R, D-pad or left stick.
 
 ## Final pass and list order (G2, R10, R29)
 

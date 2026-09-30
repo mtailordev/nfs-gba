@@ -2,6 +2,14 @@
 
 Newest first. Each entry: what, why, alternatives.
 
+## 2026-09-30 (web build)
+
+- **The viewer itself builds for the web** (no separate crate): a `cfg(target_arch = "wasm32")` layer in `nfsgba-viewer` takes the ROM and save from the page and hands saves back; the page (`web/index.html`, no framework) does the file pick, the SHA-1 check and browser storage. GitHub Pages deploys it (`.github/workflows/pages.yml` runs `tools/web_build.py`).
+- **WebGL2, not WebGPU:** our shaders work there unchanged and it runs in every current browser; WebGPU would add nothing the viewer uses.
+- **A `web` cargo profile** (`opt-level = "s"`, LTO, one codegen unit) for the web build only: the module after `wasm-opt -Oz` is 27.8 MB (9.0 MB gzipped) instead of 44.3 MB with the release profile; the game still runs at the display rate. The desktop release profile is unchanged.
+- **New dependencies (wasm32 only):** `js-sys` (read `window.nfsgba`, call the save callback), `wasm-bindgen` (its `JsValue`; the CLI version must match the lock file), and Bevy's `web` feature. `nfsgba-audio` is now a direct dependency of the viewer (the spare race's sound engine). Time uses `bevy::platform::time::Instant` (works on the web), so no `web-time`.
+- **The full game's spare race comes from `Setup::menus`**, not the `race-init/circuit_pre` capture, so the full game needs no data folder on any platform.
+
 ## 2026-09-29 (the contract, simplified; the user's decision)
 
 - **Exact:** the mechanics, physics, rules, AI, audio and every calculation (the game's integer maths, function for function, checked against the original in the oracle); the assets decoded and used as the game uses them, so the look is the same (the 240×160 reference frame); save data in the game's format. In the user's words: exact same mechanics, physics and calculations, the assets used the same way for the same look, but "we don't need an absolutely perfect bit-exact replication".

@@ -35,6 +35,35 @@ mod play;
 #[cfg(test)]
 mod shots;
 
+/// The web build's side of the page (`web/index.html`): the player's ROM and save come from `window.nfsgba`
+/// (`rom`, `save`: byte arrays), and every save the game writes goes back through `window.nfsgba.saved(bytes)`,
+/// which keeps it in browser storage. The `NFSGBA_*` variables don't exist there, so the full game is the default.
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use js_sys::{Function, Reflect, Uint8Array, global};
+
+    fn page(key: &str) -> Option<wasm_bindgen::JsValue> {
+        let page = Reflect::get(&global(), &"nfsgba".into()).ok()?;
+        Reflect::get(&page, &key.into())
+            .ok()
+            .filter(|v| !v.is_undefined() && !v.is_null())
+    }
+
+    pub fn rom() -> Vec<u8> {
+        Uint8Array::new(&page("rom").expect("the page passes the ROM in window.nfsgba.rom")).to_vec()
+    }
+
+    pub fn save() -> Option<Vec<u8>> {
+        page("save").map(|v| Uint8Array::new(&v).to_vec())
+    }
+
+    pub fn saved(eeprom: &[u8]) {
+        if let Some(f) = page("saved") {
+            let _ = Function::from(f).call1(&global(), &Uint8Array::from(eeprom));
+        }
+    }
+}
+
 use std::{collections::BTreeMap, f64::consts::TAU};
 
 use bevy::{
@@ -330,6 +359,9 @@ fn main() {
             title: "NFS Carbon GBA viewer (unofficial) - play: NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>".into(),
             // Four times the GBA screen: every GBA pixel is 4×4 window pixels.
             resolution: WindowResolution::new(960, 640),
+            // Web: the page's canvas, sized by the page.
+            canvas: Some("#game".into()),
+            fit_canvas_to_parent: true,
             ..default()
         }),
         ..default()
@@ -401,7 +433,10 @@ fn setup(
     #[cfg(test)] start: Option<ResMut<Start>>,
     #[cfg(test)] offscreen: Option<Res<Offscreen>>,
 ) {
+    #[cfg(not(target_arch = "wasm32"))]
     let data = rom::canonical_rom().expect("no ROM vault found: run `python tools/vault.py` first (see README)");
+    #[cfg(target_arch = "wasm32")]
+    let data = web::rom();
     let textures = rom::city_textures(&data);
     let sectors = rom::city(&data);
     let envs = rom::environments(&data);
@@ -651,6 +686,8 @@ fn setup(
         }
         (None, Some(prefix)) => play::Play::load(data.clone(), prefix, hud.clone(), running)
             .unwrap_or_else(|e| panic!("NFSGBA_DUMP={prefix}: {e} (needs the dump's palette, vram and oam too)")),
+        (None, None) if full => play::Play::spare(data.clone(), env as u32, start_route.unwrap_or(23), hud.clone())
+            .unwrap_or_else(|e| panic!("the full game's spare race start: {e}")),
         (None, None) => play::Play::grid(
             data.clone(),
             env as u32,

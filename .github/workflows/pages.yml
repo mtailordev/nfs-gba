@@ -1,0 +1,49 @@
+# The web build on GitHub Pages: the engine only; the player picks their own ROM in the page (web/index.html).
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: wasm-bindgen and wasm-opt
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
+          mkdir -p "$HOME/bin"
+          curl -sSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/wasm-bindgen-$v-x86_64-unknown-linux-musl.tar.gz" \
+            | tar xz -C "$HOME/bin" --strip-components=1 "wasm-bindgen-$v-x86_64-unknown-linux-musl/wasm-bindgen"
+          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz \
+            | tar xz -C "$HOME"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          echo "$HOME/binaryen-version_133/bin" >> "$GITHUB_PATH"
+      - run: python3 tools/web_build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

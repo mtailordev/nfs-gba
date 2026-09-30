@@ -30,6 +30,8 @@ Installed 2026-09-29. `~` = `%UserProfile%`. Everything under `ext\` is gitignor
 | notes merge | — | `tools/notes_merge.py` | ours | `tools/test_notes_merge.py` | Merges agents' `docs/engine/notes/symbols.<agent>.csv` / `addresses.<agent>.csv`; dry run unless `--write` |
 | Python venv | CPython 3.14.7; capstone 5.0.9, unicorn 2.1.4, numpy 2.5.3, pillow 12.3.0 | `uv venv .venv` in repo (gitignored); pins in `tools\requirements.txt` | BSD-3 / GPL-2.0 (unicorn) / BSD-3 / MIT-CMU | script: capstone Thumb `0x4770` -> `bx lr`; unicorn ARM `mov r0,#1` -> r0 == 1 | `capstone.__version__` reports 5.0.7 (upstream string lag); the wheel is 5.0.9 |
 | poppler | 26.09.0 (2026-09-30) | scoop `poppler`: `pdftoppm`, `pdftotext`, `pdfimages`, `pdfinfo` | GPL-2.0 | `pdfinfo data/reference/guidebook.pdf` | Renders PDF pages for the Read tool (the game's booklet: scanned images, no text layer) |
+| wasm-bindgen CLI | 0.2.129 (must match Cargo.lock) | release binary unpacked to `~\.local\web-tools\wasm-bindgen.exe` (put on PATH for `tools/web_build.py`) | MIT OR Apache-2.0 | `wasm-bindgen --version`; the web build ran | The web build (`tools/web_build.py`); CI downloads the Linux release of the lock file's version |
+| binaryen (wasm-opt) | version_133 | release unpacked to `~\.local\web-tools\binaryen-version_133\bin` | Apache-2.0 | `wasm-opt --version` | Shrinks the web module (`-Oz`); optional |
 | ImHex | 1.38.1 | scoop `imhex` (extras): `~\scoop\apps\imhex\current\imhex.exe` | GPL-2.0 | `imhex --version` | Hex editor with pattern language, for format RE |
 
 ## How to launch

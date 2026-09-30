@@ -3580,10 +3580,13 @@ name = "nfsgba-viewer"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "js-sys",
+ "nfsgba-audio",
  "nfsgba-formats",
  "nfsgba-game",
  "nfsgba-testkit",
  "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

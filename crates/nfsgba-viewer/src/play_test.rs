@@ -9,14 +9,13 @@ use super::*;
 
 /// The full game inside the viewer's `play` system (no window, no GPU): the key plan of
 /// `session_matches_the_game` (`tests/session.rs`, `session/quickplay.json`) from power-on, the race lent to
-/// `Play::game` while it runs, the player marked finished after 150 game frames as there. Asserts a race started
+/// `Play::game` (through the spare, `Play::spare`) while it runs, the player marked finished after 150 game frames as there. Asserts a race started
 /// (a new identity), the menus took the game back with the results, and the save was written.
 #[test]
 fn the_full_game_reaches_the_race_and_the_results() {
-    let (Some(rom), Some(text), Some(_)) = (
+    let (Some(rom), Some(text)) = (
         nfsgba_testkit::rom(),
         nfsgba_testkit::read_to_string("session/quickplay.json"),
-        nfsgba_testkit::fixture("race-init/circuit_pre.wram.bin"),
     ) else {
         return;
     };
@@ -31,7 +30,8 @@ fn the_full_game_reaches_the_race_and_the_results() {
     }
     let sav = std::env::temp_dir().join("nfsgba-viewer-test.sav");
     let _ = std::fs::remove_file(&sav);
-    let mut play = Play::grid(rom.clone(), 11, 23, Handle::default(), false)
+    // The spare as `main` makes it (no capture: the web build has none).
+    let mut play = Play::spare(rom.clone(), 11, 23, Handle::default())
         .unwrap()
         .with_full(Full::new(rom.clone(), Some(sav.clone())));
     play.script = Some(held);

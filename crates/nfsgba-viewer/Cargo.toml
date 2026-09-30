@@ -8,8 +8,15 @@ publish = false
 
 [dependencies]
 bevy = { version = "=0.19.1", features = ["free_camera"] }
+nfsgba-audio = { path = "../nfsgba-audio" }
 nfsgba-formats = { path = "../nfsgba-formats" }
 nfsgba-game = { path = "../nfsgba-game" }
+
+# The web build (`tools/web_build.py`): the page hands over the ROM and keeps the save (`main.rs` `web`).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "=0.19.1", features = ["free_camera", "web"] }
+js-sys = "0.3.106"
+wasm-bindgen = "0.2.129"
 
 [dev-dependencies]
 nfsgba-testkit = { path = "../nfsgba-testkit" }
