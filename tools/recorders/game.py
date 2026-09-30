@@ -79,6 +79,15 @@ SCENARIOS = {
                                                   "luax AUTOPILOT.extra=0", "wait 1200"],
                  [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
     "career": ("career-race", "racing", 600, ["wait 1400"], [*AUTOPILOT, 'luax AUTOPILOT.mode="race"']),
+    # Round two. A circuit with the DRAFTER wingman (profile +0x200 = 2 poked on the race-info screen wingmaninfo.ss,
+    # copied from ai-traffic; the poke is a state, never the ROM), the command (R+L) given after 400 frames.
+    "drafter": ("wingmaninfo", "racing", 700, ["hold A 10", "wait 500", "luax AUTOPILOT.extra=0x300", "wait 12",
+                                               "luax AUTOPILOT.extra=0", "wait 1200"],
+                [*AUTOPILOT, 'luax AUTOPILOT.mode="race"', "luax emu:write32(emu:read32(0x030056EC)+0x200,2)"]),
+    # A hunter race and a career event to their finish: the player's entity marked finished (finish.lua, as `over`
+    # does), then the race end, the state-5 exit and the hand-over to the results screen.
+    "overhunter": ("hunter-race", "", 16, ["wait 2", "hold A 400"], [f"lua {Path(__file__).with_name('finish.lua')}"]),
+    "overcareer": ("career-race", "", 16, ["wait 2", "hold A 400"], [f"lua {Path(__file__).with_name('finish.lua')}"]),
     "fadein": ("race", "", 14,["hold A 400"], [f"lua {Path(__file__).with_name('fadein.lua')}"]),
 }
 

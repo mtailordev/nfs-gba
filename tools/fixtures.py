@@ -48,6 +48,7 @@ PROVENANCE = {
     "race-init": ("tools/record.py race-init (recorders/race_init.py + race_init.lua), tools/oracle/cases.py race-init", "record.py race-init <name>; cases.py race-init <name>", "menu states before each race start (docs/engine/race-init.md)"),
     "game-loop": ("tools/record.py game (recorders/game.py + game.lua), tools/oracle/cases.py game-edges / game-countdown / game-end", "record.py game record <name>; record.py game pack <name>; cases.py game-edges; cases.py game-countdown; cases.py game-end", "race.ss (docs/engine/game-loop.md)"),
     "live-race": ("tools/record.py game (recorders/game.py + game.lua)", "record.py game record <name>; record.py game pack <name>", "race starts and race.ss (docs/engine/game-loop.md, live-race)"),
+    "live-race2": ("tools/record.py game (recorders/game.py + game.lua), NFSGBA_MGBA_SESSION=live-race2", "record.py game record <name>; record.py game pack <name> (drafter, overhunter, overcareer)", "wingmaninfo.ss, hunter-race.ss, career-race.ss (copies of the ai-traffic and live-race states)"),
     "harness": ("tools/oracle/cases.py prove (function oracle)", "cases.py prove", "mgba/race dumps"),
 }
 

@@ -24,7 +24,8 @@ use nfsgba_sim::layout::Field;
 /// effect and the nitro flames), `fadeout` and `fadein` (20 and 14 frames from the reference race with `main_frame`'s
 /// palette fade counter poked: the palettes and the sky gradient fade to black, and in from black).
 /// (session, trace, game frames): every frame of every trace must replay.
-const TRACES: [(&str, &str, usize); 13] = [
+const TRACES: [(&str, &str, usize); 14] = [
+    ("live-race2", "drafter", 699),
     ("live-race", "elimlap", 1744),
     ("live-race", "elimination", 899),
     ("live-race", "attacker", 699),
@@ -45,8 +46,12 @@ const TRACES: [(&str, &str, usize); 13] = [
 /// timing the recorder marked.
 fn game_at(rom: &[u8], trace: &Trace, k: usize) -> Game {
     let m = trace.machine(rom, k);
+    // The menus' ranked block (`0x03005730`) that the state-5 exit's tie-break changes: whatever the last race left.
+    let ranked = nfsgba_sim::state::RaceResults::load(&m.mem, 0x0300_5730);
     if m.mem.iwram[0x5808..0x580C] != 4u32.to_le_bytes() {
-        return Game::new(m);
+        let mut g = Game::new(m);
+        g.ranked = ranked;
+        return g;
     }
     let display = Display {
         palette: m.palette.clone(),
@@ -54,7 +59,9 @@ fn game_at(rom: &[u8], trace: &Trace, k: usize) -> Game {
         oam: m.oam.clone(),
         io: [0; 0x400],
     };
-    race_init::start(rom.to_vec(), &Setup::load(&m), display, trace.timing[k].seed.unwrap()).unwrap()
+    let mut g = race_init::start(rom.to_vec(), &Setup::load(&m), display, trace.timing[k].seed.unwrap()).unwrap();
+    g.ranked = ranked;
+    g
 }
 
 fn traces() -> Vec<(&'static str, usize, Trace)> {
@@ -197,7 +204,12 @@ fn one_frame() {
 /// frames before it replay like the others, and at the hand-over frame the game must stop where the game called
 /// `goto_screen` (`NAME.handover.bin`, recorded there): the same globals, sound engine, shadow OAM, palette and
 /// pages, with the hand-over the menus need. (session, trace, recorded frames, the hand-over frame.)
-const HANDOVERS: [(&str, &str, usize, usize); 2] = [("game-loop", "over", 15, 5), ("game-loop", "pause", 13, 11)];
+const HANDOVERS: [(&str, &str, usize, usize); 4] = [
+    ("game-loop", "over", 15, 5),
+    ("game-loop", "pause", 13, 11),
+    ("live-race2", "overhunter", 15, 7),
+    ("live-race2", "overcareer", 15, 6),
+];
 
 /// The state the game leaves at the hand-over: what the race frees (the exit) is not loadable, so the parts a
 /// race-end or a pause changes are compared one by one.
@@ -262,7 +274,7 @@ fn handovers_match_the_game() {
                 panic!("{name} frame {j}: the game does not hand over")
             };
             let exit = matches!(h, Handover::Results(_));
-            assert_eq!(exit, name == "over", "{name}: which hand-over");
+            assert_eq!(exit, name.starts_with("over"), "{name}: which hand-over");
             let diffs = handover_differences(&g, &want, exit);
             assert!(diffs.is_empty(), "{name} hand-over: {diffs:#?}");
             if let Handover::Results(r) = &h {
