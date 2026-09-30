@@ -312,6 +312,8 @@ layout! {
         0x0300_618C u_618c: u32,
         0x0300_6190 u_6190: i32,
         0x0300_6194 u_6194: i32,
+        /// Hunter races: how long a chase target is kept (`hunter_tuning_init`: 400).
+        0x0300_6198 u_6198: i32,
         0x0300_619C wingman_car: EntityRef,
         /// Someone finished.
         0x0300_61A4 finished: i32,

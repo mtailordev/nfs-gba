@@ -303,6 +303,52 @@ fn gap_to(w: &CarWorld, i: usize, target: usize) -> i32 {
     d
 }
 
+/// Hunter races, in `FUN_0813c5a8` before the catch-up: with no chase target, every 0x28 steps and on a roll
+/// under `*0x03006190` pick one (`FUN_0813fdb0`); with one, count it down and drop it once it is out of reach.
+fn hunter_chase(w: &mut CarWorld, i: usize) {
+    if car!(w, i).u_4f0 == 0 {
+        let c = &mut car!(w, i);
+        c.hunter_countdown = c.hunter_countdown.wrapping_sub(1);
+        if (c.hunter_countdown as i16) < 0 {
+            c.hunter_countdown = 0x28;
+            if ((w.rand() & 0xFF) as i32) < w.g.u_6190 {
+                hunt_target(w, i);
+            }
+        }
+    } else {
+        car!(w, i).u_4f0 -= 1;
+        let t = w.entity_of(car!(w, i).follow);
+        if (gap_to(w, i, t).wrapping_add(0x580) as u32) > 0xD80 {
+            car!(w, i).u_4f0 = 0;
+        }
+    }
+}
+
+/// `FUN_0813fdb0`: the racer on the same segment ahead of (or beside, in another lane) car `i` and nearest to it.
+fn hunt_target(w: &mut CarWorld, i: usize) {
+    if is_non_racer(w, i) || w.g.racers == u32::MAX {
+        return;
+    }
+    let mut best = i32::MAX;
+    for k in 0..=w.g.racers as usize {
+        if k == i || ent!(w, i).segment != ent!(w, k).segment {
+            continue;
+        }
+        let (a, b) = (&car!(w, i).body.pos, &car!(w, k).body.pos);
+        let (dx, dz) = (a[0].wrapping_sub(b[0]) >> 12, a[2].wrapping_sub(b[2]) >> 12);
+        let d2 = dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz));
+        if d2 < best && d2 <= 0x4FFF {
+            let g = gap_to(w, i, k);
+            if g > 0 || (g > -0x500 && car!(w, i).lane != car!(w, k).lane) {
+                let c = &mut car!(w, i);
+                c.follow = crate::state::EntityRef::to(k);
+                c.u_4f0 = w.g.u_6198 as u16;
+                best = d2;
+            }
+        }
+    }
+}
+
 /// `FUN_081400ec`: race progress over all laps.
 fn race_progress(w: &CarWorld, i: usize) -> i32 {
     let c = &car!(w, i);
@@ -751,7 +797,7 @@ fn drive(w: &mut CarWorld, i: usize, frame_time: i32) -> Result<()> {
         c.throttle = 0;
     }
     if w.g.mode == 2 {
-        return Err(Unported("hunter races: FUN_0813fdb0, hunter_life_tick"));
+        hunter_chase(w, i);
     }
     let lead = race_progress(w, w.g.player as usize).wrapping_sub(race_progress(w, i));
     let c = &car!(w, i);
@@ -875,6 +921,12 @@ fn drive(w: &mut CarWorld, i: usize, frame_time: i32) -> Result<()> {
     } else {
         let v = route::progress(w, i);
         car!(w, i).progress = v;
+    }
+    if w.g.mode == 2 {
+        // `FUN_08140f78` (`hunter_life_tick`).
+        let mut r = w.slots[i].racer();
+        nfsgba_formats::career::hunter_life_tick(&w.race(), &mut r);
+        w.slots[i].set_racer(&r);
     }
     Ok(())
 }

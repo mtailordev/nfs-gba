@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 
 /// (scenario, opponent and traffic calls, car states compared in the replay, lane timers the replay takes from
 /// the trace, D17): exact counts, so a stop or a shortened trace fails.
-const SCENARIOS: [(&str, usize, usize, usize); 12] = [
+const SCENARIOS: [(&str, usize, usize, usize); 15] = [
+    ("hunter", 2794, 2794, 3),
+    ("tipped", 2663, 2661, 2),
+    ("stuck", 2666, 2664, 2),
     ("start", 640, 640, 3),
     ("accel", 180, 180, 1),
     ("brake", 252, 252, 1),
