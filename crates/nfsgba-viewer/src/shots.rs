@@ -39,6 +39,9 @@ pub struct Rig {
     /// A real frame has been seen (before that, a frame with few colours is the pipelines still compiling).
     warm: bool,
     target: Handle<Image>,
+    /// The pipeline count at the last frame and for how many frames in a row it has not changed.
+    pipelines_seen: usize,
+    stable_pipelines: usize,
 }
 
 impl Rig {
@@ -83,19 +86,24 @@ impl Rig {
             shots: Arc::default(),
             warm: false,
             target,
+            pipelines_seen: 0,
+            stable_pipelines: 0,
         }
     }
 
     /// Every render pipeline requested so far is built (they compile in the background).
-    fn pipelines_built(&self) -> bool {
+    /// Their number when they are (0: some are still compiling, or none was requested yet).
+    fn pipelines_built(&self) -> usize {
         let cache = self
             .app
             .get_sub_app(RenderApp)
             .unwrap()
             .world()
             .resource::<PipelineCache>();
-        let mut all = cache.pipelines().peekable();
-        all.peek().is_some() && all.all(|p| matches!(p.state, CachedPipelineState::Ok(_) | CachedPipelineState::Err(_)))
+        let built = cache
+            .pipelines()
+            .all(|p| matches!(p.state, CachedPipelineState::Ok(_) | CachedPipelineState::Err(_)));
+        if built { cache.pipelines().count() } else { 0 }
     }
 
     /// The GPU view of `play` (paused: shown at the game's own frame), 240×160 RGBA8, once it has stopped changing
@@ -107,7 +115,11 @@ impl Rig {
             self.app.update();
         }
         self.shots.lock().unwrap().clear();
-        for _ in 0..600 {
+        // Ready = `STABLE` identical frames in a row, all pipelines compiled and their number unchanged over those
+        // frames (a pipeline requested late means a mesh or material still missing), and, for the first
+        // state, a real picture (not the few colours of a frame drawn before the assets reached the GPU).
+        const STABLE: usize = 6;
+        for _ in 0..1500 {
             let shots = self.shots.clone();
             self.app
                 .world_mut()
@@ -120,12 +132,20 @@ impl Rig {
                 });
             self.app.update();
             std::thread::sleep(std::time::Duration::from_millis(3));
+            let pipelines = self.pipelines_built();
             let s = self.shots.lock().unwrap();
-            if let [.., a, b, c] = &s[..] {
-                let colours = a.chunks(4).collect::<std::collections::HashSet<_>>().len();
-                if a == b && b == c && self.pipelines_built() && (self.warm || colours > 40) {
+            if pipelines != 0 && pipelines == self.pipelines_seen {
+                self.stable_pipelines += 1;
+            } else {
+                self.stable_pipelines = 0;
+            }
+            self.pipelines_seen = pipelines;
+            if s.len() >= STABLE && self.stable_pipelines >= STABLE {
+                let last = &s[s.len() - STABLE..];
+                let colours = last[0].chunks(4).collect::<std::collections::HashSet<_>>().len();
+                if last.iter().all(|f| f == &last[0]) && (self.warm || colours > 40) {
                     self.warm = true;
-                    return a.clone();
+                    return last[0].clone();
                 }
             }
         }
