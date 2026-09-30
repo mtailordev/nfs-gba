@@ -207,11 +207,13 @@ fn one_frame() {
 /// frames before it replay like the others, and at the hand-over frame the game must stop where the game called
 /// `goto_screen` (`NAME.handover.bin`, recorded there): the same globals, sound engine, shadow OAM, palette and
 /// pages, with the hand-over the menus need. (session, trace, recorded frames, the hand-over frame.)
-const HANDOVERS: [(&str, &str, usize, usize); 4] = [
+const HANDOVERS: [(&str, &str, usize, usize); 5] = [
     ("game-loop", "over", 15, 5),
     ("game-loop", "pause", 13, 11),
     ("live-race2", "overhunter", 15, 7),
     ("live-race2", "overcareer", 15, 6),
+    // The race-time limit: phase 8 (`hud_timer` past 59:59.98, the race time poked near it), the fade and the exit.
+    ("traces3", "overtime", 39, 10),
 ];
 
 /// The state the game leaves at the hand-over: what the race frees (the exit) is not loadable, so the parts a
@@ -284,6 +286,12 @@ fn handovers_match_the_game() {
                 let ranked = nfsgba_sim::state::RaceResults::load(&want.mem, 0x0300_5730);
                 assert_eq!((r.ranked.clone(), r.last_player), (ranked, 0), "{name}: ranked results");
                 assert_eq!(r.next, Next::Goto(0xB), "{name}: the screen after the race");
+                if name == "overtime" {
+                    assert_eq!(
+                        r.results.finish[0], 0x34BE7,
+                        "{name}: phase 8 gives the player the limit"
+                    );
+                }
                 assert!(
                     r.results.finish[0] > 0 && r.results.best_lap[0] > 0,
                     "{name}: the finish time was estimated"
@@ -291,4 +299,22 @@ fn handovers_match_the_game() {
             }
         }
     }
+}
+
+/// G1, race-end phase 8: in `traces3/overtime` the race phase (`0x03000048`) goes 2 -> 8 by itself (`hud_timer`, the race
+/// time poked to 59:59.9 before the first race frame) and never takes 6 or 7; the frames of it replay in
+/// `handovers_match_the_game`.
+#[test]
+fn the_time_limit_ends_the_race_in_phase_8() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let Some(dir) = nfsgba_testkit::fixture("traces3") else {
+        return;
+    };
+    let trace = Trace::load(&dir, "overtime").unwrap();
+    let phases: Vec<u32> = (0..=10)
+        .map(|k| u32::from_le_bytes(trace.machine(&rom, k).mem.iwram[0x48..0x4C].try_into().unwrap()))
+        .collect();
+    assert_eq!(phases[0], 2, "the race was running");
+    assert!(phases.contains(&8), "phase 8 is reached: {phases:?}");
+    assert!(phases.iter().all(|p| matches!(p, 2 | 8)), "no other phase: {phases:?}");
 }

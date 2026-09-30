@@ -94,6 +94,10 @@ SCENARIOS = {
     # (traces2.lua, written to NAME.log in the session folder).
     "start-circuit": ("circuitinfo", "start", 90, ["hold A 10", "wait 500"], TRACES2 + ['luax TR2NAME="start-circuit"']),
     "start-wingman": ("wingmaninfo", "start", 90, ["hold A 10", "wait 500"], TRACES2 + ['luax TR2NAME="start-wingman"']),
+    # The race-time limit (traces3): from a circuit's setup screen (tools/traces2.py states: circuitinfo.ss in the session
+    # folder), the race time poked to 59:59.9 at the first whole race frame (traces3.lua, loaded after game.lua: mGBA runs the
+    # breakpoints of one address last-registered first, so the poke is in the state game.lua records): `hud_timer` sets phase 8, the race-over fade, the state-5 exit and the hand-over to the results.
+    "overtime": ("circuitinfo", "racing", 40, ["hold A 10", "wait 900"], [f"lua {Path(__file__).with_name('traces3.lua').as_posix()}", "luax TR3TIME=215990"]),
     "fadein": ("race", "", 14,["hold A 400"], [f"lua {Path(__file__).with_name('fadein.lua')}"]),
 }
 

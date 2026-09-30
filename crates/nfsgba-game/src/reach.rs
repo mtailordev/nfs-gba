@@ -434,3 +434,87 @@ fn entity_records() {
     }
     assert_eq!(words(&rom, 0x087F_0636), [0x12BF44, 0x13BB18, 0x13BD4C]);
 }
+
+/// G1, race-end phases 6 to 8 (`Game::race_end_phases`). Every store to the race phase (`0x03000048`) is a constant
+/// (decompile): `list_update` 5, `camera_init` 1, `race_init` 0 and 9, `ai_speed_curve` 1 and 9, `race_start_from_table_b`
+/// 2 (through a pointer), `car_handler` 3, and the three that end a race: `hud_timer` 8 (race time past 59:59.98:
+/// reachable, recorded in `traces3/overtime`), `hud_countdown_timer` 7 (a countdown nothing starts: no caller) and
+/// `traffic_contact` 7 when the traffic type the player hit has `ends_race` set. Nothing stores 6: phase 6 never
+/// happens. Traffic types come from `race_frames % 7` (`FUN_08144d94` stores 7 in `0x0300625C`, `traffic_spawn` reads
+/// it), and `ends_race` (`0x7F5924`) is non-zero for types 18, 20 and 21 only: so the phase-7 hit never happens either.
+#[test]
+fn race_end_phases_6_and_7_are_unreachable() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let sites = [
+        0x12ACB8, 0x12AE38, 0x12EB58, 0x12F1FC, 0x12F328, 0x130C64, 0x137374, 0x137934, 0x137D2C, 0x1382A4, 0x139900,
+        0x139ABC, 0x13AAEC, 0x13ABB4, 0x13ABF4, 0x13B008, 0x13C0C8, 0x13C230, 0x13C4D8, 0x13D510, 0x13D614, 0x13E2AC,
+        0x13E320, 0x13EA5C, 0x14058C, 0x1427F0, 0x142988, 0x146588, 0x14A2F0, 0x14B20C, 0x14BDE4, 0x14C478, 0x14C504,
+        0x14C594, 0x14EA38, 0x14EB98, 0x14EF28, 0x14FBC8,
+    ];
+    assert_eq!(words(&rom, 0x0300_0048), sites);
+    // The functions holding the stores (their words above): list_update, camera_init, race_init, race_start_from_table_b,
+    // ai_speed_curve, hud_countdown_timer, hud_timer, traffic_contact, car_handler. No function sets a variable phase.
+    // hud_countdown_timer: no BL and no pointer to it.
+    assert!(uncalled(&rom, 0x0814_279C));
+    // hud_timer is called by the HUD's modes.
+    assert_eq!(bl_calls(&rom, 0x0814_28C0).len(), 4);
+    // The traffic models: stored once (7) and read once.
+    assert_eq!(words(&rom, 0x0300_625C), [0x1443B0, 0x144DE0]);
+    let ends_race: Vec<i16> = (0..32).map(|k| u16_at(&rom, 0x7F_5924 + 2 * k) as i16).collect();
+    assert!(ends_race[..7].iter().all(|&v| v == 0), "{ends_race:?}");
+    assert_eq!(
+        ends_race
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| **v != 0)
+            .map(|(k, _)| k)
+            .collect::<Vec<_>>(),
+        [18, 20, 21]
+    );
+}
+
+/// D4, cops: Carbon's GBA game has no police or pursuit entity type. The entity handlers any route's templates carry
+/// are the car (0..3), the wingman marker (0xF), the opponent (0x29), sparks (0x34) and traffic (0x36), by the handler
+/// table's pointers; nothing else is placed by the routes or spawned (`entity_handlers_are_ported`: the other
+/// handlers are reached only down dead chains) and traffic has 7 civilian models with no race-ending or pursuing
+/// type (`race_end_phases_6_and_7_are_unreachable`). "Cops" occur only in the dialogue texts (the story's lines about
+/// patrols: ASCII and translated strings inside the text tables, `0x79xxxx..0x7Bxxxx`), never in code or data tables.
+#[test]
+fn no_police_entity_type_exists() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let table = |id: usize| u32_at(&rom, 0x7F_38B8 + 4 * id);
+    let live = [
+        (0, 0x0814_BD4D),
+        (1, 0x0814_BD4D),
+        (2, 0x0814_BD4D),
+        (3, 0x0814_BD4D),
+        (0xF, 0x0814_BF99),
+        (0x29, 0x0814_A2A1),
+        (0x34, 0x0814_C49D),
+        (0x36, 0x0814_43FD),
+    ];
+    for (id, f) in live {
+        assert_eq!(table(id), f, "handler {id:#x}");
+    }
+    for index in 0..ROUTE_COUNT {
+        let (templates, n) = route_templates(&rom, index);
+        for k in 0..n {
+            let e = templates + 0xA4 * k;
+            let handler = u16_at(&rom, e + 0x4E) as usize;
+            assert!(k < 4 || u16_at(&rom, e + 8) & 3 != 3 || live.iter().any(|l| l.0 == handler));
+        }
+    }
+    let lower: Vec<u8> = rom.iter().map(u8::to_ascii_lowercase).collect();
+    for word in [&b"polic"[..], b"cops", b"pursu", b"busted", b"arrest"] {
+        let mut at = 0;
+        while let Some(p) = lower[at..].windows(word.len()).position(|w| w == word) {
+            let o = at + p;
+            assert!(
+                (0x79_0000..0x7C_0000).contains(&o),
+                "{:?} at {o:#x} outside the text tables",
+                std::str::from_utf8(word)
+            );
+            at = o + 1;
+        }
+    }
+}
