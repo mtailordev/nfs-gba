@@ -32,10 +32,16 @@ use crate::{Offscreen, Race, Skies, Start, Tint, add_viewer, play};
 const W: usize = 240;
 const H: usize = 160;
 
+type Shot = (usize, Vec<u8>);
+
 /// A headless viewer: the viewer's systems, the camera rendering into a 240×160 image, no window.
 pub struct Rig {
     app: App,
-    shots: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Screenshots that arrived: (the number of the frame that asked for it, RGBA8).
+    shots: Arc<Mutex<Vec<Shot>>>,
+    /// Per frame asked for so far: it was rendered with every pipeline compiled.
+    asked: Vec<bool>,
+    held: Vec<Shot>,
     /// A real frame has been seen (before that, a frame with few colours is the pipelines still compiling).
     warm: bool,
     target: Handle<Image>,
@@ -77,6 +83,8 @@ impl Rig {
         Rig {
             app,
             shots: Arc::default(),
+            asked: Vec::new(),
+            held: Vec::new(),
             warm: false,
             target,
             pipelines_seen: 0,
@@ -126,21 +134,25 @@ impl Rig {
         (modes.len(), modes.iter().filter(|m| m.x & crate::OPAQUE != 0).count())
     }
 
-    /// The GPU view of `play` (paused: shown at the game's own frame), 240×160 RGBA8, once it has stopped changing
-    /// (the first frames render while pipelines are still compiling).
+    /// The GPU view of `play` (paused: shown at the game's own frame), 240×160 RGBA8, once it has stopped changing.
+    ///
+    /// A screenshot reaches the main world several frames after the frame it captures, and how many depends on the
+    /// machine's load (the GPU can run well behind the CPU). So every screenshot is tagged with the frame that asked
+    /// for it, and only frames asked for after the state has had time to settle count. Ready = `STABLE` consecutive
+    /// such frames, identical, each rendered with every pipeline compiled and their number unchanged (a pipeline
+    /// requested late means a mesh or material still missing), and, for the first state, a real picture (not the few
+    /// colours of a frame drawn before the assets reached the GPU).
     pub fn show(&mut self, mut play: play::Play) -> Vec<u8> {
         play.hud = self.app.world().resource::<Race>().hud.clone();
         self.app.world_mut().insert_resource(play);
         for _ in 0..8 {
             self.app.update();
         }
-        self.shots.lock().unwrap().clear();
-        // Ready = `STABLE` identical frames in a row, all pipelines compiled and their number unchanged over those
-        // frames (a pipeline requested late means a mesh or material still missing), and, for the first
-        // state, a real picture (not the few colours of a frame drawn before the assets reached the GPU).
         const STABLE: usize = 6;
+        let first = self.asked.len();
+        let mut arrived: std::collections::BTreeMap<usize, Vec<u8>> = Default::default();
         for _ in 0..1500 {
-            let shots = self.shots.clone();
+            let (shots, tag) = (self.shots.clone(), self.asked.len());
             self.app
                 .world_mut()
                 .spawn(Screenshot::image(self.target.clone()))
@@ -148,25 +160,44 @@ impl Rig {
                     shots
                         .lock()
                         .unwrap()
-                        .push(c.image.data.clone().expect("screenshot data"));
+                        .push((tag, c.image.data.clone().expect("screenshot data")));
                 });
             self.app.update();
             std::thread::sleep(std::time::Duration::from_millis(3));
             let pipelines = self.pipelines_built();
-            let s = self.shots.lock().unwrap();
             if pipelines != 0 && pipelines == self.pipelines_seen {
                 self.stable_pipelines += 1;
             } else {
                 self.stable_pipelines = 0;
             }
             self.pipelines_seen = pipelines;
-            if s.len() >= STABLE && self.stable_pipelines >= STABLE {
-                let last = &s[s.len() - STABLE..];
-                let colours = last[0].chunks(4).collect::<std::collections::HashSet<_>>().len();
-                if last.iter().all(|f| f == &last[0]) && (self.warm || colours > 40) {
-                    self.warm = true;
-                    return last[0].clone();
+            // This frame and the one before it had every pipeline, and the same number of them.
+            self.asked.push(self.stable_pipelines >= 2);
+            // `SHOTS_LAG=n` holds every screenshot back n frames, as a busy GPU does (the test of this function).
+            let delay: usize = std::env::var("SHOTS_LAG")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            self.held.extend(self.shots.lock().unwrap().drain(..));
+            let now = self.asked.len();
+            let (due, held): (Vec<_>, Vec<_>) = self.held.drain(..).partition(|(tag, _)| tag + delay <= now);
+            self.held = held;
+            arrived.extend(due.into_iter().filter(|(tag, _)| *tag >= first));
+            if now - first < STABLE {
+                continue;
+            }
+            // The newest run of `STABLE` consecutive asked frames that have all arrived.
+            for end in (first + STABLE..=now).rev() {
+                let run: Vec<&Vec<u8>> = (end - STABLE..end).filter_map(|t| arrived.get(&t)).collect();
+                if run.len() < STABLE || !(end - STABLE..end).all(|t| self.asked[t]) {
+                    continue;
                 }
+                let colours = run[0].chunks(4).collect::<std::collections::HashSet<_>>().len();
+                if run.iter().all(|f| f == &run[0]) && (self.warm || colours > 40) {
+                    self.warm = true;
+                    return run[0].clone();
+                }
+                break;
             }
         }
         panic!("the GPU view never settled");
