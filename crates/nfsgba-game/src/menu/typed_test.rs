@@ -48,12 +48,20 @@ fn power_on_screens_match_the_game() {
 #[test]
 fn garage_screens_match_the_capture() {
     let Some(rom) = rom() else { return };
-    let Some(index) = read_to_string("menus3/gar-index.json") else {
-        return;
-    };
-    let snaps: Vec<(u32, u32)> = serde_json::from_str(&index).unwrap();
-    for (n, (frame, screen)) in snaps.iter().enumerate() {
-        let mut g = Gba::from_dump(rom.clone(), &dump(&format!("menus3/gar-{screen}-{n}")).unwrap()).unwrap();
+    // The career run (menus3/gar-*), and the profile screen on 30 consecutive frames (garage2/tt-*, garage_turntable.py).
+    let mut all = Vec::new();
+    for (index, prefix) in [
+        ("menus3/gar-index.json", "menus3/gar"),
+        ("garage2/tt-index.json", "garage2/tt"),
+    ] {
+        let Some(index) = read_to_string(index) else {
+            return;
+        };
+        let snaps: Vec<(u32, u32)> = serde_json::from_str(&index).unwrap();
+        all.extend(snaps.into_iter().enumerate().map(|(n, (f, s))| (prefix, n, f, s)));
+    }
+    for (prefix, n, frame, screen) in &all {
+        let mut g = Gba::from_dump(rom.clone(), &dump(&format!("{prefix}-{screen}-{n}")).unwrap()).unwrap();
         let shot = adapt::screen_of(&g);
         let mut st = adapt::load_state(&mut g);
         assert_eq!(st.g.screen, *screen);
@@ -64,17 +72,27 @@ fn garage_screens_match_the_capture() {
         st.g.garage_car = live.g.garage_car;
         st.profile.u_338 = live.profile.u_338;
         st.profile.repeats = live.profile.repeats;
-        // The shown page was drawn one frame before the capture's angle (the game is drawing the other page); the
-        // draw turns the car first.
-        st.g.garage_angle = live.g.garage_angle.wrapping_sub(0x80);
         h.car_load(&mut st);
         if *screen != 0x13 {
             h.car_palette(&mut st); // the level changes reload the palette in the game
         }
-        flow::draw_screen(&mut st, &mut h, 1);
-        let wrong: Vec<usize> = (0..240 * 160)
-            .filter(|&i| h.screen.pages[1][i] != shot.shown()[i])
-            .collect();
+        // The shown page was drawn at the capture's angle or up to five turns before it (the game may be drawing the other page, and
+        // runs several menu frames per video frame: T1); the draw turns the car first. The first count of turns
+        // that gives the shown page is taken.
+        let base = (st.clone(), h.clone());
+        let mut wrong = Vec::new();
+        for turns in 1..=6u32 {
+            let (mut s, mut host) = (base.0.clone(), base.1.clone());
+            s.g.garage_angle = live.g.garage_angle.wrapping_sub(0x40 * turns);
+            flow::draw_screen(&mut s, &mut host, 1);
+            wrong = (0..240 * 160)
+                .filter(|&i| host.screen.pages[1][i] != shot.shown()[i])
+                .collect();
+            (st, h) = (s, host);
+            if wrong.is_empty() {
+                break;
+            }
+        }
         let (x0, x1) = wrong
             .iter()
             .fold((240, 0), |(a, b), i| (a.min(i % 240), b.max(i % 240)));
@@ -86,7 +104,9 @@ fn garage_screens_match_the_capture() {
             .collect();
         let oam = h.screen.oam.iter().zip(&shot.oam).filter(|(a, b)| a != b).count();
         eprintln!(
-            "frame {frame} screen {screen:#x}: {} page bytes in x {x0}..{x1} y {y0}..{y1}, base colours {pal:?}, {oam} OAM entries differ; unported calls {:x?}",
+            "frame {frame} angle {:#x} u2f6 {} screen {screen:#x}: {} page bytes in x {x0}..{x1} y {y0}..{y1}, base colours {pal:?}, {oam} OAM entries differ; unported calls {:x?}",
+            live.g.garage_angle,
+            live.profile.u_2f6,
             wrong.len(),
             h.calls.iter().map(|c| c.0).collect::<Vec<_>>()
         );

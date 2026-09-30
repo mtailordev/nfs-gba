@@ -30,7 +30,7 @@ fn s16(rom: &[u8], a: u32) -> i32 {
     rom_u16(rom, a) as i16 as i32
 }
 
-/// NOT 1:1 (T3): decoded once per process (the ROM is the same for every host); the game decodes the car's own
+/// Decoded once per process (one ROM per process; the game decodes the car's own
 /// materials on every load.
 fn textures(rom: &[u8]) -> &'static [Texture] {
     static T: OnceLock<Vec<Texture>> = OnceLock::new();
@@ -127,7 +127,11 @@ impl TypedHost<'_> {
         if st.g.menu_exit == 0 {
             let glass = paint::glass_shades(rom, st.g.garage_car[5], angle);
             for (slot, colour) in [(192, glass[0]), (208, glass[1])] {
-                self.scene.palettes.iter_mut().for_each(|p| p[slot] = colour);
+                self.scene
+                    .palettes
+                    .iter_mut()
+                    .filter_map(|p| p.get_mut(slot))
+                    .for_each(|c| *c = colour);
                 if st.g.fade == 0 {
                     self.screen.palette[slot] = colour;
                 }

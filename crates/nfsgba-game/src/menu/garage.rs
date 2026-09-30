@@ -1,7 +1,6 @@
 //! The garage on typed state: the unlock and purchase rules (`0x0812C24C` … `0x0812D960`), the car stats, the "new"
 //! marks of the list items, and the Kind18 screens (0x12 the career profile, 0x13 the part shop, 0x14 the car
-//! upgrade pages). Car models, atlases and palettes stay behind [`Host`] (`garage_load_car_atlas`, `_palette`,
-//! `garage_draw_car`: FIDELITY U3).
+//! upgrade pages). The car (`garage_load_car_atlas`, `_palette`, `garage_draw_car`) is [`super::car`] behind [`Host`].
 
 use nfsgba_formats::unlock::{group as leader_group, id_adjust, table_index};
 use nfsgba_sim::state::{MenuProfile, MenuState};
