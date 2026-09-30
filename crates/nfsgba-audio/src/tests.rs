@@ -339,3 +339,39 @@ fn plays_a_module_from_scratch() {
     assert_eq!(p.row, 60 * 176 / 1617 + 1);
     assert!(heard.iter().any(|&s| s != 0));
 }
+
+/// A2: the jingle system is unreachable in Carbon. Its two starters (`FUN_081522b8`, `FUN_08152310`; only they set the
+/// jingle-active byte `+0x54`) are the targets of no Thumb/ARM `BL` and of no word in the ROM (a pointer or jump table).
+#[test]
+fn nothing_starts_a_jingle() {
+    let Some(rom) = rom() else { return };
+    let word = |i: usize| u32::from_le_bytes(rom[i..i + 4].try_into().unwrap());
+    for target in [0x0815_22B8u32, 0x0815_2310] {
+        for i in (0..rom.len() - 4).step_by(2) {
+            let (a, b) = (
+                u16::from_le_bytes([rom[i], rom[i + 1]]),
+                u16::from_le_bytes([rom[i + 2], rom[i + 3]]),
+            );
+            if a & 0xF800 == 0xF000 && b & 0xF800 == 0xF800 {
+                let off = ((((a as i32 & 0x7FF) << 12) | ((b as i32 & 0x7FF) << 1)) << 9) >> 9;
+                assert_ne!(
+                    0x0800_0000 + i as i64 + 4 + off as i64,
+                    target as i64,
+                    "thumb BL at {i:#x}"
+                );
+            }
+            if i % 4 == 0 {
+                let w = word(i);
+                assert!(w != target && w != target | 1, "pointer at {i:#x}");
+                if w >> 24 & 0xF == 0xB && w >> 28 != 0xF {
+                    let off = ((w as i32 & 0xFF_FFFF) << 8) >> 8;
+                    assert_ne!(
+                        0x0800_0000 + i as i64 + 8 + off as i64 * 4,
+                        target as i64,
+                        "ARM BL at {i:#x}"
+                    );
+                }
+            }
+        }
+    }
+}

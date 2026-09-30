@@ -403,7 +403,7 @@ These are all unreachable with Carbon's data or code, or below the sample stream
   - volumes of 0xFF and above.
 
   They are exact by reading, not by trace.
-- **Jingle system not rewritten.** This is the second module state at `+0x83C`: `FUN_081517e8`, `FUN_081522b8`, `FUN_08152310` and `FUN_0815236c`. Nothing in Carbon calls the entry points.
+- **Jingle system not rewritten.** This is the second module state at `+0x83C`: `FUN_081517e8`, `FUN_081522b8`, `FUN_08152310` and `FUN_0815236c`. Nothing in Carbon calls the entry points (checked by a ROM scan: `nothing_starts_a_jingle`; FIDELITY A2).
 - **Mode-0 mixer not rewritten** (`0x0815CF2C`, `FUN_08152ab8`, `FUN_08152b7c`), nor the flagged sound format. Carbon uses mode 1.
 - **Test tone not rewritten** (`FUN_08151aa8`): engine `+0x14` is never set.
 - **Division by zero** returns mGBA's HLE result (the BIOS would hang). It cannot happen with Carbon's data.
