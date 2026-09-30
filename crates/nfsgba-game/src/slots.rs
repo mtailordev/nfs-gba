@@ -729,6 +729,23 @@ pub struct RimFrame {
     pub materials: Vec<MaterialInfo>,
 }
 
+/// `rim_side_visible` (`0x0814F9D0`): whether the car is seen from the side, the two angles `(heading >> 8, 0x4000 -
+/// the camera matrix's yaw)`: not when their difference is within ±0x400 of 0 or of 0x2000.
+pub fn rim_side_visible(heading: i32, view_yaw: i32) -> bool {
+    let d = angle_diff(heading, view_yaw).abs();
+    !(d < 0x400 || (0x1C00 < d && d < 0x2400))
+}
+
+/// Whether `car_racing_step` (`0x0814B168`) redraws the rim (calls `draw_decal_on_atlas`): the race phase is not 0, 1
+/// or 4, the entity is the player's, the camera view is not 0 (the bumper) and the car is seen from the side.
+/// `heading` is the entity's raw `+0x2C`. Traced angle by angle in `tests/traces2.rs` (FIDELITY D8).
+pub fn rim_wanted(phase: u32, index: u32, player: u32, view: u32, heading: i32, matrix_yaw: i32) -> bool {
+    !matches!(phase, 0 | 1 | 4)
+        && index == player
+        && view != 0
+        && rim_side_visible(((heading as u32 & 0x3F_FFFF) >> 8) as i32, 0x4000 - matrix_yaw)
+}
+
 /// The player's rim redraw at the start of `car_racing_step` (`0x0814b168`): seen from the side
 /// (`rim_side_visible`), `draw_decal_on_atlas` (`0x0813bd90`) draws the rim into the car's atlas, rotated by the
 /// wheel angle. The rotated read can reach up to 63 bytes around the rim's buffer on the game's heap; here it
@@ -738,11 +755,7 @@ pub struct RimFrame {
 /// `always`: `unpack_decal`'s own call of `draw_decal_on_atlas`, without the side-view tests.
 pub fn rim_redraw(rom: &[u8], data: &GameData, f: &RimFrame, heap: &mut [u8], always: bool) -> Result<()> {
     let e = &f.entity;
-    if !always && (f.phase == 0 || f.phase == 1 || f.phase == 4 || e.index as u32 != f.player || f.view == 0) {
-        return Ok(());
-    }
-    let d = angle_diff(((e.heading as u32 & 0x3F_FFFF) >> 8) as i32, 0x4000 - f.matrix_yaw).abs();
-    if !always && (d < 0x400 || (0x1C00 < d && d < 0x2400)) {
+    if !always && !rim_wanted(f.phase, e.index as u32, f.player, f.view, e.heading, f.matrix_yaw) {
         return Ok(());
     }
     if f.atlas == 0 {

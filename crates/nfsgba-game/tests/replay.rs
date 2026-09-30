@@ -24,7 +24,7 @@ use nfsgba_sim::layout::Field;
 /// effect and the nitro flames), `fadeout` and `fadein` (20 and 14 frames from the reference race with `main_frame`'s
 /// palette fade counter poked: the palettes and the sky gradient fade to black, and in from black).
 /// (session, trace, game frames): every frame of every trace must replay.
-const TRACES: [(&str, &str, usize); 14] = [
+const TRACES: [(&str, &str, usize); 16] = [
     ("live-race2", "drafter", 699),
     ("live-race", "elimlap", 1744),
     ("live-race", "elimination", 899),
@@ -32,6 +32,9 @@ const TRACES: [(&str, &str, usize); 14] = [
     ("live-race", "career", 599),
     ("live-race", "hunter", 499),
     ("live-race", "start", 89),
+    // The same start of a circuit and of a circuit with a wingman, from power-on through the menus (`tools/traces2.py`).
+    ("traces2", "start-circuit", 89),
+    ("traces2", "start-wingman", 89),
     ("game-loop", "fadeout", 19),
     ("game-loop", "fadein", 13),
     ("game-loop", "drive", 149),

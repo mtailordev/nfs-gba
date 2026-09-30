@@ -230,3 +230,84 @@ fn the_grid_deal_follows_the_menu_draws() {
         );
     }
 }
+
+/// D8: the player's rim redraw rule, traced angle by angle. A circuit with the player holding A and LEFT (`circle.log`:
+/// every entry of the two functions that can redraw the rim, `0x0814A2A0` and `car_racing_step` `0x0814B168`, with the
+/// inputs of the decision, every `rim_side_visible` call with its arguments and result, and every
+/// `draw_decal_on_atlas` call with its caller). Our rule must decide the same at every entry and return the same from
+/// every call, over a full turn of the heading.
+#[test]
+fn the_rim_redraw_rule_matches_a_full_turn() {
+    use nfsgba_fixed::angle_diff;
+    use nfsgba_game::slots::{rim_side_visible, rim_wanted};
+
+    let Some(text) = nfsgba_testkit::read_to_string("traces2/circle.log") else {
+        return;
+    };
+    const STEP: u32 = 0x0814_B168;
+    // (inputs of the entry, whether draw_decal_on_atlas was called from the step before the next entry)
+    let mut entries: Vec<([u32; 6], bool)> = vec![];
+    let (mut calls, mut sectors, mut classes, mut player_calls) = (0, [0u32; 16], [0u32; 3], 0);
+    for line in text.lines() {
+        let tag = line.split(' ').nth(1).unwrap();
+        match tag {
+            "E" => {
+                let f = |k: &str| field(line, k);
+                entries.push((
+                    [f("phase"), f("n"), f("player"), f("view"), f("heading"), f("yaw")],
+                    false,
+                ));
+                if f("fn") == STEP && f("n") == f("player") {
+                    let heading = (f("heading") & 0x3F_FFFF) >> 8;
+                    sectors[(heading >> 10) as usize] += 1;
+                }
+            }
+            "V" => {
+                let (a, b, ret) = (field(line, "a") as i32, field(line, "b") as i32, field(line, "ret"));
+                assert_eq!(rim_side_visible(a, b), ret != 0, "rim_side_visible({a:#x}, {b:#x})");
+                let d = angle_diff(a, b).abs();
+                classes[if d < 0x400 {
+                    0
+                } else if 0x1C00 < d && d < 0x2400 {
+                    1
+                } else {
+                    2
+                }] += 1;
+                calls += 1;
+            }
+            "D" => {
+                // (the start's unpack_decal also calls it, from outside the step)
+                let lr = field(line, "lr");
+                if (STEP..STEP + 0x400).contains(&lr) {
+                    entries.last_mut().expect("a redraw follows an entry").1 = true;
+                    player_calls += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut redrawn = 0;
+    for (k, ([phase, index, player, view, heading, yaw], drawn)) in entries.iter().enumerate() {
+        let wanted = rim_wanted(*phase, *index, *player, *view, *heading as i32, *yaw as i32);
+        assert_eq!(
+            wanted, *drawn,
+            "entry {k}: phase {phase} entity {index} view {view} heading {heading:#x} yaw {yaw}"
+        );
+        redrawn += u32::from(wanted);
+    }
+    assert!(
+        entries.len() > 1000 && calls > 500,
+        "{} entries, {calls} rim_side_visible calls",
+        entries.len()
+    );
+    assert_eq!(redrawn, player_calls, "every redraw is one the rule wants");
+    assert!(
+        sectors.iter().all(|&n| n > 0),
+        "the heading turned through a full circle: {sectors:?}"
+    );
+    assert!(
+        classes.iter().all(|&n| n > 0),
+        "both hidden bands and the visible range were met: {classes:?}"
+    );
+    assert!(redrawn > 100 && redrawn < calls as u32, "{redrawn} redraws");
+}
