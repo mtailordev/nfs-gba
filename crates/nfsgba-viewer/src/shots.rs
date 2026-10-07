@@ -75,6 +75,8 @@ impl Rig {
         app.insert_resource(Offscreen(target.clone()))
             .insert_resource(Start(Some(first)));
         add_viewer(&mut app);
+        // The check compares pixels at the GBA's size: no adaptive scale (a busy machine would lower it).
+        app.insert_resource(crate::composite::RenderScale::fixed(1.0));
         app.finish();
         app.cleanup();
         // The startup systems. The HUD layer (the game's sprites) is left out until `hud(true)`.
@@ -808,4 +810,39 @@ fn a_menu_race_shows_the_spoiler_and_the_rims() {
     }
     assert!(spoilers >= 3, "the spoiler shows in the chase and turn states");
     assert!(behind > 0, "looking back shows a car behind");
+}
+
+/// The render scale (`composite::RenderScale`): at half scale the GPU view of recorded race states is the half-size
+/// scene scaled up (every 2×2 block one colour) and still has every car and wall the exact frame draws.
+#[test]
+fn a_half_scale_scene_is_scaled_up() {
+    let (Some(rom), Some(dir)) = (nfsgba_testkit::rom(), nfsgba_testkit::fixture("game-loop")) else {
+        return;
+    };
+    let trace = Trace::load(&dir, "drive").unwrap();
+    let state = |k| play::Play::new(game_at(&rom, &trace, k), Handle::default(), true, None);
+    let mut rig = Rig::new(state(0));
+    rig.app.insert_resource(crate::composite::RenderScale::fixed(0.5));
+    for k in [10, trace.timing.len() / 2] {
+        let gpu = rig.show(state(k));
+        let px = |x: usize, y: usize| &gpu[4 * (y * W + x)..][..3];
+        let blocks = (0..H / 2)
+            .flat_map(|y| (0..W / 2).map(move |x| (2 * x, 2 * y)))
+            .filter(|&(x, y)| px(x, y) == px(x + 1, y) && px(x, y) == px(x, y + 1) && px(x, y) == px(x + 1, y + 1))
+            .count();
+        assert!(
+            blocks * 100 >= (W / 2) * (H / 2) * 99,
+            "{blocks} of {} blocks one colour",
+            W * H / 4
+        );
+        let r = compare(&rig, &rom, &gpu);
+        for o in r.objects.iter().filter(|o| o.pixels.len() >= 100) {
+            assert!(
+                o.present >= 0.5,
+                "state {k}: {} {:.0}% present",
+                o.name,
+                100.0 * o.present
+            );
+        }
+    }
 }

@@ -527,11 +527,12 @@ pub fn hud_layer(
     }
     let g = &play.game;
     let (eva, evb) = blend_of(play.game.bldalpha);
-    let want = UVec4::new(eva, evb, 0, 0);
-    if composites.get(&fin.material).is_some_and(|m| m.blend != want)
+    // EVA and EVB only: `z` is the render scale's (`composite::RenderScale`).
+    let want = UVec2::new(eva, evb);
+    if composites.get(&fin.material).is_some_and(|m| m.blend.xy() != want)
         && let Some(mut m) = composites.get_mut(&fin.material)
     {
-        m.blend = want;
+        (m.blend.x, m.blend.y) = (want.x, want.y);
     }
     let colour = |pal: &[u8], i: usize| u16::from_le_bytes([pal[2 * i], pal[2 * i + 1]]);
     let objects = hud_objects(&play, &race, &smooth);

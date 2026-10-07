@@ -379,6 +379,11 @@ fn main() {
     .add_audio_source::<play::GbaSound>()
     .add_systems(PostStartup, play::start_sound);
     add_viewer(&mut app);
+    // `NFSGBA_SCALE=<0.25..1>` fixes the render scale (default: it follows the display rate, `composite::RenderScale`).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(scale) = std::env::var("NFSGBA_SCALE").ok().and_then(|s| s.parse::<f32>().ok()) {
+        app.insert_resource(composite::RenderScale::fixed(scale.clamp(0.1, 1.0)));
+    }
     app.run();
 }
 

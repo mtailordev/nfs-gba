@@ -4,6 +4,8 @@
 // EVB = `blend.y`), and then shows the 5-bit colour as `c << 3 | c >> 2`. The scene is read back as its sRGB bytes
 // (the image is sRGB, so a read gives linear values; they are encoded again and rounded), both are cut to 5 bits and
 // mixed with the game's integer formula. Pixels without a semi-transparent sprite pass through unchanged.
+// The scene image may be smaller than the window (`RenderScale`, `blend.z` = its size over the window's in 1/4096): it
+// is read at the window pixel's place in it (nearest).
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
 
@@ -22,8 +24,11 @@ fn decode(c: f32) -> f32 {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(scene));
-    let s = textureLoad(scene, vec2<i32>(in.position.xy), 0);
-    let gba = clamp(vec2<i32>(floor(in.position.xy / size * vec2<f32>(240.0, 160.0))), vec2<i32>(0), vec2<i32>(239, 159));
+    let ratio = f32(blend.z) / 4096.0;
+    let at = min(vec2<i32>(in.position.xy * ratio), vec2<i32>(size) - 1);
+    let s = textureLoad(scene, at, 0);
+    let window = size / ratio;
+    let gba = clamp(vec2<i32>(floor(in.position.xy / window * vec2<f32>(240.0, 160.0))), vec2<i32>(0), vec2<i32>(239, 159));
     let h = textureLoad(hud, gba, 0);
     // The scene's gamma bytes.
     var bytes = vec3<u32>(round(vec3<f32>(encode(s.r), encode(s.g), encode(s.b)) * 255.0));
