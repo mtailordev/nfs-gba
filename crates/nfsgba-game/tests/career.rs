@@ -37,6 +37,14 @@ struct Visit {
     profile: Vec<u8>,
     /// Page, palettes (512 entries), OAM (128 entries of 4 halfwords), all little-endian bytes.
     shot: Option<[Vec<u8>; 3]>,
+    /// The racers the standings rank (the ranked block's ids, sorted: the order follows the race times, T1).
+    racers: Vec<u8>,
+}
+
+fn racers(ids: &[u8]) -> Vec<u8> {
+    let mut v = ids.to_vec();
+    v.sort();
+    v
 }
 
 fn profile_bytes(all: &[u8]) -> Vec<u8> {
@@ -70,6 +78,7 @@ fn game_visits(t: &Value) -> Vec<Visit> {
                     screen: now.0,
                     profile: profile_bytes(&blobs[b.as_u64().unwrap() as usize]),
                     shot: Some([0, 1, 2].map(|i| unhex(s[i].as_str().unwrap()))),
+                    racers: racers(&unhex(f["ranked"].as_str().unwrap())[4..8]),
                 },
             ));
         }
@@ -118,6 +127,14 @@ fn compare(name: &str) -> Vec<i64> {
     );
     let rules = cfg["rules"].as_array().unwrap();
     let mut s = Session::new(&rom, save);
+    // The racer ids of the game's race (the results block's bytes 4..8 when its race runs).
+    let game_ids: [u8; 4] = t["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["state"].as_u64() == Some(5))
+        .map(|f| unhex(f["results"].as_str().unwrap())[4..8].try_into().unwrap())
+        .expect("the game's race");
 
     let (mut ours, mut last_key, mut poked) = (vec![], None, false);
     let (mut rule, mut entered, mut fired, mut prev_screen, mut end) = (0, 0u64, -99i64, -1i64, None::<u64>);
@@ -132,6 +149,12 @@ fn compare(name: &str) -> Vec<i64> {
             )
         });
         let racing = s.race.is_some();
+        // The opponents the menus pick follow the rand index, which every menu frame advances, so they follow how many
+        // frames each run spent getting there (T1). Once ours are picked they become the game's, so the standings can
+        // be compared.
+        if !racing && s.st.g.results.ids[1..] != [0; 3] && s.st.g.results.ids != game_ids {
+            s.st.g.results.ids = game_ids;
+        }
         let (screen, state) = if racing {
             (0x81, s.race.as_ref().unwrap().world.lp.game_state as i64)
         } else {
@@ -179,6 +202,7 @@ fn compare(name: &str) -> Vec<i64> {
                         bytes(&v.palette),
                         v.oam.iter().flat_map(|e| bytes(e)).collect(),
                     ]),
+                    racers: racers(&s.st.g.ranked.ids),
                 },
             ));
         }
@@ -248,13 +272,22 @@ fn compare(name: &str) -> Vec<i64> {
                 &g.profile[..12]
             ));
         }
-        // Blinking cursors and PRESS START follow the tick count (T1): the boot screens' phase differs. The standings'
-        // times follow the number of race frames the original's video frames ran (T1): their digits differ.
+        // Blinking cursors and PRESS START follow the tick count (T1): the boot screens' phase differs, and the race
+        // info (0xA) blinks between the track and the mode, the wingman and its name, on VBlank bit 7. The standings'
+        // times follow the number of race frames the original's video frames ran (T1): their digits differ, and so
+        // can the order of the racers ranked by them; the racers themselves are compared as a set (the names drawn
+        // for them: `results::tests::the_standings_name_the_racers`).
         let phase = matches!(g.screen, 0x19 | 0x30 | 0x17);
-        let names = matches!(g.screen, 0xA | 0xC);
+        let unsettled_page = matches!(g.screen, 0xA | 0xC);
+        if g.screen == 0xC && o.racers != g.racers {
+            bad.push(format!(
+                "visit {i}: the racers {:x?}, the game's {:x?}",
+                o.racers, g.racers
+            ));
+        }
         if let (Some(a), Some(b), false) = (&o.shot, &g.shot, phase) {
             for (what, x, y) in [("page", &a[0], &b[0]), ("palette", &a[1], &b[1]), ("oam", &a[2], &b[2])] {
-                if x != y && !(what == "page" && names) {
+                if x != y && !(what == "page" && unsettled_page) {
                     bad.push(format!("visit {i} screen {:#x}: {what} {}", g.screen, diffs(x, y)));
                 }
             }
