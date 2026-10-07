@@ -1,0 +1,18 @@
+[package]
+name = "nfsgba-android"
+version = "0.1.0"
+edition = "2024"
+description = "The game as an Android app (a GameActivity's native library), loaded from the player's own ROM"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Built by `tools/android_build.py` (cargo ndk) into `android/app/src/main/jniLibs`; on other targets the crate is empty.
+[lib]
+name = "nfsgba"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { version = "=0.19.1", features = ["android-game-activity"] }
+# OpenGL ES 3 besides Vulkan: phones without a working Vulkan driver (and emulators without Vulkan) still run it.
+bevy_render = { version = "=0.19.1", features = ["gles"] }
+nfsgba-viewer = { path = "../nfsgba-viewer" }

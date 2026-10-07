@@ -1,0 +1,7 @@
+# Built by tools/android_build.py and Gradle (the native library is built from the repo, never committed).
+app/src/main/jniLibs/
+app/build/
+build/
+.gradle/
+local.properties
+*.apk

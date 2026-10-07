@@ -1,0 +1,12 @@
+[versions]
+agp = "8.4.0"
+appcompat = "1.6.1"
+# Must match the `android-activity` crate Bevy uses (0.6.1 in Bevy 0.19.1; Bevy's examples/mobile pins the same).
+gamesActivity = "4.4.0"
+
+[libraries]
+appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+games-activity = { group = "androidx.games", name = "games-activity", version.ref = "gamesActivity" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

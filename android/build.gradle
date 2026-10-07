@@ -1,0 +1,4 @@
+// The Android app around the game's native library (`crates/nfsgba-android`); built by `tools/android_build.py`.
+plugins {
+    alias(libs.plugins.android.application) apply false
+}

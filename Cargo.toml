@@ -11,3 +11,10 @@ inherits = "release"
 opt-level = "s"
 lto = true
 codegen-units = 1
+
+# The Android app (`tools/android_build.py`): the release build, smaller.
+[profile.mobile]
+inherits = "release"
+lto = "thin"
+codegen-units = 4
+strip = true
