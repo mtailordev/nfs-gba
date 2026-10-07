@@ -38,7 +38,7 @@ fn the_full_game_reaches_the_race_and_the_results() {
     // The spare as `main` makes it (no capture: the web build has none).
     let mut play = Play::spare(rom.clone(), 11, 23, Handle::default())
         .unwrap()
-        .with_full(Full::new(rom.clone(), Some(sav.clone())));
+        .with_full(Full::new(rom.clone(), crate::platform::Saves::file(sav.clone())));
     play.script = Some(held);
     let first_id = play.id;
     let race = Race {

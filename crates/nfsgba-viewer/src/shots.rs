@@ -736,7 +736,7 @@ fn a_menu_race_shows_the_spoiler_and_the_rims() {
     let _ = std::fs::remove_file(&sav);
     let mut play = play::Play::spare(rom.clone(), 11, 23, Handle::default())
         .unwrap()
-        .with_full(play::Full::new(rom.clone(), Some(sav)));
+        .with_full(play::Full::new(rom.clone(), crate::platform::Saves::file(sav)));
     play.script = Some(held);
     let mut rig = Rig::new(play);
     rig.app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(

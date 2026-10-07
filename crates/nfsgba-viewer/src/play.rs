@@ -23,7 +23,6 @@ use std::{
     collections::VecDeque,
     io,
     num::NonZero,
-    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -83,26 +82,21 @@ pub struct Full {
     /// The samples of the last step.
     sound: Vec<u8>,
     /// The save file, and its bytes as last written (web: the page keeps the save, `crate::web`).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    sav: Option<PathBuf>,
+    saves: crate::platform::Saves,
     saved: Vec<u8>,
 }
 
 impl Full {
-    /// The game at power-on with the save at `sav` (created on the first save).
-    pub fn new(rom_bytes: Vec<u8>, sav: Option<PathBuf>) -> Full {
-        #[cfg(not(target_arch = "wasm32"))]
-        let saved = sav.as_ref().and_then(|p| std::fs::read(p).ok());
-        #[cfg(target_arch = "wasm32")]
-        let saved = crate::web::save();
-        let saved = saved.unwrap_or_else(|| vec![0xFF; 512]);
+    /// The game at power-on with the last save in `saves` (a blank cartridge before the first save).
+    pub fn new(rom_bytes: Vec<u8>, saves: crate::platform::Saves) -> Full {
+        let saved = saves.load().unwrap_or_else(|| vec![0xFF; 512]);
         // ponytail: the ROM is leaked (8 MB, once per process) because the session borrows it for its lifetime.
         let rom: &'static [u8] = Box::leak(rom_bytes.into_boxed_slice());
         Full {
             session: Session::new(rom, saved.clone()),
             lent: false,
             sound: Vec::new(),
-            sav,
+            saves,
             saved,
         }
     }
@@ -294,16 +288,10 @@ impl Play {
             std::mem::swap(&mut self.game, full.session.race.as_mut().expect("a race"));
         }
         let eeprom = &full.session.host.eeprom;
-        #[cfg(target_arch = "wasm32")]
         if *eeprom != full.saved {
-            crate::web::saved(eeprom);
-            full.saved.clone_from(eeprom);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let (Some(path), true) = (&full.sav, *eeprom != full.saved) {
-            match std::fs::write(path, eeprom) {
+            match full.saves.store(eeprom) {
                 Ok(()) => full.saved.clone_from(eeprom),
-                Err(e) => warn!("save {}: {e}", path.display()),
+                Err(e) => warn!("{e}"),
             }
         }
         result.map(|()| (Flow::Racing, full.lent && !had_race))
