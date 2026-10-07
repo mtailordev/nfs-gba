@@ -168,3 +168,61 @@ fn the_clock_follows_the_audio_device() {
     assert!((sync_rate(SOUND_TARGET * 10, true) - 0.995).abs() < 1e-6);
     assert!(sync_rate(SOUND_TARGET / 2, true) > 1.0 && sync_rate(SOUND_TARGET / 2, true) < 1.005);
 }
+
+/// In the background (`AppLifecycle::Suspended`) the game runs no frames and owes none on return; back
+/// (`Running`) it goes on.
+#[test]
+fn the_game_waits_in_the_background() {
+    let Some(rom) = nfsgba_testkit::rom() else { return };
+    let play = Play::spare(rom.clone(), 11, 23, Handle::default())
+        .unwrap()
+        .with_full(Full::new(
+            rom,
+            crate::platform::Saves::file(std::env::temp_dir().join("nfsgba-bg.sav")),
+        ));
+    let race = Race {
+        routes: rom::routes(&play.game.rom),
+        floors: vec![],
+        current: 0,
+        active: false,
+        hud: Handle::default(),
+        game_camera: false,
+        original: false,
+        frame: None,
+        visible: None,
+        drawn: vec![],
+        clip: vec![],
+        setup: view::RaceView::read(&play.game.world),
+        portals: Handle::default(),
+    };
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
+            1.0 / VIDEO_HZ,
+        )))
+        .init_resource::<ButtonInput<KeyCode>>()
+        .add_message::<bevy::window::AppLifecycle>()
+        .insert_resource(play)
+        .insert_resource(race)
+        .add_systems(Update, (super::lifecycle, super::play).chain());
+    let frames = |app: &App| app.world().resource::<Play>().frames;
+    for _ in 0..30 {
+        app.update();
+    }
+    let before = frames(&app);
+    assert!(before > 20, "the game runs");
+    app.world_mut().write_message(bevy::window::AppLifecycle::Suspended);
+    for _ in 0..60 {
+        app.update();
+    }
+    assert!(app.world().resource::<Play>().suspended);
+    assert_eq!(frames(&app), before, "no frames in the background");
+    app.world_mut().write_message(bevy::window::AppLifecycle::Running);
+    app.update();
+    let back = frames(&app);
+    assert!(back <= before + 1, "no frames owed for the pause: {before} -> {back}");
+    for _ in 0..30 {
+        app.update();
+    }
+    assert!(frames(&app) > back + 20, "the game goes on");
+}

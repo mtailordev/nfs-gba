@@ -56,6 +56,8 @@ pub struct Play {
     pub game: Game,
     /// The game does not run (a dump without `NFSGBA_PLAY`, a route's race start).
     pub paused: bool,
+    /// The app is in the background (a phone's home button, another app): the game and its sound wait.
+    pub suspended: bool,
     /// (environment, route) of a route's race start; `None` for a dump.
     pub grid: Option<(u32, u32)>,
     clock: f32,
@@ -163,6 +165,30 @@ impl Decodable for GbaSound {
     }
 }
 
+/// The app going to the background and back (`AppLifecycle`, sent on phones): the game stops, its queued sound is
+/// dropped (the device would play it on return), and it goes on where it stopped (no time is owed for the pause).
+pub fn lifecycle(mut events: MessageReader<bevy::window::AppLifecycle>, mut play: ResMut<Play>) {
+    use bevy::window::AppLifecycle as L;
+    for e in events.read() {
+        let away = matches!(e, L::WillSuspend | L::Suspended);
+        if away != play.suspended {
+            play.suspended = away;
+            play.clock = 0.0;
+            if let Ok(mut q) = play.sound.samples.lock() {
+                q.clear();
+            }
+            info!(
+                "app {}",
+                if away {
+                    "in the background: the game waits"
+                } else {
+                    "back: the game goes on"
+                }
+            );
+        }
+    }
+}
+
 /// Starts the game's sound stream (play mode).
 pub fn start_sound(mut commands: Commands, play: Res<Play>, mut sounds: ResMut<Assets<GbaSound>>) {
     commands.spawn(AudioPlayer(sounds.add(GbaSound(play.sound.clone()))));
@@ -234,6 +260,7 @@ impl Play {
         Play {
             game,
             paused,
+            suspended: false,
             grid,
             clock: 0.0,
             id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -398,6 +425,9 @@ pub fn play(
     mut stats: Local<(f32, u32, u32, f32, f32)>,
     mut taken: Local<u64>,
 ) {
+    if play.suspended {
+        return;
+    }
     if !play.paused && play.stopped.is_none() {
         // The audio device's clock leads (`sync_rate`), when it takes samples.
         let now = play.sound.taken.load(Ordering::Relaxed);

@@ -374,6 +374,7 @@ fn add_viewer(app: &mut App) {
         (
             shot,
             (
+                play::lifecycle,
                 play::play,
                 remake_cars,
                 banner,
