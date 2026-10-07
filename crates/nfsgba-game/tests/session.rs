@@ -30,8 +30,19 @@ fn unhex(s: &str) -> Vec<u8> {
         .collect()
 }
 
+/// The results of a race the player lost (`slow`): the player's finish time, whether every racer has one, the player's
+/// place (last: the opponents' own order and times follow the rand seed, a tick count: T1, so they are not compared) and
+/// the position bytes.
+fn slow_extra(finish: &[u32], position: &[u8]) -> Vec<i64> {
+    let mut v = vec![i64::from(finish[0])];
+    v.extend(finish.iter().map(|&t| i64::from(t > 0)));
+    v.push(finish.iter().filter(|&&t| t < finish[0]).count() as i64);
+    v.extend(position.iter().map(|&b| b as i64));
+    v
+}
+
 /// The game's visits: the first settled frame of each `(screen, state)` run.
-fn game_visits(frames: &[Value]) -> Vec<Visit> {
+fn game_visits(frames: &[Value], slow: bool) -> Vec<Visit> {
     let n = |f: &Value, k: &str| f[k].as_i64().unwrap_or(0); // the profile fields are absent before the boot sets the pointer
     let mut out = vec![];
     let mut key = None;
@@ -75,6 +86,12 @@ fn game_visits(frames: &[Value]) -> Vec<Visit> {
             let results = if now.0 == 12 {
                 let mut v: Vec<i64> = std::iter::once(&r[4]).chain(&r[8..12]).map(|&b| b as i64).collect();
                 v.push(i64::from(u32::from_le_bytes(r[0x20..0x24].try_into().unwrap()) > 0));
+                if slow {
+                    let finish: Vec<u32> = (0..4)
+                        .map(|i| u32::from_le_bytes(r[0x20 + 4 * i..0x24 + 4 * i].try_into().unwrap()))
+                        .collect();
+                    v.extend(slow_extra(&finish, &r[0x0C..0x10]));
+                }
                 v
             } else {
                 vec![]
@@ -104,18 +121,35 @@ fn session_matches_the_game_in_german() {
     session_matches("session2/quickplay-de.json", 2);
 }
 
+/// A race the player does not win: A and LEFT held from race frame 150 (a circle at the start line), the player's
+/// finish poked at race frame 3000 (`tools/session_trace.py quickplay-slow --drive A,LEFT --finish-at 3000 --out
+/// session3`), the results screen compared with the player's place, finish time and the position bytes.
+#[test]
+fn session_matches_the_game_when_the_player_loses() {
+    session_matches("session3/quickplay-slow.json", 0);
+}
+
 /// One recorded power-on run (`fixture`) against a `Session` fed its key script; `language` is the one the run chose.
 fn session_matches(fixture: &str, language: u32) {
-    let (Some(rom), Some(text)) = (
-        nfsgba_testkit::rom(),
-        nfsgba_testkit::read_to_string(fixture),
-    ) else {
+    let (Some(rom), Some(text)) = (nfsgba_testkit::rom(), nfsgba_testkit::read_to_string(fixture)) else {
         return;
     };
     let t: Value = serde_json::from_str(&text).unwrap();
     let frames = t["frames"].as_array().unwrap();
-    assert_eq!(t["language"].as_u64().unwrap_or(0) as u32, language, "the recording's language");
+    assert_eq!(
+        t["language"].as_u64().unwrap_or(0) as u32,
+        language,
+        "the recording's language"
+    );
     let finish_at = t["finish_at"].as_u64().unwrap() as u32;
+    // A slow run holds keys by race frame (the video frames differ by design, T1): (keys, from race frame).
+    let drive = t["drive"].as_array().filter(|d| !d.is_empty()).map(|d| {
+        let mask = d.iter().fold(0u16, |m, k| {
+            m | 1 << KEYS.iter().position(|x| *x == k.as_str().unwrap()).unwrap()
+        });
+        (mask, t["drive_at"].as_u64().unwrap() as u32)
+    });
+    let slow = drive.is_some();
     let sync_at = t["sync_at"].as_u64().unwrap() as usize;
     let mut held = vec![0u16; frames.len()];
     for press in t["script"].as_array().unwrap() {
@@ -135,7 +169,13 @@ fn session_matches(fixture: &str, language: u32) {
         if f == sync_at {
             sync_choice(&mut s, &frames[f]);
         }
-        s.frame(held[f])
+        let driving = |s: &Session| {
+            let (mask, at) = drive?;
+            let game = s.race.as_ref()?;
+            (game.world.lp.game_state == 5 && game.world.g.race_frames >= at).then_some(mask)
+        };
+        let keys = driving(&s).unwrap_or(held[f]);
+        s.frame(keys)
             .unwrap_or_else(|e| panic!("frame {f}: {e} ({:x?})", s.host.calls));
         let (mut now, racing) = ((s.st.g.screen as i64, s.st.g.game_state as i64), s.race.is_some());
         match (now.0, racing) {
@@ -203,6 +243,9 @@ fn session_matches(fixture: &str, language: u32) {
                     .map(|&b| b as i64)
                     .collect();
                 v.push(i64::from(g.results.finish[0] > 0));
+                if slow {
+                    v.extend(slow_extra(&g.results.finish, &g.results.position));
+                }
                 v
             } else {
                 vec![]
@@ -220,7 +263,7 @@ fn session_matches(fixture: &str, language: u32) {
     // compared: the visits are the menu screens in state 1 and the race.
     let keep = |v: &Visit| (v.state == 1 && v.screen < 0x80) || (v.state == 5 && v.screen == 0x81);
     let ours: Vec<Visit> = ours.into_iter().flatten().filter(keep).collect();
-    let game: Vec<Visit> = game_visits(frames).into_iter().filter(keep).collect();
+    let game: Vec<Visit> = game_visits(frames, slow).into_iter().filter(keep).collect();
     let seq = |v: &[Visit]| v.iter().map(|v| (v.screen, v.state)).collect::<Vec<_>>();
     assert_eq!(seq(&ours), seq(&game), "the screens visited");
     assert!(race_at.is_some() && poked, "a race was run and finished");
