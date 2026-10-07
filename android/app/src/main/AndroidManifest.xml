@@ -20,7 +20,9 @@
             android:name=".MainActivity"
             android:exported="false"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode">
+            android:configChanges="layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode|fontScale|fontWeightAdjustment|colorMode|touchscreen|mcc|mnc|grammaticalGender">
+            <!-- Every change is handled in place: the native side runs one activity per process, so a recreated
+                 activity would have no game behind it. -->
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="nfsgba" />

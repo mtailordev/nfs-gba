@@ -48,6 +48,8 @@ pub struct Final {
 pub struct RenderScale {
     pub scale: f32,
     pub auto: bool,
+    /// The scene is on the screen (not under the menus): only then are display frames measured.
+    pub measuring: bool,
     /// Seconds of display frames measured since the last change, and how many of them came late.
     window: f32,
     frames: u32,
@@ -61,6 +63,7 @@ impl RenderScale {
         RenderScale {
             scale,
             auto: false,
+            measuring: true,
             window: 0.0,
             frames: 0,
             late: 0,
@@ -101,7 +104,7 @@ impl RenderScale {
     /// whether the scale changed.
     pub fn observe(&mut self, dt: f32, height: f32) -> bool {
         self.hold = (self.hold - dt).max(0.0);
-        if !self.auto || dt <= 0.0 || dt > 0.25 {
+        if !self.auto || !self.measuring || dt <= 0.0 || dt > 0.25 {
             return false;
         }
         self.window += dt;
@@ -248,6 +251,10 @@ mod tests {
         // Stalls (a frame over 0.25 s) are not counted.
         run(&mut s, 2.0, 10.0);
         assert_eq!(s.scale, 1.0);
+        // Under the menus (the scene not drawn) nothing is measured.
+        s.measuring = false;
+        run(&mut s, 10.0, 30.0);
+        assert_eq!(s.scale, 1.0, "not measured under the menus");
         let mut fixed = RenderScale::fixed(0.5);
         run(&mut fixed, 10.0, 10.0);
         assert_eq!(fixed.scale, 0.5);

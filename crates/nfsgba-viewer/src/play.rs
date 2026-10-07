@@ -433,8 +433,10 @@ pub fn play(
         let now = play.sound.taken.load(Ordering::Relaxed);
         let queued = play.sound.samples.lock().map_or(0, |q| q.len());
         let rate = sync_rate(queued, now != std::mem::replace(&mut *taken, now));
-        // A slow game frame must not make the next display frames run several (a spiral): at most 3 are owed.
-        play.clock = (play.clock + time.delta_secs() * rate).min(3.0 * play.step_secs());
+        // A slow game frame must not make the next display frames run several (a spiral): at most 3 steps or a fifth
+        // of a second are owed (a step costs well under a millisecond, so a slow display still gets the game's pace).
+        let owed = (3.0 * play.step_secs()).max(0.2);
+        play.clock = (play.clock + time.delta_secs() * rate).min(owed);
         // Display fps and game-frame time, logged every 3 s (display frames, game frames, seconds, ms sum, ms max).
         stats.0 += time.delta_secs();
         stats.1 += 1;
@@ -685,8 +687,20 @@ pub fn menu_layer(
     window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     mut layer: Single<&mut Visibility, With<MenuLayer>>,
     mut screen: Single<(&MenuScreen, &mut Node)>,
+    mut scene: Query<&mut Camera, With<Camera3d>>,
+    mut scale: ResMut<crate::composite::RenderScale>,
 ) {
     let menus = play.full.as_ref().filter(|_| !play.in_race());
+    // The menus cover the whole window: the 3D scene is not drawn under them (a weak GPU's time goes to nothing), and
+    // the render scale only follows the display rate while the scene is shown.
+    for mut camera in &mut scene {
+        if camera.is_active != menus.is_none() {
+            camera.is_active = menus.is_none();
+        }
+    }
+    if scale.measuring == menus.is_some() {
+        scale.measuring = menus.is_none();
+    }
     layer.set_if_neq(if menus.is_some() {
         Visibility::Inherited
     } else {
