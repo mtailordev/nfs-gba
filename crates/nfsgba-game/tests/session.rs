@@ -93,14 +93,28 @@ fn game_visits(frames: &[Value]) -> Vec<Visit> {
 
 #[test]
 fn session_matches_the_game() {
+    session_matches("session/quickplay.json", 0);
+}
+
+/// The same run with the language screen set to German first (`tools/session_trace.py quickplay-de --language 2 --out
+/// session2`: the cursor RIGHT twice, the rest of the key script 100 frames later): every menu is German, the race
+/// takes the language into its HUD, and the visits and choices equal the game's.
+#[test]
+fn session_matches_the_game_in_german() {
+    session_matches("session2/quickplay-de.json", 2);
+}
+
+/// One recorded power-on run (`fixture`) against a `Session` fed its key script; `language` is the one the run chose.
+fn session_matches(fixture: &str, language: u32) {
     let (Some(rom), Some(text)) = (
         nfsgba_testkit::rom(),
-        nfsgba_testkit::read_to_string("session/quickplay.json"),
+        nfsgba_testkit::read_to_string(fixture),
     ) else {
         return;
     };
     let t: Value = serde_json::from_str(&text).unwrap();
     let frames = t["frames"].as_array().unwrap();
+    assert_eq!(t["language"].as_u64().unwrap_or(0) as u32, language, "the recording's language");
     let finish_at = t["finish_at"].as_u64().unwrap() as u32;
     let sync_at = t["sync_at"].as_u64().unwrap() as usize;
     let mut held = vec![0u16; frames.len()];

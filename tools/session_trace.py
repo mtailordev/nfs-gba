@@ -2,6 +2,7 @@
 for crates/nfsgba-game/src/session.rs (test `session_matches_the_game`). A test oracle, not a runtime.
 
     .venv/Scripts/python.exe tools/session_trace.py [NAME]     # writes $NFSGBA_DATA/work/e5298b24/session/NAME.json
+    .venv/Scripts/python.exe tools/session_trace.py NAME --language 2 --out session2    # German (cursor RIGHT twice on the language screen), into a new folder
 
 The key script is the boot script (boot_trace.py) to the main menu, then presses into Quick Play. Once the race has run
 FINISH_AT game frames the player's entity is marked finished (`+0x4A` = 2, as tools/recorders/finish.lua does) and the
@@ -23,6 +24,19 @@ SYNC_AT = 2520  # on the race setup screen: the random choice is synced and the 
 FRAMES = 4600
 # (first frame, frames held, key): the boot script to the main menu (frame ~2400), then Quick Play.
 SCRIPT = boot_trace.SCRIPT + [(2450, 12, "A"), (2560, 12, "A"), (2670, 12, "A"), (2780, 12, "A")]
+LANGUAGE_AT = 18  # the language screen (25) is up from frame 17; each cursor step is a 12-frame press, 22 frames apart
+LANGUAGE_SHIFT = 50  # the rest of the script moves later by this many frames per two cursor steps
+
+
+def script(language=0):
+    """SCRIPT with the language screen cursor moved `language` steps right first (0 En, 1 Fr, 2 De, 3 It, 4 Es) (everything after it shifted later)."""
+    if not language:
+        return SCRIPT
+    shift = LANGUAGE_SHIFT * ((language + 1) // 2)
+    cursor = [(LANGUAGE_AT + 22 * i, 12, "RIGHT") for i in range(language)]
+    return cursor + [(f + shift, n, k) for f, n, k in SCRIPT]
+
+
 RACE = {"mode": (0x030056E0, "I"), "route": (0x03005388, "I"), "laps": (0x030056E4, "I"), "opponents": (0x03005784, "I"),
         "difficulty": (0x03005608, "I"), "traffic": (0x03005604, "I"), "env": (0x0300006C, "I"), "career": (0x030000A0, "I"),
         "player_car": (0x03005718, "I"), "race_car": (0x0300611C, "B"), "route_flag": (0x03005720, "I"),
@@ -42,20 +56,33 @@ def rows(s):
 
 
 def main(argv):
+    argv = list(argv)
+    def opt(k, d):
+        if k not in argv:
+            return d
+        i = argv.index(k)
+        v = argv[i + 1]
+        del argv[i:i + 2]
+        return v
+
+    language, folder = int(opt("--language", 0)), opt("--out", "session")
     name = argv[0] if argv else "quickplay"
-    out = data_dir() / "work" / "e5298b24" / "session"
+    out = data_dir() / "work" / "e5298b24" / folder
+    keys = script(language)
+    shift = keys[-1][0] - SCRIPT[-1][0]
+    sync_at, frames = SYNC_AT + shift, FRAMES + shift
     session = out / f"session-{name}"
     shutil.rmtree(session, ignore_errors=True)
     session.mkdir(parents=True)
     retro.SESSION = session
     r = retro.Retro(video=False)
     held = {}
-    for first, n, key in SCRIPT:
+    for first, n, key in keys:
         for f in range(first, first + n):
             held[f] = (key,)
     trace, poked, started = [], False, False
-    for f in range(FRAMES):
-        if f == SYNC_AT:
+    for f in range(frames):
+        if f == sync_at:
             r.write(0x030056E0, struct.pack("<I", 0))
         r.run(1, keys=held.get(f, ()))
         s = r.serialize()
@@ -69,7 +96,7 @@ def main(argv):
             row["poke"] = True
         trace.append(row)
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"{name}.json").write_text(json.dumps(dict(script=SCRIPT, finish_at=FINISH_AT, sync_at=SYNC_AT, frames=trace)), encoding="utf-8")
+    (out / f"{name}.json").write_text(json.dumps(dict(script=keys, finish_at=FINISH_AT, sync_at=sync_at, language=language, frames=trace)), encoding="utf-8")
     seq = [(f, t["screen"], t["state"]) for f, t in enumerate(trace)
            if f == 0 or (t["screen"], t["state"]) != (trace[f - 1]["screen"], trace[f - 1]["state"])]
     print(name, "screens:", seq)
