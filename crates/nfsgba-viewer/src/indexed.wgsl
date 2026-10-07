@@ -28,6 +28,10 @@
 // cars of every entry over all of it. A city fragment writes the depth `0.5 (count - entry + z) / (count + 1)` (z: the
 // real reversed depth, 0..1), so a nearer entry covers a farther one as in the painter's order and, within an entry, the
 // real depth decides; a clipped car writes `0.5 + 0.5 z`, above all of the city, as pass 1 overwrites the sectors.
+// ABOVE surfaces (a car's second model, the spoiler) are drawn after the car's body (`draw_sector_entities`), so they
+// cover it wherever they overlap: their depth is that of a point one car length (CAR_LENGTH) nearer on the same ray.
+// NOT 1:1 (R31): the game paints the spoiler over its own body only; here it also covers anything else within one
+// car length in front of it.
 
 #import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::view}
 
@@ -41,6 +45,9 @@ const OPAQUE: u32 = 1u;
 const SCREEN: u32 = 2u;
 const CULL: u32 = 4u;
 const PAIRS: u32 = 8u;
+const ABOVE: u32 = 16u;
+// 220 city units (the longest body is 215) in world units (`SCALE`, 1/48).
+const CAR_LENGTH: f32 = 220.0 / 48.0;
 // The sky layer writes this alpha, everything else 1.0: nothing blends (the window ignores it), and the visual check
 // (`shots.rs`) tells sky from geometry by it.
 const SKY_ALPHA: f32 = 0.98;
@@ -85,7 +92,13 @@ fn listed(sector: i32, wall: i32, p: vec2<i32>) -> i32 {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> Out {
-    var depth = in.position.z;
+    var z = in.position.z;
+    if (mode.x & ABOVE) != 0u {
+        // Reversed depth is proportional to 1 / distance along a ray.
+        let distance = length(in.world_position.xyz - view.world_position);
+        z = min(1.0, z * distance / max(distance - CAR_LENGTH, 1e-3));
+    }
+    var depth = z;
     // The window scaled onto the GBA's 240×160 screen.
     let column = view.viewport.z / 240.0;
     let at = (in.position.xy - view.viewport.xy) / view.viewport.zw * vec2<f32>(240.0, 160.0);
@@ -108,7 +121,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> Out {
     }
 #else
     if mode.w != 0u {
-        depth = 0.5 + 0.5 * in.position.z;
+        depth = 0.5 + 0.5 * z;
     }
     // A car (R29): only inside the clip rectangle of the portal entry the game drew it through (`mode.yz`, biased by
     // 1024: left | right << 16, top | bottom << 16; right and bottom exclusive).

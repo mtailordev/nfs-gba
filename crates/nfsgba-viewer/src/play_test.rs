@@ -7,18 +7,13 @@ use serde_json::Value;
 
 use super::*;
 
-/// The full game inside the viewer's `play` system (no window, no GPU): the key plan of
-/// `session_matches_the_game` (`tests/session.rs`, `session/quickplay.json`) from power-on, the race lent to
-/// `Play::game` (through the spare, `Play::spare`) while it runs, the player marked finished after 150 game frames as there. Asserts a race started
-/// (a new identity), the menus took the game back with the results, and the save was written.
-#[test]
-fn the_full_game_reaches_the_race_and_the_results() {
-    let (Some(rom), Some(text)) = (
-        nfsgba_testkit::rom(),
-        nfsgba_testkit::read_to_string("session/quickplay.json"),
-    ) else {
-        return;
-    };
+/// The ROM and the key plan of `session/quickplay.json` (power-on through the menus into a Quick Play race), keys
+/// per video frame for 4,600 frames.
+pub(crate) fn quickplay_plan() -> Option<(Vec<u8>, Vec<u16>)> {
+    let (rom, text) = (
+        nfsgba_testkit::rom()?,
+        nfsgba_testkit::read_to_string("session/quickplay.json")?,
+    );
     let t: Value = serde_json::from_str(&text).unwrap();
     let mut held = vec![0u16; 4600];
     for press in t["script"].as_array().unwrap() {
@@ -28,6 +23,16 @@ fn the_full_game_reaches_the_race_and_the_results() {
             .iter_mut()
             .for_each(|h| *h |= 1 << key);
     }
+    Some((rom, held))
+}
+
+/// The full game inside the viewer's `play` system (no window, no GPU): the key plan of
+/// `session_matches_the_game` (`tests/session.rs`, `session/quickplay.json`) from power-on, the race lent to
+/// `Play::game` (through the spare, `Play::spare`) while it runs, the player marked finished after 150 game frames as there. Asserts a race started
+/// (a new identity), the menus took the game back with the results, and the save was written.
+#[test]
+fn the_full_game_reaches_the_race_and_the_results() {
+    let Some((rom, held)) = quickplay_plan() else { return };
     let sav = std::env::temp_dir().join("nfsgba-viewer-test.sav");
     let _ = std::fs::remove_file(&sav);
     // The spare as `main` makes it (no capture: the web build has none).

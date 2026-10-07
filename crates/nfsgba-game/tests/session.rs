@@ -115,6 +115,8 @@ fn session_matches_the_game() {
 
     // Our run: the script's keys by video frame; the race is poked to its finish after `finish_at` game frames.
     let (mut ours, mut key, mut poked, mut race_at) = (vec![], None, false, None);
+    // The racer ids the menus pick (screen 15) and the ones the results screens show.
+    let (mut picked, mut shown) = (None, None);
     for f in 0..frames.len() {
         if f == sync_at {
             sync_choice(&mut s, &frames[f]);
@@ -122,6 +124,11 @@ fn session_matches_the_game() {
         s.frame(held[f])
             .unwrap_or_else(|e| panic!("frame {f}: {e} ({:x?})", s.host.calls));
         let (mut now, racing) = ((s.st.g.screen as i64, s.st.g.game_state as i64), s.race.is_some());
+        match (now.0, racing) {
+            (15, false) => picked = Some(s.st.g.results.ids),
+            (12, false) => shown = shown.or(Some(s.st.g.results.ids)),
+            _ => {}
+        }
         if let Some(game) = s.race.as_mut().filter(|_| racing) {
             now.1 = game.world.lp.game_state as i64;
             race_at = race_at.or(Some(f));
@@ -210,6 +217,18 @@ fn session_matches_the_game() {
         game.iter().any(|v| v.screen == 12 && v.state == 1),
         "the run reaches the results"
     );
+    // The results block is one block in the game: the race keeps the ids the menus picked (in the recording too).
+    let ids = |screen: u64| {
+        frames
+            .iter()
+            .rev()
+            .find(|f| f["screen"].as_u64() == Some(screen))
+            .map(|f| unhex(f["results"].as_str().unwrap())[4..8].to_vec())
+    };
+    assert_eq!(ids(15), ids(12), "the game's ids on screens 15 and 12");
+    let picked = picked.expect("screen 15");
+    assert!(picked[1..].iter().all(|&i| i != 0), "opponent ids {picked:?}");
+    assert_eq!(shown, Some(picked), "the results show the racers the menus picked");
 }
 
 /// The choice the menus draw at random on the race setup screen (the mode, the track, the laps, the opponents, the

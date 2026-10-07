@@ -64,7 +64,7 @@ pub struct Play {
     pub stopped: Option<String>,
     /// What to tell the player when play stopped at a hand-over to the menus (not connected yet).
     pub banner: Option<String>,
-    script: Option<Vec<u16>>,
+    pub(crate) script: Option<Vec<u16>>,
     pub hud: Handle<Image>,
     /// The samples the game's sound hardware played, waiting for the audio device.
     pub sound: Arc<Mutex<VecDeque<Sample>>>,
@@ -791,4 +791,4 @@ pub fn draw_objects(oam: &[u8], tiles: &[u8], palette: &[u16]) -> Vec<Option<(u1
 
 #[cfg(test)]
 #[path = "play_test.rs"]
-mod tests;
+pub(crate) mod tests;

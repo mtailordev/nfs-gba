@@ -149,11 +149,14 @@ pub fn update(st: &mut MenuState, h: &mut impl Host) -> u32 {
 
 /// A racer's name for the standings: the player's (profile), a boss's (`0x7E4954[id − 0x10]`) or an opponent's
 /// (`id + 0xA4` above 0x3F).
-fn racer_name(st: &MenuState, rom: &[u8], id: u8) -> u32 {
+fn racer_name(st: &MenuState, h: &mut impl Host, id: u8) -> u32 {
     match id {
-        0 => st.g.profile.addr,
+        0 => {
+            let name: Vec<u8> = st.profile.name.iter().copied().take_while(|&b| b != 0).collect();
+            h.text_arg(name) // the game passes the profile's address: its name
+        }
         0x40.. => id as u32 + 0xA4,
-        _ => rom_u16(rom, 0x087E_4954_u32.wrapping_add(((id as i32 - 0x10) * 2) as u32)) as u32,
+        _ => rom_u16(h.rom(), 0x087E_4954_u32.wrapping_add(((id as i32 - 0x10) * 2) as u32)) as u32,
     }
 }
 
@@ -230,7 +233,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 let y = 0x10 * k as u32;
                 alt(h, 0xD2, 0x28, y + 0x27);
                 alt(h, 0xD3, 0x88, y + 0x27);
-                let name = racer_name(st, h.rom(), at(&st.g.ranked.ids, k));
+                let name = racer_name(st, h, at(&st.g.ranked.ids, k));
                 text(h, 0xE, name, 0x30, y + 0x2B, 0, 8);
                 let v = (word(&st.g.ranked.life, k).wrapping_mul(100) >> 0x13) as i32;
                 let mut s = number_text(&mut st.g.div_remainder, v);
@@ -249,7 +252,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 alt(h, 0xD2, 8, y + 0x27);
                 alt(h, 0xD3, 0x68, y + 0x27);
                 alt(h, 0xD3, 0xA8, y + 0x27);
-                let name = racer_name(st, h.rom(), at(&st.g.ranked.ids, k));
+                let name = racer_name(st, h, at(&st.g.ranked.ids, k));
                 text(h, 0xE, name, 0x10, y + 0x2B, 0, 8);
                 if at(&st.g.ranked.knocked, k) as i8 == 8 {
                     text(h, 0xE, 0x155, 0x88, y + 0x2B, 1, 8);
@@ -276,7 +279,7 @@ pub fn draw(st: &mut MenuState, h: &mut impl Host) -> u32 {
                 let y = 0x10 * k as u32;
                 alt(h, 0xD2, 0x28, y + 0x27);
                 alt(h, 0xD3, 0x88, y + 0x27);
-                let name = racer_name(st, h.rom(), at(&st.g.ranked.ids, k));
+                let name = racer_name(st, h, at(&st.g.ranked.ids, k));
                 text(h, 0xE, name, 0x30, y + 0x2B, 0, 8);
                 if at(&st.g.ranked.knocked, k) as i8 == 8 {
                     text(h, 0xE, 0x155, 0xA8, y + 0x2B, 1, 8);
@@ -464,6 +467,32 @@ mod tests {
         (0..s.len() / 2)
             .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
             .collect()
+    }
+
+    /// The standings name the player by the profile's name (the game passes the profile's address, which typed state
+    /// has not: it was text key 0, the copyright line) and the opponents by their ids.
+    #[test]
+    fn the_standings_name_the_racers() {
+        let Some(rom) = nfsgba_testkit::rom() else { return };
+        let mut st = MenuState::default();
+        st.profile.name = *b"ZED      ";
+        (st.g.screen, st.g.race_mode, st.g.opponents) = (0xC, 3, 3);
+        st.g.ranked.ids = [0, 0x41, 0x44, 0x45];
+        st.g.ranked.finish = [100, 200, 300, 400];
+        let mut host = TypedHost::new(&rom, &st);
+        draw(&mut st, &mut host);
+        assert!(
+            host.texts.contains(&b"ZED".to_vec()),
+            "the player's name: {:?}",
+            host.texts
+        );
+        let mut keys = Vec::new();
+        for id in [0x41, 0x44, 0x45] {
+            let key = racer_name(&st, &mut host, id);
+            assert_eq!(key, id as u32 + 0xA4);
+            keys.push(key);
+        }
+        assert!(keys.iter().all(|&k| k != 0));
     }
 
     /// The game's own `career_race_payout` (with the unlock messages, `FUN_0812EE14`) on 1,500 generated profiles

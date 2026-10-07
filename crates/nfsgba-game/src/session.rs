@@ -398,6 +398,10 @@ pub fn apply_choice(s: &mut Setup, st: &MenuState) {
     g.volume = m.sound_volume;
     g.link = m.timing_mode as i32;
     g.catch_up = m.u_0050 as i32;
+    // One block in the game (`0x03005650`): the menus' racer ids (screen 15) stay for the results screens.
+    let results = m.results.to_bytes();
+    g.results.copy_from_slice(&results[..32]);
+    g.results_b.copy_from_slice(&results[32..]);
     s.cars[0] = m.race_car as i8;
     s.cars[1] = m.race_car_b as i8;
     s.paints = m.paints;

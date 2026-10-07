@@ -267,16 +267,15 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
     let frame = view::frame(state);
     let visible = render::visible_sectors(rom, &frame, view::root(state));
     // `skies.screen` holds the skyline alone: the GPU view was not the original-resolution one.
-    let draw = |empty: bool, leave_out: Option<usize>, skip: Option<usize>| -> Vec<u8> {
+    // `edit` changes the scene first (an entity left out, its second model left out).
+    let draw = |empty: bool, edit: &dyn Fn(&mut render::Scene), skip: Option<usize>| -> Vec<u8> {
         let mut screen = skies.screen.clone();
         let mut scene = if empty {
             render::Scene::empty()
         } else {
             view::scene(state)
         };
-        if let Some(i) = leave_out {
-            scene.entities[i].material = 0;
-        }
+        edit(&mut scene);
         let mut vis = visible.clone();
         if let Some(p) = skip {
             vis.portals[p].flags |= 8;
@@ -284,7 +283,7 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
         render::draw_world(rom, &frame, &tint.rt, &mut scene, &mut vis, &mut screen);
         screen
     };
-    let full = draw(false, None, None);
+    let full = draw(false, &|_| {}, None);
     let exact: Vec<Rgb> = (0..W * H).map(|p| colour(full[p], p)).collect();
     let gpu_alpha: Vec<u8> = gpu.chunks(4).map(|c| c[3]).collect();
     let gpu: Vec<Rgb> = gpu.chunks(4).map(|c| [c[0], c[1], c[2]]).collect();
@@ -361,17 +360,26 @@ pub fn compare(rig: &Rig, rom: &[u8], gpu: &[u8]) -> Report {
                 e.slot,
                 if e.flags & 8 != 0 { " RAM atlas" } else { "" }
             ),
-            draw(false, Some(i), None),
+            draw(false, &|s| s.entities[i].material = 0, None),
             &full,
             &|_| true,
         );
+        // Its second model (the spoiler), where it shows: drawn without it.
+        if e.extra_model != 0 {
+            object(
+                format!("spoiler entity {i} (slot {})", e.slot + 1),
+                draw(false, &|s| s.entities[i].extra_model = 0, None),
+                &full,
+                &|_| true,
+            );
+        }
     }
     // Portal entries' walls and flats: the world alone, one entry skipped.
-    let world_only = draw(true, None, None);
+    let world_only = draw(true, &|_| {}, None);
     for (k, p) in visible.portals.iter().enumerate().filter(|(_, p)| p.flags & 8 == 0) {
         object(
             format!("sector {} (entry {k})", p.sector),
-            draw(true, None, Some(k)),
+            draw(true, &|_| {}, Some(k)),
             &world_only,
             &|p| full[p] == world_only[p],
         );
@@ -486,7 +494,7 @@ fn gpu_view_matches_the_exact_frame() {
                 objects += 1;
                 // Small far objects are a handful of pixels whose texels the GPU minifies differently.
                 let (worst, least) = match o.name.split(' ').next().unwrap() {
-                    "car" => (&mut worst_car, 20),
+                    "car" | "spoiler" => (&mut worst_car, 20),
                     "traffic" => (&mut worst_traffic, 20),
                     _ => (&mut worst_wall, 100),
                 };
@@ -708,4 +716,85 @@ fn traffic_with_a_ram_atlas_is_drawn() {
         }
     }
     assert!(moved >= 5, "{moved} traffic cars moved to RAM atlases");
+}
+
+/// The race the full game starts from the menus (power-on, the `quickplay` key plan, then full throttle), the
+/// player's car with an aftermarket spoiler (level 3) and rims (3), as a save could have it: the spoiler is drawn
+/// on its own matrix slot and over its body (R31), and the player's texture is the game's atlas as it is now (the rims
+/// are drawn into it during the race; a copy made at the start had none: black wheels).
+#[test]
+fn a_menu_race_shows_the_spoiler_and_the_rims() {
+    let Some((rom, mut held)) = play::tests::quickplay_plan() else {
+        return;
+    };
+    held.extend(std::iter::repeat_n(1, 3000));
+    let sav = std::env::temp_dir().join("nfsgba-viewer-spoiler.sav");
+    let _ = std::fs::remove_file(&sav);
+    let mut play = play::Play::spare(rom.clone(), 11, 23, Handle::default())
+        .unwrap()
+        .with_full(play::Full::new(rom.clone(), Some(sav)));
+    play.script = Some(held);
+    let mut rig = Rig::new(play);
+    rig.app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_secs_f32(1.0 / play::VIDEO_HZ),
+    ));
+    let mut spoilers = 0;
+    for n in [30, 200] {
+        for _ in 0..20_000 {
+            let mut p = rig.app.world_mut().resource_mut::<play::Play>();
+            if !p.in_race() {
+                for r in p.full.as_mut().unwrap().session.st.profile.car_records.iter_mut() {
+                    (r[0], r[2]) = (3, 3);
+                }
+            }
+            rig.app.update();
+            let p = rig.app.world().resource::<play::Play>();
+            if p.in_race() && p.game.world.lp.game_state == 5 && p.game.world.g.race_frames >= n {
+                break;
+            }
+        }
+        let mut p = rig.app.world_mut().remove_resource::<play::Play>().unwrap();
+        assert!(p.in_race(), "the race started");
+        p.paused = true;
+        let gpu = rig.show(p);
+        let r = compare(&rig, &rom, &gpu);
+        for o in r.objects.iter().filter(|o| !o.name.starts_with("sector")) {
+            eprintln!(
+                "frame {n}: {}: {} px, {:.0}% present",
+                o.name,
+                o.pixels.len(),
+                100.0 * o.present
+            );
+            assert!(o.present >= 0.9, "{} missing in the GPU view", o.name);
+            spoilers += o.name.starts_with("spoiler") as u32;
+        }
+        // The player's texture is the game's atlas now.
+        let world = rig.app.world_mut();
+        let looks: Vec<Handle<crate::Indexed>> = world
+            .query::<(&crate::RaceCar, &MeshMaterial3d<crate::Indexed>)>()
+            .iter(world)
+            .filter(|(c, _)| c.slot == 0)
+            .map(|(_, m)| m.0.clone())
+            .collect();
+        let p = world.resource::<play::Play>();
+        let (indexed, images) = (
+            world.resource::<Assets<crate::Indexed>>(),
+            world.resource::<Assets<Image>>(),
+        );
+        for look in looks {
+            let px = images
+                .get(&indexed.get(&look).unwrap().indices)
+                .unwrap()
+                .data
+                .clone()
+                .unwrap();
+            assert_eq!(
+                Some(px.clone()),
+                view::player_atlas(&p.game.world, px.len()),
+                "the player's atlas"
+            );
+        }
+        world.resource_mut::<play::Play>().paused = false;
+    }
+    assert_eq!(spoilers, 2, "the spoiler shows in both states");
 }

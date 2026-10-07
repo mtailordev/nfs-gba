@@ -194,6 +194,8 @@ const SCREEN: u32 = 2;
 const CULL: u32 = 4;
 /// Transparent wall texture: a pixel pair of the GBA's 240 columns is drawn only if both texels are non-zero.
 const PAIRS: u32 = 8;
+/// A car's second model (the spoiler): drawn over its own body, as the game draws it after the body (`indexed.wgsl`).
+const ABOVE: u32 = 16;
 
 /// A car's clip rectangle `[left, top, right, bottom]` (right and bottom exclusive) in `mode` `y` (left, right) and `z`
 /// (top, bottom), each biased by 1024 so it fits an unsigned half; `w` = 1 turns the clip on (the shader). Returns
@@ -905,11 +907,13 @@ impl Race {
     }
 }
 
-/// A race car part: racer `slot`'s model `model`.
+/// A race car part: racer `slot`'s model `model`; `spoiler`: the second model (entity `+0x64`), drawn on the next
+/// matrix slot.
 #[derive(Component)]
 struct RaceCar {
     slot: usize,
     model: usize,
+    spoiler: bool,
 }
 
 /// The race's cars, textured as the game has them: the player's atlas as EWRAM holds it (`unpack_player_atlas`, the
@@ -942,18 +946,20 @@ fn spawn_race_cars(
         } else {
             vehicle_textures[atlas::look(data, setup.cars, slot, false, false).material as usize].clone()
         };
-        let material = new_material(images.add(index_image(&atlas)), palette, OPAQUE);
-        let mut parts = vec![racer.model as usize - 1, racer.model as usize];
+        let indices = images.add(index_image(&atlas));
+        let material = new_material(indices.clone(), palette, OPAQUE);
+        let above = new_material(indices, palette, OPAQUE | ABOVE);
+        let mut parts = vec![(racer.model as usize - 1, false), (racer.model as usize, false)];
         if racer.extra != 0 {
-            parts.push(racer.extra.unsigned_abs() as usize);
+            parts.push((racer.extra.unsigned_abs() as usize, true));
         }
-        for model in parts {
+        for (model, spoiler) in parts {
             let tris = model_tris(&models[model], Some(&atlas), Color::WHITE);
             commands.spawn((
                 Mesh3d(meshes.add(tris.mesh())),
-                MeshMaterial3d(material.clone()),
+                MeshMaterial3d(if spoiler { above.clone() } else { material.clone() }),
                 Transform::default(),
-                RaceCar { slot, model },
+                RaceCar { slot, model, spoiler },
             ));
         }
     }
@@ -1088,6 +1094,17 @@ struct Poses {
     frame: Option<render::Frame>,
     /// `None` without a vehicle matrix slot.
     ents: Vec<Option<Transform>>,
+    /// The second model's pose (the spoiler: the next matrix slot, the body moved to the spoiler's mount,
+    /// `player_matrix`); `None` without a second model.
+    extras: Vec<Option<Transform>>,
+}
+
+impl Poses {
+    /// Entity `ent`'s pose for its body or (`extra`) its second model.
+    fn of(&self, ent: usize, extra: bool) -> Option<&Transform> {
+        let poses = if extra { &self.extras } else { &self.ents };
+        poses.get(ent)?.as_ref()
+    }
 }
 
 /// The poses of the last two game frames; the display blends between them (`Play::alpha`), so cars and camera move
@@ -1164,6 +1181,17 @@ fn poses(play: Res<play::Play>, mut smooth: ResMut<Smooth>, mut tint: ResMut<Tin
             .iter()
             .map(|s| {
                 let m = mem.matrices.get(s.e.slot as usize)?;
+                Some(pose_from_matrix(&eye, m))
+            })
+            .collect(),
+        extras: mem
+            .slots
+            .iter()
+            .map(|s| {
+                let m = mem
+                    .matrices
+                    .get(s.e.slot as usize + 1)
+                    .filter(|_| s.e.extra_model != 0 && s.e.slot != 0xFF)?;
                 Some(pose_from_matrix(&eye, m))
             })
             .collect(),
@@ -1284,7 +1312,18 @@ fn visibility(
         let r = &race.setup.racers[car.slot];
         let ent = (play.game.world.g.player as usize + car.slot) % 4;
         clip_material(&mut indexed, look, race.clip.get(ent).copied().flatten());
-        if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(ent), smooth.curr.ents.get(ent)) {
+        // The player's atlas is the game's buffer, which the race redraws (the rims at the wheel angle, on the side
+        // in view: `car_racing_step`): what it holds now.
+        if car.slot == 0
+            && let Some(handle) = indexed.get(&look.0).map(|m| m.indices.clone())
+            && let Some(len) = images.get(&handle).and_then(|i| i.data.as_ref()).map(Vec::len)
+            && let Some(px) = view::player_atlas(mem, len)
+            && images.get(&handle).is_some_and(|i| i.data.as_deref() != Some(&px[..]))
+            && let Some(mut i) = images.get_mut(&handle)
+        {
+            i.data = Some(px);
+        }
+        if let (Some(a), Some(b)) = (smooth.prev.of(ent, car.spoiler), smooth.curr.of(ent, car.spoiler)) {
             t.set_if_neq(blend(a, b, alpha));
         }
         // The entity's camera depth as `draw_sector_entities` computes it.
@@ -1408,7 +1447,11 @@ fn traffic(
             }
         }
         let show = wanted.contains(&(part.ent, part.model, part.material));
-        if let (Some(Some(a)), Some(Some(b))) = (smooth.prev.ents.get(part.ent), smooth.curr.ents.get(part.ent)) {
+        let extra = mem
+            .slots
+            .get(part.ent)
+            .is_some_and(|s| s.e.extra_model != 0 && s.e.extra_model.unsigned_abs() as usize == part.model);
+        if let (Some(a), Some(b)) = (smooth.prev.of(part.ent, extra), smooth.curr.of(part.ent, extra)) {
             t.set_if_neq(blend(a, b, alpha));
         }
         v.set_if_neq(if show {
