@@ -95,7 +95,9 @@ pub fn keys_at(points: impl IntoIterator<Item = Vec2>) -> u16 {
 struct Pad;
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<TouchPad>().add_systems(PreUpdate, read_touches);
+    app.init_resource::<TouchPad>()
+        .init_resource::<PadButtons>()
+        .add_systems(PreUpdate, (read_touches, read_pad_buttons));
 }
 
 /// Spawns the pad (hidden until [`TouchPad`] says it is shown) on the UI camera `camera`.
@@ -215,5 +217,72 @@ mod tests {
                 assert!(apart, "{a:?} and {b:?} overlap");
             }
         }
+    }
+}
+
+/// Gamepad buttons that reach the game as key events with their Android key codes (winit passes them on unmapped:
+/// `KeyCode::Unidentified(NativeKeyCode::Android(code))`; gilrs has no Android backend): BUTTON_A/Y = A,
+/// BUTTON_B/X = B, L1/L2 = L, R1/R2 = R, START, SELECT. A controller's D-pad arrives as the arrow keys.
+pub fn android_button(code: u32) -> u16 {
+    match code {
+        96 | 100 => 1,       // BUTTON_A, BUTTON_Y
+        97 | 99 => 2,        // BUTTON_B, BUTTON_X
+        109 => 1 << 2,       // BUTTON_SELECT
+        108 => 1 << 3,       // BUTTON_START
+        103 | 105 => 1 << 8, // BUTTON_R1, BUTTON_R2
+        102 | 104 => 1 << 9, // BUTTON_L1, BUTTON_L2
+        _ => 0,
+    }
+}
+
+/// The game keys held on a controller whose buttons come as Android key codes ([`android_button`]): held now, and
+/// pressed since the last display frame (a press and release within one frame still counts for that frame).
+#[derive(Resource, Default)]
+pub struct PadButtons {
+    held: u16,
+    pressed: u16,
+}
+
+impl PadButtons {
+    pub fn keys(&self) -> u16 {
+        self.held | self.pressed
+    }
+}
+
+fn read_pad_buttons(mut events: MessageReader<bevy::input::keyboard::KeyboardInput>, mut b: ResMut<PadButtons>) {
+    use bevy::input::keyboard::NativeKeyCode;
+    b.pressed = 0;
+    for e in events.read() {
+        if let KeyCode::Unidentified(NativeKeyCode::Android(code)) = e.key_code {
+            let bits = android_button(code);
+            if bits == 0 {
+                debug!("an unmapped Android key code: {code}");
+            } else if e.state.is_pressed() {
+                b.held |= bits;
+                b.pressed |= bits;
+            } else {
+                b.held &= !bits;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pad_tests {
+    use super::*;
+
+    #[test]
+    fn android_buttons_are_the_gba_keys() {
+        assert_eq!(android_button(96), 1);
+        assert_eq!(android_button(97), 2);
+        assert_eq!(android_button(108), 8);
+        assert_eq!(android_button(109), 4);
+        assert_eq!(android_button(102) | android_button(104), 1 << 9);
+        assert_eq!(android_button(103) | android_button(105), 1 << 8);
+        assert_eq!(
+            android_button(29),
+            0,
+            "KEYCODE_A (a keyboard letter) is not a gamepad button"
+        );
     }
 }

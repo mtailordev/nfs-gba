@@ -383,7 +383,8 @@ fn keys_held(k: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> u16 {
     ];
     gamepads.iter().fold(keyboard(k), |mut m, pad| {
         for (b, bit) in buttons {
-            if pad.pressed(b) {
+            // A press shorter than a display frame still counts for that frame.
+            if pad.pressed(b) || pad.just_pressed(b) {
                 m |= 1 << bit;
             }
         }
@@ -409,7 +410,8 @@ fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
         (KeyCode::KeyA, 9),
     ];
     map.iter()
-        .filter(|(c, _)| k.pressed(*c))
+        // A key pressed and released within one display frame still counts for that frame.
+        .filter(|(c, _)| k.pressed(*c) || k.just_pressed(*c))
         .fold(0, |m, (_, b)| m | 1 << b)
 }
 
@@ -420,6 +422,7 @@ pub fn play(
     input: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
     pad: Option<Res<crate::touch::TouchPad>>,
+    buttons: Option<Res<crate::touch::PadButtons>>,
     mut play: ResMut<Play>,
     mut race: ResMut<Race>,
     mut stats: Local<(f32, u32, u32, f32, f32)>,
@@ -455,7 +458,11 @@ pub fn play(
         play.clock -= play.step_secs();
         let keys = match &play.script {
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
-            None => keys_held(&input, &gamepads) | pad.as_ref().map_or(0, |p| p.held),
+            None => {
+                keys_held(&input, &gamepads)
+                    | pad.as_ref().map_or(0, |p| p.held)
+                    | buttons.as_ref().map_or(0, |b| b.keys())
+            }
         };
         let began = bevy::platform::time::Instant::now();
         let result = play.step(keys);
