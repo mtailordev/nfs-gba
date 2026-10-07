@@ -483,7 +483,8 @@ fn setup(
         })
     };
 
-    // City geometry grouped by material, one mesh each, every vertex tagged with its sector. Material 0 is never
+    // City geometry grouped by sector and material, one mesh each (so only the sectors the game's portal pass lists
+    // reach the GPU: `visibility`), every vertex tagged with its sector. Material 0 is never
     // drawn (`draw_sector_walls`; the flat passes skip it). Walls: those without flag bit 0 (open portals), solid
     // or portal alike (R8: a portal wall is a step, kerb or fence over its own top..bottom). A wall's front, where
     // its start lies left of its end on screen, is drawn unless the wall has flag 2; its back only with flag 2 or
@@ -491,7 +492,7 @@ fn setup(
     // index 8 and up (`draw_sector_walls`). A moving piece's flags replace its wall's (in races all 122 are open,
     // `game::race_runtime`). Flats from each corner's floor/ceiling height (`+0x38`/`+0x3A`, R19), both faces.
     let rt = game::race_runtime(&sectors);
-    let mut by_material: BTreeMap<u16, Tris> = BTreeMap::new();
+    let mut by_material: BTreeMap<(usize, u16), Tris> = BTreeMap::new();
     let floor_uv = |w: &rom::Wall| Vec2::new(w.floor_uv[0] as f32, w.floor_uv[1] as f32) / 16384.0;
     let (mut solid, mut portal, mut backs, mut lost) = (0, 0, 0, 0);
     for (s, sector) in sectors.iter().enumerate() {
@@ -505,7 +506,7 @@ fn setup(
                         (world(w.x as f32, y, w.z as f32), floor_uv(w))
                     })
                     .collect();
-                let tris = by_material.entry(material).or_default();
+                let tris = by_material.entry((s, material)).or_default();
                 tris.city(&pts, s, None);
                 pts.reverse();
                 tris.city(&pts, s, None);
@@ -548,7 +549,7 @@ fn setup(
                 (world(bx, a.bottom[1], bz), uv[2]),
                 (world(bx, a.top[1], bz), uv[1]),
             ];
-            let tris = by_material.entry(a.material).or_default();
+            let tris = by_material.entry((s, a.material)).or_default();
             if a.link < 0 {
                 solid += 1
             } else {
@@ -579,13 +580,24 @@ fn setup(
             (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p)))
         });
     let center = (min + max) / 2.0;
-    for (m, tris) in by_material {
+    // One material per city material, shared by its sectors' meshes.
+    let mut materials_made: BTreeMap<u16, Handle<Indexed>> = BTreeMap::new();
+    for ((sector, m), tris) in by_material {
         // `raster_wall_columns` picks the transparent drawer (pairs) when a texture's first stored texel is 0 and
         // the opaque one otherwise; floors and ceilings are always opaque and hold no index 0.
-        let t = &textures[m as usize];
-        let mode = CULL | if t.pixels[0] != 0 { OPAQUE } else { PAIRS };
-        let material = new_material(images.add(index_image(t)), &palette, mode);
-        commands.spawn((Mesh3d(meshes.add(tris.mesh())), MeshMaterial3d(material), CityMesh));
+        let material = materials_made
+            .entry(m)
+            .or_insert_with(|| {
+                let t = &textures[m as usize];
+                let mode = CULL | if t.pixels[0] != 0 { OPAQUE } else { PAIRS };
+                new_material(images.add(index_image(t)), &palette, mode)
+            })
+            .clone();
+        commands.spawn((
+            Mesh3d(meshes.add(tris.mesh())),
+            MeshMaterial3d(material),
+            CityMesh(sector),
+        ));
     }
 
     // Showroom in front of the city: one row per car, its paint variants side by side, each car in the garage's
@@ -863,9 +875,10 @@ fn setup(
     );
 }
 
-/// The city's meshes (hidden in the original-resolution frame).
+/// A city mesh: one sector's surfaces of one material (hidden in the original-resolution frame, and when the game's
+/// portal pass does not list its sector).
 #[derive(Component)]
-struct CityMesh;
+struct CityMesh(usize);
 
 #[derive(Resource)]
 struct Race {
@@ -1273,7 +1286,7 @@ fn visibility(
     mut logged: Local<Vec<(render::Portal, u128)>>,
     mut images: ResMut<Assets<Image>>,
     mut indexed: ResMut<Assets<Indexed>>,
-    mut city: Query<&mut Visibility, (With<CityMesh>, Without<RaceCar>)>,
+    mut city: Query<(&CityMesh, &mut Visibility), Without<RaceCar>>,
     mut cars: Query<(&RaceCar, &MeshMaterial3d<Indexed>, &mut Transform, &mut Visibility), Without<CityMesh>>,
 ) {
     let drawn: Option<Vec<(render::Portal, u128)>> =
@@ -1304,8 +1317,14 @@ fn visibility(
         }
     }
     let shown = |v: bool| if v { Visibility::Inherited } else { Visibility::Hidden };
-    for mut v in &mut city {
-        v.set_if_neq(shown(!race.original));
+    // Only the sectors the portal pass lists are drawn (the shader clips them to their entries' spans); without a
+    // list (the free camera) every sector.
+    let listed: Option<std::collections::HashSet<usize>> = drawn
+        .as_ref()
+        .map(|d| d.iter().map(|(p, _)| p.sector as usize).collect());
+    for (sector, mut v) in &mut city {
+        let in_list = listed.as_ref().is_none_or(|l| l.contains(&sector.0));
+        v.set_if_neq(shown(!race.original && in_list));
     }
     let mem = &play.game.world;
     let game_frame = view::frame(mem);
