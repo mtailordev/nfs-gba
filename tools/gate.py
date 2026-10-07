@@ -3,7 +3,7 @@ non-zero when any step fails.
 
     .venv/Scripts/python.exe tools/gate.py [--update-fixtures]   # the flag rewrites the fixture manifest from this run's own test log
 
-Steps: rustfmt; clippy with warnings as errors; the Rust tests with NFSGBA_REQUIRE_DATA=1 (missing data fails, see
+Steps: rustfmt; clippy with warnings as errors, natively and for the web build (wasm32); the Rust tests with NFSGBA_REQUIRE_DATA=1 (missing data fails, see
 docs/engine/testkit.md); the Python tool tests; the fixture manifest (every fixture present, unchanged and listed);
 the branch's pending notes CSVs (docs/engine/notes/, changed since the merge base with main) merge without conflict;
 every `NOT 1:1 (ID)` marker in crates/ names an ID that is open in docs/FIDELITY.md.
@@ -67,6 +67,8 @@ def main() -> int:
             ("rustfmt", lambda: run([cargo, "fmt", "--all", "--check"])),
             ("clippy", lambda: run([cargo, "clippy", "--release", "--workspace", "--all-targets", "-q", "--",
                                     "-D", "warnings"])),
+            ("clippy (web build)", lambda: run([cargo, "clippy", "--release", "-p", "nfsgba-viewer", "--target",
+                                                "wasm32-unknown-unknown", "-q", "--", "-D", "warnings"])),
             ("rust tests (data required)", lambda: run([cargo, "test", "--release", "--workspace", "-q"],
                                                        env={"NFSGBA_REQUIRE_DATA": "1",
                                                             "NFSGBA_FIXTURE_LOG": str(log)})),

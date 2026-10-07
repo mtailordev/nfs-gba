@@ -78,6 +78,7 @@ const $ = (id) => document.getElementById(id);
 const status = (text, err = false) => { $('status').textContent = text; $('status').className = err ? 'err' : ''; };
 let key = null;      // the save's storage key: the ROM's SHA-1
 let pending = null;  // a save picked before the ROM
+let last = null;     // the game's last save (Download works even when the browser would not store it)
 let started = false;
 
 // Audio contexts the engine makes, so a key or click can resume one the browser held back (and tests can read them).
@@ -93,7 +94,8 @@ const sha1 = async (bytes) => hex(await crypto.subtle.digest('SHA-1', bytes));
 const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const load = () => { try { const s = localStorage.getItem(key); return s && unb64(s); } catch { return null; } };
-const store = (bytes) => { try { localStorage.setItem(key, b64(bytes)); } catch (e) { status(`Could not keep the save: ${e}`, true); } };
+// Keeps the save in browser storage; false (and the error shown) when the browser refuses (full, private mode).
+const store = (bytes) => { try { localStorage.setItem(key, b64(bytes)); return true; } catch (e) { status(`Could not keep the save: ${e}. Use Download to keep it.`, true); return false; } };
 
 // The .gba entries of a zip (stored or deflated), read from its central directory.
 async function gbaEntries(buf) {
@@ -142,7 +144,7 @@ $('rom').addEventListener('change', async (e) => {
     window.nfsgba = {
       rom,
       save,
-      saved: (bytes) => { store(bytes); $('download').disabled = false; status('Saved.'); },
+      saved: (bytes) => { last = bytes.slice(); $('download').disabled = false; if (store(bytes)) status('Saved.'); },
     };
     $('intro').remove();
     status('Starting…');
@@ -178,13 +180,13 @@ $('loadsave').addEventListener('change', async (e) => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!bytes.length || bytes.length > 65536) return status('That does not look like a save file.', true);
   if (!started) { pending = bytes; return status('Save loaded: the game starts from it once you pick the ROM.'); }
-  store(bytes);
+  last = bytes;
   $('download').disabled = false;
-  status('Save stored: reload the page and pick the ROM to play from it.');
+  if (store(bytes)) status('Save stored: reload the page and pick the ROM to play from it.');
 });
 
 $('download').addEventListener('click', () => {
-  const bytes = load();
+  const bytes = last ?? load();
   if (!bytes) return;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([bytes]));
