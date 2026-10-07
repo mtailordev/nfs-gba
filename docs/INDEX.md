@@ -22,7 +22,7 @@
 | [formats/ui.md](formats/ui.md) | The 2D layer: menu and HUD material tables, the game's decompressor, fonts and text, sprite screens, HUD layouts (`ui.rs`, `tools/ui_export.py`) |
 | [engine/ai.md](engine/ai.md) | Opponents, the wingman and traffic: entity handlers 0x29 and 0x36, trace-exact (`nfsgba-sim` `ai.rs`, `traffic_ai.rs`) |
 | [engine/game-loop.md](engine/game-loop.md) | The race frame loop (`crates/nfsgba-game`): `main_frame` order, IRQs, timing as an input, frame-trace replay; viewer play mode |
-| [engine/android.md](engine/android.md) | Plan for the native Android app: what carries over, what is new, steps, risks |
+| [engine/android.md](engine/android.md) | The Android app: the native library, the Gradle project, the ROM picker, what was checked and what is open |
 | [engine/typed-state.md](engine/typed-state.md) | The typed-state migration: the `layout!` mechanism, core types (`nfsgba_sim::state`), `GameData`, adapters, how to migrate a subsystem (camera = pilot) |
 | [engine/testkit.md](engine/testkit.md) | The shared test kit (`nfsgba-testkit`), the data-required mode, the fixture manifest (`fixtures.csv`) and the merge gate (`tools/gate.py`) |
 | [engine/harness.md](engine/harness.md) | Shared tooling: the function oracle (call any game function on a RAM snapshot), function coverage over real play, ROM byte attribution, notes merge, scenario library design |

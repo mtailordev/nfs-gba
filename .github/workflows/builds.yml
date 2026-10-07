@@ -1,0 +1,62 @@
+# The game for the desktop (Windows, Linux, macOS) and Android, as build artifacts of every push to main. They hold
+# the engine only: the player gives their own ROM (desktop: the first argument, or drop the .gba on the program;
+# Android: picked on the first start).
+name: builds
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: builds-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: windows-x64, exe: nfsgba-viewer.exe }
+          - { os: ubuntu-latest, name: linux-x64, exe: nfsgba-viewer }
+          - { os: macos-latest, name: macos-arm64, exe: nfsgba-viewer }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux libraries (audio, input, windowing)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - run: cargo build --release -p nfsgba-viewer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nfsgba-${{ matrix.name }}
+          path: |
+            target/release/${{ matrix.exe }}
+            README.md
+            LICENSE*
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-ndk --locked
+      # The runner's SDK has NDKs under $ANDROID_HOME/ndk; the script takes the newest.
+      - run: python3 tools/android_build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nfsgba-android
+          path: android/app/build/outputs/apk/release/app-release.apk

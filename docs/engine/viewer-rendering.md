@@ -346,6 +346,16 @@ Setup: `NFSGBA_DUMP=mgba/race`, screenshots at 960×640, reduced to the 240×160
 - **Races**: the session's `Game` is lent to `Play::game` while it runs (`Play::step` swaps it with a spare, `Play::spare`: a race start from the menus' setup, so the full game needs no capture; and back before the next session frame), so every race system reads it unchanged; a new race gets a new `Play::id` and `remake_cars` builds its cars (also for R/K). Results, pause and the next race are the session's; the pause menu is the exact 240×160 frame. `Race::active` is true only in a race.
 - Test: `play_test.rs` runs the `session_matches_the_game` key plan through `play::play` (no window) and asserts the race, the results screen and the save.
 
+## Speed on any system
+
+The game must run at its own speed wherever the picture can keep up, and degrade the picture, not the game, where it cannot (measured 2026-10-07: a race step costs 0.24 ms here, 0.45 ms on the x86_64 emulator; the menus 0.03 ms).
+- **Fixed-step game, interpolated picture:** `play::play` steps the game on the wall clock (one step per video frame in the menus, four in a race) and blends the cars and camera between the last two steps. Up to 3 steps or 0.2 s are owed per display frame, so a 25 fps display still gets the game's 59.73 Hz.
+- **The audio clock leads** (`play::sync_rate`): the game clock runs up to 0.5% faster or slower to keep the device's sound queue near a tenth of a second (no trims from clock drift; unchanged when no device takes samples).
+- **Only the game's list is drawn:** the city is one mesh per sector and material, shown only for the sectors of the game's portal list (about 1% of the city's 8,800 triangles per frame), the shader clipping them to their entries' spans as before.
+- **Render scale** (`composite::RenderScale`): the scene image is a share of the window, scaled up by the composite pass; with `auto` (the default) it steps down ×0.8 when more than a fifth of 2 s of display frames are later than 1/45 s (not below the GBA's 240 lines' worth) and back up ×1.1 after a 30 s hold. `NFSGBA_SCALE` fixes it; the tests pin it to 1.
+- **Nothing under the menus:** the scene camera is off while the menus cover the window (`play::menu_layer`), and the render scale is not measured then.
+- **Platforms:** `platform.rs` (the ROM, the save, the window), the touch pad (`touch.rs`), controller buttons as Android key codes, the background pause (`play::lifecycle`). Android: `docs/engine/android.md`.
+
 ## Web build
 
 `tools/web_build.py` builds the viewer for `wasm32-unknown-unknown` (`cargo build --profile web`: size-optimised, LTO), runs `wasm-bindgen --target web` and `wasm-opt -Oz` (when on PATH) and copies `web/` next to the output in `target/site/`; test with `.venv/Scripts/python.exe -m http.server 8090 -d target/site`. `.github/workflows/pages.yml` runs the same script on every push to `main` and deploys `target/site/` to GitHub Pages. The page ships only the engine.

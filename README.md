@@ -36,14 +36,20 @@ The rule is "exact where you can observe it". The simulation, rules, AI, physics
 
 ## Run it natively
 
+Builds for Windows, Linux, macOS and Android come out of every push to `main` (the `builds` workflow's artifacts; engine only). On the desktop, give it your ROM: `nfsgba-viewer path/to/your.gba` (or drop the `.gba` on the program); the save goes next to it as `.sav`. On Android, the app asks for the ROM (a `.gba` or a `.zip`) on its first start and keeps it in its own storage; touch pad on screen, controllers work too. To build the Android app yourself: `tools/android_build.py` (needs the Android SDK and NDK, `cargo-ndk`, JDK 17; see its header).
+
+The game keeps its original speed on slow machines: the simulation is far cheaper than a frame (0.24 ms per race step), its clock follows the audio device's, and the 3D view lowers its internal resolution when frames come late (`NFSGBA_SCALE=<0.25..1>` fixes it). Only the sectors the game itself lists are drawn, and nothing is drawn under the full-screen menus.
+
+From the source:
+
 Requirements: Rust stable, Python 3.14 (the tools are stdlib-only; analysis extras are in `tools/requirements.txt`).
 
 1. Put your zipped dump in `dumps/`, then `copy .env.example .env` and set `NFSGBA_DATA` (where the verified ROM vault and work files live).
 2. `git config core.hooksPath tools/git-hooks`. The pre-commit hook refuses ROMs, zips, saves, `data/` and large files.
 3. `python tools/vault.py` verifies the hashes and builds the read-only ROM vault.
-4. `cargo run --release -p nfsgba-viewer` starts the game from power-on.
+4. `cargo run --release -p nfsgba-viewer` starts the game from power-on (with the vault's ROM when no ROM is given).
 
-Other modes are chosen with environment variables. `NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>` races one route from the grid; `NFSGBA_CITY=1` is a free fly-through of the city. Details are in the doc comment at the top of `crates/nfsgba-viewer/src/main.rs`.
+Other modes are chosen with environment variables. `NFSGBA_PLAY=1 NFSGBA_ROUTE=<n>` races one route from the grid; `NFSGBA_CITY=1` is a free fly-through of the city. Details are in the doc comment at the top of `crates/nfsgba-viewer/src/lib.rs`.
 
 ## Controls
 
@@ -56,7 +62,7 @@ Other modes are chosen with environment variables. `NFSGBA_PLAY=1 NFSGBA_ROUTE=<
 | Start | Enter |
 | Select | Backspace |
 
-A gamepad works too: South = A, East = B, shoulders or triggers = L/R, D-pad or left stick. On phones the web page shows a touch pad.
+A gamepad works too: South = A, East = B, shoulders or triggers = L/R, D-pad or left stick (on Android: the controller's A/Y = A, B/X = B, shoulders and triggers = L/R, Start, Select, D-pad). On phones the web page shows a touch pad; the Android app has its own, and on a touch-screen computer it appears with the first touch.
 
 Viewer keys in a race: **O** switches to the original 240×160 frame, **G** toggles the game camera and a free camera, **T** shows the racing line.
 
@@ -69,7 +75,8 @@ Viewer keys in a race: **O** switches to the original 240×160 frame, **G** togg
 | `crates/nfsgba-audio` | The LS_Play sound engine: music modules, sound effects, mixer |
 | `crates/nfsgba-sim` | Player car physics, opponents, wingman, traffic |
 | `crates/nfsgba-game` | The typed game state, race start and race frame, the menus, and `Session`, the whole game behind one frame API |
-| `crates/nfsgba-viewer` | The Bevy app: the full game, the high-resolution view and the web build |
+| `crates/nfsgba-viewer` | The Bevy app: the full game, the high-resolution view; `platform.rs` is what differs per platform (the ROM, the save, the window) |
+| `crates/nfsgba-android`, `android/` | The Android app: the native library and the Gradle project around it |
 | `tools/` | ROM vault, headless emulator driver, recorders, function oracle, coverage, the merge gate |
 | `docs/` | Formats, engine notes, the address map, decisions and the ledger ([index](docs/INDEX.md)) |
 

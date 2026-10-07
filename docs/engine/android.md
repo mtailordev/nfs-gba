@@ -1,36 +1,28 @@
-# Android port: plan
+# Android
 
-The game, rules and renderer are already platform-free (`nfsgba-game`, `nfsgba-formats`, `nfsgba-audio`, `nfsgba-sim`); the web build proved the viewer runs without a file system or `NFSGBA_*` variables. Android is a third platform for the same viewer: a native `.so` loaded by an Android activity, the player's own ROM picked on the phone, saves in the app's storage.
+The game as an Android app: the same `nfsgba_viewer::run()` as the desktop and the web, built as a native library that a GameActivity loads. What differs per platform is in `crates/nfsgba-viewer/src/platform.rs` (the ROM, the save, the window); input, pacing and lifecycle are shared code.
 
-## What carries over unchanged
+## Pieces
 
-- The whole game (`Session`), the renderer (`indexed.wgsl`, the composite pass), audio (`GbaSound` through Bevy audio: AAudio on Android), the touch-pad layout and key mapping (as Bevy UI instead of HTML).
-- The rule that the app ships only the engine: no ROM, no assets; the SHA-1 check (`e5298b24…`) as on the web.
+| Piece | What |
+|---|---|
+| `crates/nfsgba-android` | `cdylib` `libnfsgba.so`: `#[bevy_main]` calls `nfsgba_viewer::run()`. Bevy feature `android-game-activity` (not a default since 0.19) and `bevy_render/gles` (OpenGL ES 3 besides Vulkan). Empty on other targets, so the workspace gate stays as it was. |
+| `android/` | Gradle project (AGP 8.4, Gradle 8.6, wrapper jar checked against Gradle's published SHA-256; `games-activity` 4.4.0, which must match Bevy's `android-activity` 0.6.1). Adapted from Bevy's `examples/mobile` (MIT/Apache-2.0). |
+| `LauncherActivity` | Starts the game when `files/rom.gba` is there and has the canonical SHA-1; else asks for the ROM with the system file picker (`.gba`, or the first `.gba` in a `.zip`), checks the SHA-1 and copies it. |
+| `MainActivity` | The GameActivity; immersive full screen; every configuration change handled in place (the native side runs one activity per process: a recreated activity would have no game). |
+| `tools/android_build.py` | `cargo ndk` (arm64-v8a, x86_64) then Gradle; `--debug --install --push-rom --run` for a test on a device or the emulator. |
+| `.github/workflows/builds.yml` | The release APK as a build artifact of every push (signed with the runner's debug key: side-loading only, and a new build may need the old one uninstalled). |
 
-## What is new
+Shared with the other platforms: the touch pad (`touch.rs`, shown from the start on Android), controller buttons as Android key codes (`touch::android_button`; gilrs has no Android backend), pause in the background (`play::lifecycle`), the render scale (`composite::RenderScale`), the audio-clock sync (`play::sync_rate`).
 
-| Area | Desktop / web now | Android |
-|---|---|---|
-| Entry | `main()` / wasm-bindgen start | `#[bevy_main]` in a `cdylib`; Bevy feature `android-game-activity` (not a default feature since 0.19) |
-| Packaging | cargo / `tools/web_build.py` | `cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --profile mobile`, then Gradle (`android/`, a GameActivity app, min SDK 26) |
-| ROM | file path / `window.nfsgba.rom` | first start: Storage Access Framework picker (`ACTION_OPEN_DOCUMENT`, .gba or .zip), SHA-1 checked, copied into app-internal storage; later starts read it from there |
-| Save | `viewer.sav` / `localStorage` | `viewer.sav` in the app's internal data path, written on every game save and on suspend; export/import through the share sheet / SAF |
-| Input | keyboard, gamepad, HTML touch pad | Bevy UI touch pad (D-pad, A, B, L, R, START, SELECT; multi-touch), gamepads (to verify: gilrs on Android, else GameActivity key events) |
-| Lifecycle | none | `AppLifecycle`: pause the game and the sound on suspend, save, rebuild the surface on resume (Bevy handles the surface) |
-| Screen | window / 3:2 canvas | landscape, fullscreen (status bar hidden), the 3:2 view letterboxed; menus at the largest whole scale; `WinitSettings` for mobile |
-| GPU | Vulkan/DX12/Metal, WebGL2 | Vulkan (GLES 3 fallback): integer textures, `textureLoad`, `frag_depth` all exist there; MSAA off (the Bevy example turns it off for some devices) |
+## Checked (2026-10-07, emulator Pixel 3a API 34 x86_64, SwiftShader software Vulkan, headless)
 
-## Steps (each ends in something that runs)
+- Power-on to a Quick Play race through the touch pad (adb taps), and the menus through controller key events (adb `KEYCODE_BUTTON_A`).
+- Real speed with a slow GPU: the menus at 59.7 game frames/s (the original's 59.73) and the race at 14.9 (59.73 / 4) while the display ran at 25–27 fps; a race step 0.45 ms. The render scale stepped down to its floor, as it should on a software GPU.
 
-1. **Spike (1 session):** a `platform` module that generalises today's `web` module (ROM bytes, save in, save out, one `cfg` per platform), the viewer as `lib` + `cdylib`, `android/` Gradle project from Bevy's `examples/mobile`, a debug APK that boots to the title screen with a ROM pushed by `adb` into the app's storage. Measure the frame time on a mid-range phone. Check gamepads here.
-2. **ROM and save:** the SAF picker activity (small Kotlin, calls into Rust with the copied file's path), SHA-1 check with the web build's message, save to internal storage, export/import.
-3. **Touch controls:** the web touch pad as Bevy UI, multi-touch, a setting to hide it when a gamepad is connected; haptics optional.
-4. **Lifecycle and polish:** suspend/resume (pause, save, sound), orientation lock, immersive mode, app icon and name (no EA marks: an unofficial loader), battery: cap at 60 fps.
-5. **Checks:** `cargo clippy --target aarch64-linux-android` in `tools/gate.py`; a CI job that builds the APK (artifact only: the APK holds no game data, but it is not published to a store); the existing headless tests already cover the game itself.
+## Open
 
-## Risks and open questions
-
-- Gamepad support through gilrs on Android is unverified (step 1).
-- Performance on low-end phones: the game step is cheap; the high-resolution renderer redraws the city per frame; fall back to the 240×160 frame (O) on weak GPUs.
-- Store distribution: the app is an emulator-like loader for a commercial game's ROM; Play Store policy and EA's rights make a public store listing doubtful. Plan for side-loaded APKs (GitHub release) unless the user decides otherwise.
-- iOS later reuses steps 1–4 (Bevy's `examples/mobile` has the iOS side too), but needs a Mac and signing.
+- No real phone tested yet; no real controller (analog stick and hat-switch D-pads come as motion events, which are not read).
+- A device with OpenGL ES only and no sRGB EGL surface (the emulator without Vulkan) fails at the surface: Bevy 0.19 asks for an sRGB view of a non-sRGB surface (`SURFACE_VIEW_FORMATS`). Real devices with Vulkan, and GLES devices with `EGL_KHR_gl_colorspace`, are not affected.
+- No export/import of the save in the app yet (it is `files/viewer.sav`, the game's EEPROM image).
+- iOS would reuse all of this (Bevy's `examples/mobile` has the Xcode side) but needs a Mac.
