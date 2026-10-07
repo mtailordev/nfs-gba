@@ -9,12 +9,14 @@ compares the port with it. It also finds the number of VBlank IRQs that ran befo
 counter as the rand seed: the one count for which the oracle equals mGBA's NAME_post outside the IRQs' own writes
 (IRQ_WRITES), saved as NAME_seed.txt; the Rust test then compares the port with mGBA directly.
 """
+import os
 import sys
 
 from common import data_dir
 from oracle import REGIONS, Gba
 
-WORK = data_dir() / "work" / "e5298b24" / "race-init"
+FOLDER = os.environ.get("NFSGBA_MGBA_SESSION") or "race-init"  # a new recording folder, e.g. race-init2
+WORK = data_dir() / "work" / "e5298b24" / FOLDER
 # What the VBlank and VCount IRQs write while the race start runs (vblank_irq, the sound mix, the counters), the
 # IRQ stack, and the hardware registers that change with time. The rand index follows the tick counter the
 # IRQs advance (setup_race_cars seeds it with 0x03000044).
@@ -53,7 +55,7 @@ def unexplained(r, name, engine):
 
 
 def run(name):
-    gba = Gba(f"race-init/{name}_pre")
+    gba = Gba(f"{FOLDER}/{name}_pre")
     call = lambda k: gba.call(0x08139E34, mode="thumb", regs={"r0": 0x030000C0}, max_insns=200_000_000,
                               mem=[(TICK, (tick + k).to_bytes(4, "little"))])
     iwram = (WORK / f"{name}_pre.iwram.bin").read_bytes()

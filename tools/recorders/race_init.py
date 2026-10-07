@@ -36,6 +36,19 @@ SCENARIOS = {
     "career": ("race-rules/event_grid", ["hold A 10", "wait 60", "hold A 10", "wait 60", "hold A 10", "wait 60",
                                          "hold A 10"]),
 }
+# More conditions (fixture folder race-init2: NFSGBA_MGBA_SESSION=race-init2 record.py race-init NAME ...; the
+# career states come from tools/race_init_states.py). Each is a race the first set never started.
+PROFILE = "emu:read32(0x030056EC)"  # the profile pointer; +0x3BC is the setup screen's copy of the reverse option
+SCENARIOS.update({
+    # Career events with the event AI skill word (0x030000BC) non-zero: a sprint (late) and the boss event (boss).
+    "career-late": ("race-init2/late-info", ["hold A 10", "wait 100", "hold A 10", "wait 100", "hold A 10", "wait 100",
+                                             "hold A 10"]),
+    "career-boss": ("race-init2/boss-info", ["hold A 10", "wait 100", "hold A 10", "wait 100", "hold A 10"]),
+    # The reversed circuit: the global and the setup screen's copy of the option.
+    "reverse": ("ai-traffic/circuitinfo", ["poke 0x03005610 1", f"luax emu:write32({PROFILE}+0x3BC,1)", "hold A 10"]),
+    # The Options camera set to bumper before a Quick Play race.
+    "bumper": ("hud-logic/prerace", ["poke 0x030053E4 1", "hold A 10"]),
+})
 
 
 def ctl(*cmds):
@@ -51,7 +64,8 @@ def capture(work, names):
     for name in names:
         src, keys = SCENARIOS[name]
         state = src.split("/")[1]
-        shutil.copyfile(work.parent / f"{src}.ss", work / f"{state}.ss")
+        if (work.parent / f"{src}.ss") != work / f"{state}.ss":  # a state made in this very folder stays where it is
+            shutil.copyfile(work.parent / f"{src}.ss", work / f"{state}.ss")
         ctl(f"load {state}", "wait 2")
         (work / "raceinit.tmp").write_text(name + "\n")
         (work / "raceinit.tmp").replace(work / "raceinit.txt")

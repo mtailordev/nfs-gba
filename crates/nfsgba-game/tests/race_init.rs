@@ -18,6 +18,15 @@ fn dir() -> Option<PathBuf> {
     nfsgba_testkit::fixture("race-init")
 }
 
+/// The second set (`race-init2/`, `NFSGBA_MGBA_SESSION=race-init2 tools/record.py race-init NAME`): conditions the first
+/// never started: career events with the event AI skill set (a sprint at skill 65, the boss event at 4), a reversed
+/// circuit, and the bumper camera.
+const CAPTURES2: [&str; 4] = ["bumper", "career-boss", "career-late", "reverse"];
+
+fn dir2() -> Option<PathBuf> {
+    nfsgba_testkit::fixture("race-init2")
+}
+
 /// Every recorded race start (each with its seed timing, `NAME_seed.txt`).
 const CAPTURES: [&str; 14] = [
     "career",
@@ -50,7 +59,16 @@ fn diff_runs(a: &[u8], b: &[u8], base: u32) -> Vec<(u32, u32)> {
 
 #[test]
 fn race_start_matches_the_game() {
-    let (Some(dir), Some(rom)) = (dir(), nfsgba_testkit::rom()) else {
+    race_start_matches(dir(), &CAPTURES);
+}
+
+#[test]
+fn race_start_matches_the_game_in_more_conditions() {
+    race_start_matches(dir2(), &CAPTURES2);
+}
+
+fn race_start_matches(dir: Option<PathBuf>, captures: &[&str]) {
+    let (Some(dir), Some(rom)) = (dir, nfsgba_testkit::rom()) else {
         return;
     };
     let data = GameData::parse(&rom);
@@ -66,7 +84,7 @@ fn race_start_matches_the_game() {
         .collect();
     names.sort();
     assert_eq!(
-        names, CAPTURES,
+        names, captures,
         "the recorded race starts (NAME_oracle files: tools/race_init_oracle.py)"
     );
     let mut bad = Vec::new();
@@ -147,13 +165,22 @@ fn race_start_matches_the_game() {
 /// in the game. (The career level and the reverse flag were missing: career opponents raced at skill 0.)
 #[test]
 fn the_race_start_takes_every_shared_word_from_the_menus() {
+    shared_words(dir(), &CAPTURES);
+}
+
+#[test]
+fn the_race_start_takes_every_shared_word_from_the_menus_in_more_conditions() {
+    shared_words(dir2(), &CAPTURES2);
+}
+
+fn shared_words(dir: Option<PathBuf>, captures: &[&str]) {
     use nfsgba_game::world::LoopGlobals;
     use nfsgba_sim::{
         layout::{Field, Layout},
         mem::Mem,
         state::{Camera, CarGlobals, MenuGlobals, MenuState},
     };
-    let (Some(rom), Some(dir)) = (nfsgba_testkit::rom(), dir()) else {
+    let (Some(rom), Some(dir)) = (nfsgba_testkit::rom(), dir) else {
         return;
     };
     // Race-side words of the start's input, by address.
@@ -206,7 +233,7 @@ fn the_race_start_takes_every_shared_word_from_the_menus() {
     let mut wrong = Vec::new();
     // Each capture as recorded, then with every shared word set to a test pattern (the captures hold few of the values
     // a player can choose: skill 0 in the career one, no reversed route, the chase camera).
-    for (name, pattern) in CAPTURES.iter().flat_map(|n| [(n, false), (n, true)]) {
+    for (name, pattern) in captures.iter().flat_map(|n| [(n, false), (n, true)]) {
         let mut machine = Machine::load_dump(rom.clone(), &dir.join(format!("{name}_pre"))).unwrap();
         if pattern {
             for (k, &(_, at, size)) in <MenuGlobals as Layout>::FIELDS.iter().enumerate() {
@@ -244,6 +271,6 @@ fn the_race_start_takes_every_shared_word_from_the_menus() {
             }
         }
     }
-    assert!(shared > 14 * 20, "{shared} shared words compared");
+    assert!(shared > captures.len() * 20, "{shared} shared words compared");
     assert!(wrong.is_empty(), "{} words differ:\n{}", wrong.len(), wrong.join("\n"));
 }
