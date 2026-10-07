@@ -229,6 +229,8 @@ fn session_matches_the_game() {
     let picked = picked.expect("screen 15");
     assert!(picked[1..].iter().all(|&i| i != 0), "opponent ids {picked:?}");
     assert_eq!(shown, Some(picked), "the results show the racers the menus picked");
+    // The text arguments live for one frame (they grew without bound before).
+    assert!(s.host.texts.len() < 64, "{} text arguments kept", s.host.texts.len());
 }
 
 /// The choice the menus draw at random on the race setup screen (the mode, the track, the laps, the opponents, the

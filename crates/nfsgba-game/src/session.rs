@@ -223,6 +223,8 @@ impl<'a> Session<'a> {
         (st.g.keys, st.g.keys_held, st.g.ticks) = (edge, held, ticks as i32);
         st.g.flash = vblanks;
         self.host.language = st.g.language;
+        // The game's text arguments are strings on the stack of the frame's draw: none outlives the frame.
+        self.host.texts.clear();
         self.host.screen.dispcnt = self.host.screen.dispcnt & !0x10 | ((st.g.frame_counter as u16 & 1) << 4);
         flow::main_frame(st, &mut self.host);
         let calls = std::mem::take(&mut self.host.calls);
@@ -274,6 +276,7 @@ impl<'a> Session<'a> {
             Handover::Results(r) => {
                 (st.g.results, st.g.ranked, st.profile.last_player) =
                     (r.results.clone(), r.ranked.clone(), r.last_player);
+                shared_back(st, &game.world);
                 st.g.back_top = st.g.back_top_saved as i8;
                 match r.next {
                     Next::Goto(s) => flow::goto_screen(st, host, s),
@@ -314,6 +317,7 @@ impl<'a> Session<'a> {
         self.paused = false;
         let mut game = self.race.take().expect("a paused race");
         game.snd_stop_all();
+        shared_back(&mut self.st, &game.world);
         self.st.g.music_id = game.world.lp.music_id as u32;
         self.end_race(game);
         self.st.g.game_state = 1;
@@ -378,6 +382,16 @@ impl<'a> Session<'a> {
     }
 }
 
+/// The words the race and the menus share (one IWRAM word each in the game) as the race leaves them: the camera
+/// setting (SELECT in the race, reset at a race end), the rand index the race drew from, the laps (1 after a sprint),
+/// the camera's yaw (where the garage's car turn starts).
+fn shared_back(st: &mut MenuState, w: &crate::world::World) {
+    st.g.u_53e4 = w.camera.setting;
+    st.g.garage_angle = w.camera.matrix_yaw as u32;
+    st.g.rand_index = w.g.rand;
+    st.g.laps = w.g.laps as u32;
+}
+
 /// The race the menus chose, in the race start's input: the globals the menus and the race share (same IWRAM
 /// words), the cars and paints, the car records and the options.
 pub fn apply_choice(s: &mut Setup, st: &MenuState) {
@@ -398,6 +412,9 @@ pub fn apply_choice(s: &mut Setup, st: &MenuState) {
     g.volume = m.sound_volume;
     g.link = m.timing_mode as i32;
     g.catch_up = m.u_0050 as i32;
+    g.career_level = m.skill as i32;
+    g.u_5610 = m.reverse as i32;
+    s.camera.setting = m.u_53e4;
     // One block in the game (`0x03005650`): the menus' racer ids (screen 15) stay for the results screens.
     let results = m.results.to_bytes();
     g.results.copy_from_slice(&results[..32]);

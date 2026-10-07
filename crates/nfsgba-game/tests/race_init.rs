@@ -140,3 +140,110 @@ fn race_start_matches_the_game() {
     }
     assert!(bad.is_empty(), "race start differs for {bad:?}");
 }
+
+/// The menus and the race share IWRAM in the game; the session hands the menus' choice to the race start through
+/// `Setup::menus` and `session::apply_choice`. On every recorded race start (the menus' state as `game_state_step`
+/// state 4 found it), every word the menus' globals and the race's input both declare is what the race start read
+/// in the game. (The career level and the reverse flag were missing: career opponents raced at skill 0.)
+#[test]
+fn the_race_start_takes_every_shared_word_from_the_menus() {
+    use nfsgba_game::world::LoopGlobals;
+    use nfsgba_sim::{
+        layout::{Field, Layout},
+        mem::Mem,
+        state::{Camera, CarGlobals, MenuGlobals, MenuState},
+    };
+    let (Some(rom), Some(dir)) = (nfsgba_testkit::rom(), dir()) else {
+        return;
+    };
+    // Race-side words of the start's input, by address.
+    // The race HUD's settings (`world::Hud`, not a RAM layout): units, language, the HUD option.
+    const HUD: &[(&str, u32, u32)] = &[
+        ("hud.units", 0x0300_0040, 4),
+        ("hud.language", 0x0300_5600, 4),
+        ("hud.enabled", 0x0300_5698, 4),
+    ];
+    let race_fields: Vec<(&str, u32, u32)> = [
+        <CarGlobals as Layout>::FIELDS,
+        <Camera as Layout>::FIELDS,
+        <LoopGlobals as Layout>::FIELDS,
+        HUD,
+    ]
+    .concat();
+    let image = |s: &Setup| {
+        let mut m = Mem::new(rom.clone(), vec![0; 0x4_0000], vec![0; 0x8000]);
+        s.g.store(&mut m, 0);
+        s.camera.store(&mut m, 0);
+        for (v, (_, at, _)) in [s.hud.units, s.hud.language, s.hud.enabled].into_iter().zip(HUD) {
+            m.set_u32(*at, v);
+        }
+        s.lp.store(&mut m, 0);
+        m
+    };
+    // Words the race start writes before anything reads them (the clock counters the session passes or the start
+    // restarts, the level descriptor, the phase, the music, the camera yaw; state 4's pause, fade, race-over and
+    // game state), the frame time (100, T1) and the division scratch: the captures hold the menus' or an earlier
+    // race's values.
+    const SET_BY_THE_START: [&str; 16] = [
+        "ticks",
+        "vblanks",
+        "race_frames",
+        "frame_ticks",
+        "steps",
+        "input",
+        "descriptor",
+        "phase",
+        "music_id",
+        "matrix_yaw",
+        "paused",
+        "fade",
+        "race_over",
+        "game_state",
+        "dt",
+        "div_rem",
+    ];
+    let mut shared = 0;
+    let mut wrong = Vec::new();
+    // Each capture as recorded, then with every shared word set to a test pattern (the captures hold few of the values
+    // a player can choose: skill 0 in the career one, no reversed route, the chase camera).
+    for (name, pattern) in CAPTURES.iter().flat_map(|n| [(n, false), (n, true)]) {
+        let mut machine = Machine::load_dump(rom.clone(), &dir.join(format!("{name}_pre"))).unwrap();
+        if pattern {
+            for (k, &(_, at, size)) in <MenuGlobals as Layout>::FIELDS.iter().enumerate() {
+                let covered = race_fields
+                    .iter()
+                    .any(|&(f, r, n)| r <= at && at + size <= r + n && !SET_BY_THE_START.contains(&f));
+                if covered {
+                    let bytes: Vec<u8> = (0..size).map(|i| (k as u8).wrapping_mul(37) ^ (i as u8) | 1).collect();
+                    machine.mem.set_bytes(at, &bytes);
+                }
+            }
+        }
+        let st = MenuState::load(&machine.mem);
+        let want = Setup::load(&machine);
+        let mut ours = Setup::menus(&rom, want.audio.clone(), 0, 0, &st.profile.car_records, None);
+        nfsgba_game::session::apply_choice(&mut ours, &st);
+        let (a, b) = (image(&ours), image(&want));
+        for &(field, at, size) in <MenuGlobals as Layout>::FIELDS {
+            let Some(&(race, ..)) = race_fields.iter().find(|&&(_, r, n)| r <= at && at + size <= r + n) else {
+                continue;
+            };
+            if SET_BY_THE_START.contains(&race) {
+                continue;
+            }
+            shared += 1;
+            if a.bytes(at, size as usize) != b.bytes(at, size as usize) {
+                wrong.push(
+                    format!("{name}{}: {field}", if pattern { " (pattern)" } else { "" })
+                        + &format!(
+                            " / {race} at {at:#x}: ours {:02x?}, the game's {:02x?}",
+                            a.bytes(at, size as usize),
+                            b.bytes(at, size as usize)
+                        ),
+                );
+            }
+        }
+    }
+    assert!(shared > 14 * 20, "{shared} shared words compared");
+    assert!(wrong.is_empty(), "{} words differ:\n{}", wrong.len(), wrong.join("\n"));
+}
