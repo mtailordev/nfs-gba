@@ -58,10 +58,10 @@ mod web {
     }
 
     pub fn saved(eeprom: &[u8]) {
-        if let Some(f) = page("saved") {
-            if let Err(e) = Function::from(f).call1(&global(), &Uint8Array::from(eeprom)) {
-                bevy::log::error!("the page did not take the save: {e:?}");
-            }
+        if let Some(f) = page("saved")
+            && let Err(e) = Function::from(f).call1(&global(), &Uint8Array::from(eeprom))
+        {
+            bevy::log::error!("the page did not take the save: {e:?}");
         }
     }
 }
