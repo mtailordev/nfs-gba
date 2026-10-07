@@ -721,7 +721,9 @@ fn traffic_with_a_ram_atlas_is_drawn() {
 /// The race the full game starts from the menus (power-on, the `quickplay` key plan, then full throttle), the
 /// player's car with an aftermarket spoiler (level 3) and rims (3), as a save could have it: the spoiler is drawn
 /// on its own matrix slot and over its body (R31), and the player's texture is the game's atlas as it is now (the rims
-/// are drawn into it during the race; a copy made at the start had none: black wheels).
+/// are drawn into it during the race; a copy made at the start had none: black wheels). Seen from the chase view,
+/// in a held left turn (the car's side, the rims redrawn) and looking back (DOWN: the cars behind, from the front).
+/// Every car, spoiler and traffic car the exact frame draws is in the GPU view.
 #[test]
 fn a_menu_race_shows_the_spoiler_and_the_rims() {
     let Some((rom, mut held)) = play::tests::quickplay_plan() else {
@@ -738,14 +740,18 @@ fn a_menu_race_shows_the_spoiler_and_the_rims() {
     rig.app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f32(1.0 / play::VIDEO_HZ),
     ));
-    let mut spoilers = 0;
-    for n in [30, 200] {
+    let (mut spoilers, mut behind) = (0, 0);
+    // (race frame, keys held on the way there): A, A+LEFT, A+DOWN.
+    for (n, keys) in [(30, 1), (200, 1), (240, 0x81), (340, 0x21)] {
         for _ in 0..20_000 {
             let mut p = rig.app.world_mut().resource_mut::<play::Play>();
             if !p.in_race() {
                 for r in p.full.as_mut().unwrap().session.st.profile.car_records.iter_mut() {
                     (r[0], r[2]) = (3, 3);
                 }
+            } else {
+                let at = p.frames as usize;
+                p.script.as_mut().unwrap()[at..at + 8].fill(keys);
             }
             rig.app.update();
             let p = rig.app.world().resource::<play::Play>();
@@ -758,6 +764,9 @@ fn a_menu_race_shows_the_spoiler_and_the_rims() {
         p.paused = true;
         let gpu = rig.show(p);
         let r = compare(&rig, &rom, &gpu);
+        if let Ok(dir) = std::env::var("SHOTS_DIR") {
+            save(&std::path::Path::new(&dir).join(format!("menu-race-{n}.png")), &gpu, &r);
+        }
         for o in r.objects.iter().filter(|o| !o.name.starts_with("sector")) {
             eprintln!(
                 "frame {n}: {}: {} px, {:.0}% present",
@@ -767,6 +776,7 @@ fn a_menu_race_shows_the_spoiler_and_the_rims() {
             );
             assert!(o.present >= 0.9, "{} missing in the GPU view", o.name);
             spoilers += o.name.starts_with("spoiler") as u32;
+            behind += (keys == 0x81 && !o.name.contains("entity 0 ")) as u32;
         }
         // The player's texture is the game's atlas now.
         let world = rig.app.world_mut();
@@ -796,5 +806,6 @@ fn a_menu_race_shows_the_spoiler_and_the_rims() {
         }
         world.resource_mut::<play::Play>().paused = false;
     }
-    assert_eq!(spoilers, 2, "the spoiler shows in both states");
+    assert!(spoilers >= 3, "the spoiler shows in the chase and turn states");
+    assert!(behind > 0, "looking back shows a car behind");
 }
