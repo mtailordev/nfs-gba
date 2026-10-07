@@ -11,11 +11,13 @@ use nfsgba_sim::{Mem, layout::Field};
 use serde_json::Value;
 
 const KEYS: [&str; 10] = ["A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L"];
-/// The profile bytes compared: cash and career car, hints, zone and slot, event status, the map step, the per-zone
-/// cursors, the record flags and payout, the unlock bits, the unlock messages.
-const PROFILE: [(usize, usize); 8] = [
+/// The profile bytes compared: the name, cash and career car, the car records (parts fitted, paint), hints, zone and
+/// slot, event status, the map step, the per-zone cursors, the record flags and payout, the unlock bits, the unlock
+/// messages.
+const PROFILE: [(usize, usize); 9] = [
+    (0x00, 0x09),
     (0x0C, 0x11),
-    (0x1F8, 0x1FD),
+    (0xF9, 0x1FD),
     (0x205, 0x217),
     (0x254, 0x258),
     (0x388, 0x38E),
@@ -45,6 +47,18 @@ fn racers(ids: &[u8]) -> Vec<u8> {
     let mut v = ids.to_vec();
     v.sort();
     v
+}
+
+/// Where profile byte `offset` is in `profile_bytes`.
+fn at(offset: usize) -> usize {
+    let mut i = 0;
+    for &(a, b) in &PROFILE {
+        if (a..b).contains(&offset) {
+            return i + offset - a;
+        }
+        i += b - a;
+    }
+    panic!("profile byte {offset:#x} is not compared")
 }
 
 fn profile_bytes(all: &[u8]) -> Vec<u8> {
@@ -250,9 +264,9 @@ fn compare(name: &str) -> Vec<i64> {
         let (mut op, mut gp) = (o.profile.clone(), g.profile.clone());
         for p in [&mut op, &mut gp] {
             if g.screen == 6 {
-                p[7] = 0;
-                p[8] = 0;
-                p[30] = 0;
+                p[at(0x1FA)] = 0;
+                p[at(0x1FB)] = 0;
+                p[at(0x256)] = 0;
             }
             if matches!(g.screen, 0x19 | 0x30 | 0x17) {
                 p.fill(0);
@@ -260,7 +274,7 @@ fn compare(name: &str) -> Vec<i64> {
             // The last story page: its A press saves (60 VBlank waits) with the page still shown, so the game's hint
             // count is already one up there (ours a press later); the return to screen 3 compares it.
             if g.screen == 0x26 && game.get(i + 1).is_some_and(|n| n.screen == 3) {
-                p[5] = 0;
+                p[at(0x1F8)] = 0;
             }
         }
         if op != gp {
@@ -293,6 +307,10 @@ fn compare(name: &str) -> Vec<i64> {
             }
         }
     }
+    assert!(
+        s.keeps_the_race_heap(),
+        "{name}: the race's heap is kept for the next race"
+    );
     assert!(bad.is_empty(), "{name}:\n{}", bad.join("\n"));
     seq(&ours)
 }

@@ -229,6 +229,7 @@ fn session_matches_the_game() {
     let picked = picked.expect("screen 15");
     assert!(picked[1..].iter().all(|&i| i != 0), "opponent ids {picked:?}");
     assert_eq!(shown, Some(picked), "the results show the racers the menus picked");
+    assert!(s.keeps_the_race_heap(), "the race's heap is kept for the next race");
     // The text arguments live for one frame (they grew without bound before).
     assert!(s.host.texts.len() < 64, "{} text arguments kept", s.host.texts.len());
 }
@@ -490,5 +491,57 @@ fn a_second_race_starts_from_the_first_ones_heap() {
     let mut game = start(rom.clone(), &second, display, 6).unwrap();
     for _ in 0..300 {
         assert!(matches!(game.frame(0, &Timing::steady()).unwrap(), Flow::Racing));
+    }
+}
+
+/// START, then the quit item (RIGHT, A) and YES (A) on its question: the race ends and the menus come back on the
+/// screen the original shows after the same presses (`coverage3/cov-pause-quit.png`, the headless mGBA run's last frame:
+/// the Quick Play menu), with the race's palettes gone.
+#[test]
+fn pause_quit_returns_to_the_menus() {
+    let (Some(rom), Some(text)) = (
+        nfsgba_testkit::rom(),
+        nfsgba_testkit::read_to_string("session/quickplay.json"),
+    ) else {
+        return;
+    };
+    let t: Value = serde_json::from_str(&text).unwrap();
+    let frames = t["frames"].as_array().unwrap();
+    let mut held = vec![0u16; 2900];
+    for press in t["script"].as_array().unwrap() {
+        let key = KEYS.iter().position(|k| *k == press[2].as_str().unwrap()).unwrap();
+        let first = press[0].as_u64().unwrap() as usize;
+        held[first..first + press[1].as_u64().unwrap() as usize]
+            .iter_mut()
+            .for_each(|h| *h |= 1 << key);
+    }
+    let mut s = Session::new(&rom, vec![0xFF; 512]);
+    let sync_at = t["sync_at"].as_u64().unwrap() as usize;
+    for (f, keys) in held.iter().enumerate().take(2700) {
+        if f == sync_at {
+            sync_choice(&mut s, &frames[f]);
+        }
+        s.frame(*keys).unwrap();
+    }
+    let run = |s: &mut Session, k: u16, n: usize| {
+        for _ in 0..n {
+            s.frame(k).unwrap();
+        }
+    };
+    run(&mut s, 0, 200);
+    for (keys, wait) in [(0x8, 60), (0x10, 30), (0x1, 30), (0x1, 120)] {
+        assert!(s.race.is_some(), "the race is still there");
+        run(&mut s, keys, 12);
+        run(&mut s, 0, wait);
+    }
+    assert!(s.race.is_none() && !s.racing(), "the race ended");
+    assert!(s.keeps_the_race_heap(), "the race's heap is kept for the next race");
+    // The Quick Play menu (Random / choose a car), as the original's last frame shows it.
+    assert_eq!(s.st.g.screen, 0x1C, "the screen after the quit");
+    if let Ok(d) = std::env::var("PAUSE_DUMP") {
+        let v = s.view();
+        std::fs::write(format!("{d}/quit.page"), v.page).unwrap();
+        let pal: Vec<u8> = v.palette.iter().flat_map(|c| c.to_le_bytes()).collect();
+        std::fs::write(format!("{d}/quit.pal"), pal).unwrap();
     }
 }

@@ -336,6 +336,12 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// The last race's heap is kept for the next race start (`Heap::after_race` found the player's atlas and rim
+    /// buffer allocated); without it the next start lays the heap out as after power-on (R24).
+    pub fn keeps_the_race_heap(&self) -> bool {
+        self.previous.is_some()
+    }
+
     /// A race is running (not paused): [`Session::race`] is the game shown and stepped.
     pub fn racing(&self) -> bool {
         self.race.is_some() && !self.paused
