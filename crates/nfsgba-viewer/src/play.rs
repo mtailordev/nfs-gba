@@ -24,7 +24,10 @@ use std::{
     io,
     num::NonZero,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use bevy::{
@@ -67,7 +70,7 @@ pub struct Play {
     pub(crate) script: Option<Vec<u16>>,
     pub hud: Handle<Image>,
     /// The samples the game's sound hardware played, waiting for the audio device.
-    pub sound: Arc<Mutex<VecDeque<Sample>>>,
+    pub sound: Arc<SoundQueue>,
     /// The full game (`NFSGBA_GAME`): the session that owns the race while it is not lent to `game`.
     pub full: Option<Full>,
 }
@@ -105,18 +108,42 @@ impl Full {
     }
 }
 
+/// The game's samples between the game and the audio device, and how many the device has taken.
+#[derive(Default)]
+pub struct SoundQueue {
+    pub samples: Mutex<VecDeque<Sample>>,
+    taken: AtomicU64,
+}
+
+/// The game's sound rate (the GBA's DMA sound, 10,512 Hz).
+const SOUND_HZ: usize = 10_512;
+/// The queue the clock sync aims for: a tenth of a second.
+const SOUND_TARGET: usize = SOUND_HZ / 10;
+
+/// The game clock's rate against the wall clock, so the game's sound and the audio device's clock stay together: up
+/// to 0.5% faster when the device's queue runs short of the target, slower when it fills (`queued` samples). 1 when
+/// no device takes samples (no audio, tests).
+pub fn sync_rate(queued: usize, consuming: bool) -> f32 {
+    if !consuming {
+        return 1.0;
+    }
+    let error = (SOUND_TARGET as f32 - queued as f32) / SOUND_TARGET as f32;
+    1.0 + (error * 0.005).clamp(-0.005, 0.005)
+}
+
 /// The GBA's sound output (Direct Sound A and B play the same buffer: mono, signed 8-bit, 10,512 Hz) as a Bevy
 /// audio source that plays whatever `play` queued, and silence when the queue runs dry.
 /// NOT 1:1 (A6): the hardware rate is 10,512.04 Hz; the DAC and `SOUNDBIAS` are not modelled.
 #[derive(Asset, TypePath)]
-pub struct GbaSound(Arc<Mutex<VecDeque<Sample>>>);
+pub struct GbaSound(Arc<SoundQueue>);
 
-pub struct GbaStream(Arc<Mutex<VecDeque<Sample>>>);
+pub struct GbaStream(Arc<SoundQueue>);
 
 impl Iterator for GbaStream {
     type Item = Sample;
     fn next(&mut self) -> Option<Sample> {
-        Some(self.0.lock().map_or(0.0, |mut q| q.pop_front().unwrap_or(0.0)))
+        self.0.taken.fetch_add(1, Ordering::Relaxed);
+        Some(self.0.samples.lock().map_or(0.0, |mut q| q.pop_front().unwrap_or(0.0)))
     }
 }
 
@@ -128,7 +155,7 @@ impl Source for GbaStream {
         NonZero::new(1).unwrap()
     }
     fn sample_rate(&self) -> SampleRate {
-        NonZero::new(10_512).unwrap()
+        NonZero::new(SOUND_HZ as u32).unwrap()
     }
     fn total_duration(&self) -> Option<std::time::Duration> {
         None
@@ -379,10 +406,15 @@ pub fn play(
     mut play: ResMut<Play>,
     mut race: ResMut<Race>,
     mut stats: Local<(f32, u32, u32, f32, f32)>,
+    mut taken: Local<u64>,
 ) {
     if !play.paused && play.stopped.is_none() {
+        // The audio device's clock leads (`sync_rate`), when it takes samples.
+        let now = play.sound.taken.load(Ordering::Relaxed);
+        let queued = play.sound.samples.lock().map_or(0, |q| q.len());
+        let rate = sync_rate(queued, now != std::mem::replace(&mut *taken, now));
         // A slow game frame must not make the next display frames run several (a spiral): at most 3 are owed.
-        play.clock = (play.clock + time.delta_secs()).min(3.0 * play.step_secs());
+        play.clock = (play.clock + time.delta_secs() * rate).min(3.0 * play.step_secs());
         // Display fps and game-frame time, logged every 3 s (display frames, game frames, seconds, ms sum, ms max).
         stats.0 += time.delta_secs();
         stats.1 += 1;
@@ -430,10 +462,11 @@ pub fn play(
             }
             Ok(_) => {}
         }
-        if let Ok(mut q) = play.sound.lock() {
+        if let Ok(mut q) = play.sound.samples.lock() {
             q.extend(play.samples().iter().map(|&s| s as i8 as Sample / 128.0));
-            // Keep at most a quarter of a second queued, so the sound stays with the picture.
-            let excess = q.len().saturating_sub(10_512 / 4);
+            // Keep at most a quarter of a second queued, so the sound stays with the picture (the clock sync keeps it
+            // near a tenth; this only catches a stall).
+            let excess = q.len().saturating_sub(SOUND_HZ / 4);
             q.drain(..excess);
         }
         play.frames += 1;

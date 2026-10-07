@@ -155,3 +155,16 @@ fn a_paused_start_is_tinted_by_the_game() {
     assert_ne!(shown, loaded, "the tint changed the palette");
     assert_eq!(play.game.bldalpha, 0x0D0F);
 }
+
+/// The game clock follows the audio device's within half a percent: faster when the device's queue runs short of a
+/// tenth of a second, slower when it fills, unchanged when no device takes samples.
+#[test]
+fn the_clock_follows_the_audio_device() {
+    assert_eq!(sync_rate(0, false), 1.0);
+    assert_eq!(sync_rate(100_000, false), 1.0);
+    assert_eq!(sync_rate(SOUND_TARGET, true), 1.0);
+    assert!((sync_rate(0, true) - 1.005).abs() < 1e-6);
+    assert!((sync_rate(SOUND_TARGET * 2, true) - 0.995).abs() < 1e-6);
+    assert!((sync_rate(SOUND_TARGET * 10, true) - 0.995).abs() < 1e-6);
+    assert!(sync_rate(SOUND_TARGET / 2, true) > 1.0 && sync_rate(SOUND_TARGET / 2, true) < 1.005);
+}
