@@ -387,10 +387,12 @@ fn keyboard(k: &ButtonInput<KeyCode>) -> u16 {
 }
 
 /// Runs the game frames that are due (unless paused) and reads the race back from the game's RAM.
+#[allow(clippy::too_many_arguments)]
 pub fn play(
     time: Res<Time>,
     input: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
+    pad: Option<Res<crate::touch::TouchPad>>,
     mut play: ResMut<Play>,
     mut race: ResMut<Race>,
     mut stats: Local<(f32, u32, u32, f32, f32)>,
@@ -421,7 +423,7 @@ pub fn play(
         play.clock -= play.step_secs();
         let keys = match &play.script {
             Some(s) => s.get(play.frames as usize).copied().unwrap_or(0),
-            None => keys_held(&input, &gamepads),
+            None => keys_held(&input, &gamepads) | pad.as_ref().map_or(0, |p| p.held),
         };
         let began = bevy::platform::time::Instant::now();
         let result = play.step(keys);

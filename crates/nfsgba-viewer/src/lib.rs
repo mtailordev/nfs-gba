@@ -35,6 +35,7 @@ mod platform;
 mod play;
 #[cfg(test)]
 mod shots;
+mod touch;
 
 use std::{collections::BTreeMap, f64::consts::TAU};
 
@@ -364,6 +365,7 @@ fn add_viewer(app: &mut App) {
         FreeCameraPlugin,
         MaterialPlugin::<Indexed>::default(),
         composite::plugin,
+        touch::plugin,
     ))
     .init_resource::<Smooth>()
     .add_systems(Startup, setup)
@@ -620,6 +622,7 @@ fn setup(
     );
     let ui_camera = UiTargetCamera(ui_camera);
     play::spawn_menu(&mut commands, &mut images, ui_camera.clone());
+    touch::spawn(&mut commands, ui_camera.clone());
     commands.spawn((
         ui_camera,
         Banner,
